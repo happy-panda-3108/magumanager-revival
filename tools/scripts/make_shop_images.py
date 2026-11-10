@@ -44,6 +44,37 @@ for code, title, header, main, light in POSITIONS:
     PRODUCTS[f'shop_pack_{code}2'] = (title, '2~8볼', tuple(round(c * 0.72) for c in main), main, GOLD, 'ball', header)
 # 셋업·마무리팩 (2026-10-22, 70,000 MP): one pack, deep violet with gold lettering.
 PRODUCTS['shop_pack_cl'] = ('셋업·마무리팩', '2~8볼', (92, 40, 150), (178, 120, 240), GOLD, 'ball', 'CLOSER')
+# 연대팩 4종 (6만) and 동군·서군팩 (5만), 2026-11-11 (ShopHandlers 104-109). The list icon shows only the subtitle, so it names the
+# decade's seasons or the half.
+NEW_PACKS = {
+    'shop_pack_era90': ('1990년대 선수팩', '1993~1999', (120, 72, 30), (228, 170, 104), WHITE, 'ball', '1990s'),
+    'shop_pack_era00': ('2000년대 선수팩', '2000~2009', (28, 58, 140), (118, 160, 240), WHITE, 'ball', '2000s'),
+    'shop_pack_era10': ('2010년대 선수팩', '2010~2019', (150, 28, 58), (240, 120, 150), WHITE, 'ball', '2010s'),
+    'shop_pack_era20': ('2020년대 선수팩', '2020~2026', (18, 116, 78), (108, 216, 158), WHITE, 'ball', '2020s'),
+    'shop_pack_east': ('동군 선수팩', '동군 1~10볼', (186, 64, 28), (255, 156, 104), GOLD, 'ball', 'EAST'),
+    'shop_pack_west': ('서군 선수팩', '서군 1~10볼', (30, 86, 176), (118, 178, 255), GOLD, 'ball', 'WEST'),
+}
+PRODUCTS.update(NEW_PACKS)
+
+
+def save_new_packs(version_dir, sheet_path=None):
+    """The six 2026-11-11 packs only (big 79x127 and list icon 76x67, like the other shop packs)."""
+    shop = version_dir / 'ShopItem'
+    (shop / 'small').mkdir(parents=True, exist_ok=True)
+    tiles = []
+    for name, v in NEW_PACKS.items():
+        big = mi.save_on((128, 128), mi.pack(79, 127, *v), shop / f'{name}.png')
+        small = mi.save_on((128, 128), mi.pack(76, 67, *v, small=True), shop / 'small' / f'{name}_small.png')
+        tiles.append((big.crop((0, 0, mi.u(79), mi.u(127))), small.crop((0, 0, mi.u(76), mi.u(67)))))
+        print('wrote', name)
+    if sheet_path:
+        cw, ch = mi.u(84), mi.u(127 + 72)
+        img = Image.new('RGBA', (len(tiles) * cw, ch), (58, 62, 70, 255))
+        for i, (big, small) in enumerate(tiles):
+            img.alpha_composite(big, (i * cw + mi.u(2), 0))
+            img.alpha_composite(small, (i * cw + mi.u(2), mi.u(130)))
+        img.resize((img.width // 2, img.height // 2), Image.LANCZOS).save(sheet_path)
+        print('sheet', sheet_path)
 
 
 def roster_plus(w, h, small=False, title='로스터 확장'):
@@ -460,6 +491,9 @@ def main():
         return
     if '--only-legend-pack' in sys.argv_original:
         save_legend_pack(out.parent)
+        return
+    if '--only-new-packs' in sys.argv_original:
+        save_new_packs(out.parent, SHEET)
         return
     if '--only-coach-pack' in sys.argv_original:
         save_coach_pack(out.parent)

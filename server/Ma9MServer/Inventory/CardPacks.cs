@@ -9,13 +9,17 @@ namespace Ma9MServer
 	// team does not own yet. When a ball has no card left, the nearest ball that has one is used.
 	public static class CardPacks
 	{
+		// The 전체 선수팩's percent by ball (index 0 = 1볼), shared with the 연대·동군·서군 packs.
+		public static readonly double[] AllOdds = { 20, 18, 15, 13, 11, 9.6, 7.4, 4.7, 1.0, 0.3 };
+
 		// Percent by ball, index 0 = 1볼.
 		private static readonly Dictionary<int, double[]> Odds = new Dictionary<int, double[]>
 		{
-			// 전체 카드 선수팩 1~10볼: 9볼 이상 3.5%, 10볼 1%.
-			[ItemCatalog.AllPlayersPack] = new double[] { 20, 18, 15, 13, 11, 9, 6.5, 4, 2.5, 1 },
-			// 고급 카드 선수팩 4~10볼: 9볼 이상 10%.
-			[ItemCatalog.HighPlayersPack] = new double[] { 0, 0, 0, 28, 24, 18, 12, 8, 7, 3 },
+			// 전체 카드 선수팩 1~10볼: 9볼 이상 1.3%, 10볼 0.3% since 2026-11-11 (user: "엘리트 난이도도 어렵게 합시다" … "이대로 적용합시다";
+			// was 20 18 15 13 11 9 6.5 4 2.5 1, 9볼 이상 3.5%, 10볼 1%). The 연대·동군·서군 packs (ShopHandlers) use the same odds.
+			[ItemCatalog.AllPlayersPack] = AllOdds,
+			// 고급 카드 선수팩 4~10볼: 9볼 이상 3.5%, 10볼 0.7% since 2026-11-11 (was 0 0 0 28 24 18 12 8 7 3, 9볼 이상 10%, 10볼 3%).
+			[ItemCatalog.HighPlayersPack] = new double[] { 0, 0, 0, 29, 25, 20, 13.5, 9, 2.8, 0.7 },
 			// 레전드 선수팩 3~10볼 (2026-11-08), like 고급's spread from 3볼, besides the 레전드 roll (LegendChance).
 			[ItemCatalog.LegendPlayersPack] = new double[] { 0, 0, 22, 20, 17, 14, 10, 7, 6, 4 }
 		};

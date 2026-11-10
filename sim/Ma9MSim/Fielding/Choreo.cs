@@ -645,7 +645,11 @@ namespace Ma9MSim.Fielding
 				if (!tr.Set || tr.Out || tr.Hold || tr.Caught || tr.To <= i || tr.To < (batter ? 1 : 2)) continue;
 				double arr = ArriveAt(tr, i);
 				if (arr <= release + 0.1) continue;
-				if (slot >= 0 && (batter ? slot == 0 || (i != 0 && tr.To < toBase) : tr.To < toBase)) continue;
+				// Two runners for the same base: the throw is timed on the one who gets there LAST (2026-11-11, user: "분명
+				// 포수한테 공이 더 빨리 도착했고 주자는 늦게 도착했는데 포수가 태그 하지 않고 주자도 슬라이딩 하지 않고 그냥
+				// 들어옴": timed on the runner from third, in at 3.64 s, the ball was home at 5.38, before the runner from
+				// second came in at 6.26 and scored untagged).
+				if (slot >= 0 && (batter ? slot == 0 || (i != 0 && tr.To < toBase) : tr.To < toBase || (tr.To == toBase && arr < there))) continue;
 				slot = i; toBase = tr.To; there = arr;
 			}
 			if (slot < 0) return 0;

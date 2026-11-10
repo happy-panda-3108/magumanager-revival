@@ -65,6 +65,19 @@ public sealed class Ma9MScriptTimeline
 				if (f.Kind == Ma9MSeg.BallFly && Mathf.Abs(f.T1 - d.T1) < 0.03f) m_dipAt = f.T1;
 			}
 		}
+		if (m_dipAt > 0)
+		{
+			// The ball comes down into his glove at its own pace (user, 2026-11-11: "슬라이딩캐치를 하는데 휴대폰 화면에서는
+			// 공이 먼저 땅에 착지하는 것으로 보임"). The engine has him catch it 0.04 s before it lands (0.5 m up), and the dip
+			// took it up to the glove over the last 0.3 s: falling at 10-12 m/s, it slowed to a stop a metre over the grass
+			// before the glove got there, which at a phone's frame rate looked like it had landed. Now its flight plays that
+			// much slower that it comes down through the glove's height at the catch (as LiftTo does for a standing catch);
+			// the dip stays only for a ball still above the glove there (a liner he dives under).
+			float dip = m_dipAt;
+			m_dipAt = -1f;
+			LiftTo(dip, DiveGlove);
+			if (BallAt(dip - 1e-3f, out _, out _).y > DiveGlove + 0.1f) m_dipAt = dip;
+		}
 	}
 
 	// The ball piece under way at t ends in a fielder's glove (the next piece is his holding it): who, and when.

@@ -65,6 +65,7 @@ namespace Ma9MServer
 			Dictionary<string, string> staffOf = (Environment.GetEnvironmentVariable("TCSIM_STAFF") ?? string.Empty).Split(';', StringSplitOptions.RemoveEmptyEntries)
 				.Select(s => s.Split('=', 2)).Where(kv => kv.Length == 2).ToDictionary(kv => kv[0].Trim(), kv => kv[1]);
 			Dictionary<string, string> batsOf = BatsSpecs();
+			Dictionary<string, string> opsOf = OpsSpecs();
 			string buildPick = Environment.GetEnvironmentVariable("TCSIM_ENTRY_BUILD");
 			Dictionary<string, Deck> baseOf = new Dictionary<string, Deck>();
 			foreach (string label in (Environment.GetEnvironmentVariable("TCSIM_DECKS") ?? string.Empty).Split(';').Select(x => x.Trim()).Where(x => x.Length > 0))
@@ -139,6 +140,16 @@ namespace Ma9MServer
 					y.Lineup = LineupOf(own, fixedOrder);
 				}
 				if (batsOf.ContainsKey(label)) ServerLog.Info($"tcsim entry: {label} 타선 {BatsText(own, y.Order)}");
+				// TCSIM_OPS (TeamColorSim.Legends.cs): the deck's 작전실 and 개인작전.
+				if (opsOf.TryGetValue(label, out string ops))
+				{
+					string problem = ApplyOps(y, ops);
+					if (problem != null)
+					{
+						ServerLog.Info($"tcsim entry: {label} {problem}");
+						continue;
+					}
+				}
 				for (int r = 0; r < 11; r++)
 				{
 					if (pti[r] != 0) y.Dev[FirstPitcher + r].PositionTrainingInfo = pti[r];
@@ -164,7 +175,7 @@ namespace Ma9MServer
 						DevDeck z = y;
 						if (extra != 0)
 						{
-							z = new DevDeck { D = y.D, Traits = y.Traits, Build = y.Build, Order = y.Order, Lineup = y.Lineup };
+							z = new DevDeck { D = y.D, Traits = y.Traits, Build = y.Build, Order = y.Order, Lineup = y.Lineup, Tactics = y.Tactics, Own = y.Own };
 							for (int s = 0; s < Slots; s++)
 							{
 								TeamCard t = y.Dev[s];

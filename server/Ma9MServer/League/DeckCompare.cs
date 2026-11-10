@@ -33,6 +33,51 @@ namespace Ma9MServer
 			public List<(int idx, int pos, double delta)> Defs = new List<(int, int, double)>();
 			public List<(int idx, int k, double delta)> Ratings = new List<(int, int, double)>();
 			public List<(int idx, int slot, int points)> Dev = new List<(int, int, int)>();
+			// 작전 (2026-11-11, user: "작전 방침이랑 작전실 방침도 같이 승률이 높은 쪽으로 설정하는 방법"): the team's 작전실 sliders
+			// (null = as saved), every card following the team (NoOwn), and cards' own 개인작전 (4 values of their side).
+			public byte[] OpBat, OpPit;
+			public bool NoOwn;
+			public Dictionary<int, byte[]> Own = new Dictionary<int, byte[]>();
+			public bool TouchesOps => OpBat != null || OpPit != null || NoOwn || Own.Count > 0;
+		}
+
+		// A variant's 작전: the team sliders on GameTeam.Tactics, and each card's 개인작전 laid over them as OperationHandlers.ApplyTo
+		// does (a card keeping its saved 개인작전 gets the variant's team values on the sliders it does not set).
+		private static void DeckOps(GameTeam t, Lineup l, uint user, DeckVariant v)
+		{
+			(byte[] offense, byte[] defense) = OperationHandlers.TeamOps(user);
+			if (v.OpBat != null) offense = (byte[])v.OpBat.Clone();
+			if (v.OpPit != null) defense = (byte[])v.OpPit.Clone();
+			t.Tactics = GameTactics.From(offense, defense);
+			void Lay(GameCard card, int idx, bool pitcher)
+			{
+				if (card == null) return;
+				byte[] mine = null;
+				if (v.Own.TryGetValue(idx, out byte[] set)) mine = set;
+				else if (!v.NoOwn && card.Own != null)
+				{
+					GameTactics o = card.Own;
+					mine = pitcher ? new[] { (byte)o.Repertoire, (byte)o.Approach, (byte)o.Location, (byte)o.Effort }
+						: new[] { (byte)o.Hitting, (byte)o.Patience, (byte)o.Running, (byte)o.Bunting };
+				}
+				if (mine == null)
+				{
+					card.Own = null;
+					return;
+				}
+				byte[] off = (byte[])offense.Clone(), def = (byte[])defense.Clone();
+				Array.Copy(mine, pitcher ? def : off, OperationHandlers.PersonalSliders);
+				card.Own = GameTactics.From(off, def);
+			}
+			for (int slot = 0; slot < t.Order.Length && slot < l.Batters.Length; slot++) Lay(t.Order[slot], l.Batters[slot], false);
+			for (int slot = 0; slot < t.Pitchers.Length && slot < l.Pitchers.Length; slot++) Lay(t.Pitchers[slot], l.Pitchers[slot], true);
+		}
+
+		private static byte[] DeckSliders(string text, int n)
+		{
+			byte[] b = text.Split('.').Select(x => (byte)Math.Clamp(int.Parse(x), 0, 100)).ToArray();
+			if (b.Length != n) throw new ArgumentException($"{n} values expected: {text}");
+			return b;
 		}
 
 		public static int DeckCompare(string teamName, int seasons, string spec, string dbPath)
@@ -73,6 +118,20 @@ namespace Ma9MServer
 					if (op == "BUILD")
 					{
 						v.Lineup = LineupBuilder.Build(v.Lineup.Batters.Concat(v.Lineup.Pitchers).Where(i => i != 0), s_data.Catalog);
+					}
+					else if (op == "NOOWN")
+					{
+						v.NoOwn = true;
+					}
+					else if (kv[0] == "OPB" || kv[0] == "OPP")
+					{
+						// 작전실: 타자 타격·공격·도루·번트·수비, 투수 투수성향·승부·제구·투구·교체, 0-100 with "." (e.g. OPB=50.50.75.25.50).
+						byte[] b = DeckSliders(kv[1], OperationHandlers.TeamSliders);
+						if (kv[0] == "OPB") v.OpBat = b; else v.OpPit = b;
+					}
+					else if (kv[0].StartsWith("OWN"))
+					{
+						v.Own[int.Parse(kv[0].Substring(3))] = DeckSliders(kv[1], OperationHandlers.PersonalSliders);
 					}
 					else if (kv[0] == "F")
 					{
@@ -173,6 +232,8 @@ namespace Ma9MServer
 				ServerLog.Info($"[deckcmp] {v.Name}: {Describe(v.Lineup)}; {balls}/{cap}볼"
 					+ (v.Pt.Count > 0 ? "; 포지션 변경 " + string.Join(", ", v.Pt.Select(kv => $"{Name(kv.Key)} {kv.Value}")) : string.Empty)
 					+ (v.Dev.Count > 0 ? "; 육성 " + string.Join(", ", v.Dev.Select(x => $"{Name(x.idx)} 칸{x.slot} {x.points:+0;-0}")) : string.Empty)
+					+ (v.OpBat != null ? "; 타자 작전 " + string.Join(".", v.OpBat) : string.Empty) + (v.OpPit != null ? "; 투수 작전 " + string.Join(".", v.OpPit) : string.Empty)
+					+ (v.NoOwn ? "; 개인작전 끔" : string.Empty) + (v.Own.Count > 0 ? "; 개인작전 " + string.Join(", ", v.Own.Select(kv => $"{Name(kv.Key)} {string.Join(".", kv.Value)}")) : string.Empty)
 					+ (problem != null ? $"; PROBLEM {problem}" : string.Empty) + (balls > cap ? "; OVER THE CAP" : string.Empty));
 				s_db.SaveLineup(user, v.Lineup);
 				foreach (int idx in touched) SetPt(idx, v.Pt.TryGetValue(idx, out byte pt) ? pt : savedPt.GetValueOrDefault(idx));
@@ -226,6 +287,7 @@ namespace Ma9MServer
 							GameTeam mine = teams[run.MyIndex];
 							for (int slot = 0; slot < 9; slot++) Tweak(mine.Order[slot], lineups[run.MyIndex].Batters[slot]);
 							for (int slot = 0; slot < Lineup.PitcherSlots; slot++) Tweak(mine.Pitchers[slot], lineups[run.MyIndex].Pitchers[slot]);
+							if (v.TouchesOps) DeckOps(mine, lineups[run.MyIndex], user, v);
 						}
 						Dictionary<(int club, int card), PitcherLoad> after = new Dictionary<(int club, int card), PitcherLoad>();
 						LeagueGame g = PlayGame(run, game, home, away, teams, lineups, new List<PlayerSeason>(), traits, fatigue, after, post: false);

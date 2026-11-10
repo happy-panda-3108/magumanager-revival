@@ -259,8 +259,10 @@ public class Ma9MSeasonResult : MonoBehaviour
 		m_sub.text = m_names[page];
 		m_count.text = (page + 1) + " / " + m_builders.Count;
 		bool last = page >= m_builders.Count - 1;
-		Ma9MClientUtil.ButtonSetActive(m_prev, page > 0);
-		Ma9MClientUtil.ButtonSetActive(m_skip, !last);
+		// A button not to be used goes off screen: the popup button's disabled picture is the popup's whole blue frame
+		// (it showed round 이전 on the first page), and switching it off in the frame it was made leaves its picture.
+		Place(m_prev, -150f, page > 0);
+		Place(m_skip, 150f, !last);
 		SetButtonText(m_next, last ? "확인" : "다음");
 		if (last && m_money != null)
 		{
@@ -658,6 +660,14 @@ public class Ma9MSeasonResult : MonoBehaviour
 		SetButtonText(button, text);
 		Ma9MClientUtil.ButtonSetActive(button, true);
 		return button;
+	}
+
+	private static void Place(UIImageButton button, float x, bool shown)
+	{
+		if (button != null)
+		{
+			button.transform.localPosition = shown ? new Vector3(x, -214f, ZButton) : new Vector3(x, -5000f, ZButton);
+		}
 	}
 
 	private static void SetButtonText(UIImageButton button, string text)

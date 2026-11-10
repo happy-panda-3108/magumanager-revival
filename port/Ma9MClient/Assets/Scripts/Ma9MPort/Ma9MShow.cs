@@ -210,6 +210,77 @@ public class Ma9MShow : MonoBehaviour
 		Play(p, angry ? "Pit_FourBallKick" : "Pit_HomerunWatchingBall", 0.2f);
 	}
 
+	// 랜덤하게"): Pitcher_HomeRunSeremony01-07 (Editor/Ma9MFieldMotions, mode free). Their faces do not come over (our figure
+	// has no face rig), the body does. Each with where the shot picks it up (s), the turn he makes in it to watch the ball
+	// go (measured off the clip's spine: he starts turned that much away from the ball, so he ends up looking at it; 0: he
+	// stays facing the plate), the camera's angle off the way he faces then, where it looks (ahead of his feet, height),
+	// how high it stands and how long the shot lasts.
+	private struct HomerReaction
+	{
+		public string Clip;
+		public float Skip, Turn, CamYaw, LookAhead, LookY, CamUp, Shot;
+	}
+
+	private static readonly HomerReaction[] s_homerReactions =
+	{
+		// Turns to watch it go, then hangs his head with his back to the plate.
+		new HomerReaction { Clip = "M_Pitcher_HomeRun01", Skip = 0f, Turn = 185f, CamYaw = 0f, LookY = 0.95f, CamUp = 1.25f, Shot = 2.6f },
+		// Both hands to his cap.
+		new HomerReaction { Clip = "M_Pitcher_HomeRun02", Skip = 0f, Turn = 0f, CamYaw = -30f, LookY = 0.95f, CamUp = 1.25f, Shot = 2.4f },
+		// Bent over, hands on his knees.
+		new HomerReaction { Clip = "M_Pitcher_HomeRun03", Skip = 0.2f, Turn = 0f, CamYaw = 0f, LookY = 0.85f, CamUp = 1.25f, Shot = 2.6f },
+		// Turns and watches it out, then back to the plate.
+		new HomerReaction { Clip = "M_Pitcher_HomeRun04", Skip = 0f, Turn = 182f, CamYaw = 0f, LookY = 0.95f, CamUp = 1.25f, Shot = 2.6f },
+		// Turns slowly after it, a wave of the glove in disgust.
+		new HomerReaction { Clip = "M_Pitcher_HomeRun05", Skip = 0f, Turn = 139f, CamYaw = -20f, LookY = 0.95f, CamUp = 1.25f, Shot = 3.0f },
+		// Down flat on the grass, then up again.
+		new HomerReaction { Clip = "M_Pitcher_HomeRun06", Skip = 0.6f, Turn = 0f, CamYaw = 60f, LookAhead = 0.6f, LookY = 0.45f, CamUp = 1.7f, Shot = 3.0f },
+		// Bent at the waist, head down a long while.
+		new HomerReaction { Clip = "M_Pitcher_HomeRun07", Skip = 0.5f, Turn = 0f, CamYaw = 0f, LookY = 0.85f, CamUp = 1.25f, Shot = 2.6f },
+	};
+
+	// Dev: "-ma9mhomerreact <1-7>" always that one.
+	private static readonly int s_forceReaction = ForceReaction();
+
+	private static int ForceReaction()
+	{
+		string[] a = System.Environment.GetCommandLineArgs();
+		int i = System.Array.IndexOf(a, "-ma9mhomerreact");
+		return i >= 0 && i + 1 < a.Length && int.TryParse(a[i + 1], out int n) ? n : 0;
+	}
+
+	// Starts the reaction on the pitcher (a cut: no blend) and frames him; false when the clips are not there.
+	private bool HomerReactionShot(Vector3 toBall, out float shot)
+	{
+		shot = 0f;
+		Pitcher p = ThePitcher;
+		Animation an = p != null ? p.GetComponent<Animation>() : null;
+		HomerReaction r = s_homerReactions[s_forceReaction >= 1 && s_forceReaction <= s_homerReactions.Length ? s_forceReaction - 1 : Random.Range(0, s_homerReactions.Length)];
+		if (an == null || !Ma9MMotions.Ensure(an, r.Clip))
+		{
+			return false;
+		}
+		Vector3 pp = p.transform.position;
+		Vector3 home = new Vector3(-pp.x, 0f, -pp.z).normalized;
+		Vector3 key = r.Turn != 0f ? toBall : home;
+		Vector3 start = r.Turn != 0f ? Quaternion.Euler(0f, -r.Turn, 0f) * toBall : home;
+		p.ForceState(eFielderState.PITCHER_CEREMONY);
+		p.transform.rotation = Quaternion.LookRotation(start);
+		AnimationState st = an[r.Clip];
+		st.wrapMode = WrapMode.ClampForever;
+		st.speed = 1f;
+		an.Play(r.Clip);
+		st.time = r.Skip;
+		an.Sample();
+		Vector3 cam = Quaternion.Euler(0f, r.CamYaw, 0f) * key;
+		Vector3 side = Vector3.Cross(Vector3.up, cam);
+		Vector3 look = home * r.LookAhead + Vector3.up * r.LookY;
+		Cam(pp + cam * 4.6f + side * 1.1f + Vector3.up * r.CamUp, () => p.transform.position + look, 30f, -1.5f);
+		Log($"pitcher reaction {r.Clip} from {r.Skip:F1} s, shot {r.Shot:F1} s");
+		shot = r.Shot;
+		return true;
+	}
+
 	private static void ShowHomeUmpire()
 	{
 		GameObject u = PM.umpiremanager.GetUmpire(eUmpirePos.POS_HOMEUMPIRE);
@@ -253,17 +324,19 @@ public class Ma9MShow : MonoBehaviour
 		PitcherReaction(angry);
 		Play(batter, "Bat_FourBallproud", 0.3f);
 		yield return new WaitForSeconds(1.6f);
-		// The pitcher, from in front of him: turned to watch it go, or kicking the dirt at the plate.
+		// watch it go or kicking the dirt at the plate.
 		Pitcher p = ThePitcher;
-		if (p != null)
+		float shot = 2.2f;
+		if (p != null && !HomerReactionShot(toBall, out shot))
 		{
+			shot = 2.2f;
 			Vector3 pp = p.transform.position;
 			Vector3 face = angry ? new Vector3(-pp.x, 0f, -pp.z).normalized : toBall;
 			Vector3 side = Vector3.Cross(Vector3.up, face);
 			Cam(pp + face * 4.6f + side * 1.1f + Vector3.up * 1.25f, () => p.transform.position + Vector3.up * 0.95f, 30f, -1.5f);
 		}
 		ScorePopup(RunsOnHomer());
-		yield return new WaitForSeconds(2.2f);
+		yield return new WaitForSeconds(shot);
 		CamOff();
 		m_show = null;
 	}

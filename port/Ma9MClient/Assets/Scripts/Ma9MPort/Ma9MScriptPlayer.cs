@@ -927,7 +927,9 @@ public class Ma9MScriptPlayer : MonoBehaviour
 					Transform gl = Glove(catcher);
 					Debug.Log($"[Ma9MScript] dive frame by {catcher} t {m_t:F3} to catch {caughtAt - m_t:F3}: ball y {p.y:F2} glove y {gl.position.y:F2} apart {Vector3.Distance(p, gl.position):F2} m");
 				}
-				float into = ground ? 0.06f : 0.2f;
+				// A diving catch's flight already comes down through his glove (Ma9MScriptTimeline's lift): pulled in over
+				// its last 0.1 s only, so it keeps falling into the glove instead of stopping over it (user, 2026-11-11).
+				float into = ground ? 0.06f : style == 2 ? 0.1f : 0.2f;
 				Transform glove = caughtAt - m_t < into ? Glove(catcher) : null;
 				if (glove != null)
 				{

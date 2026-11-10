@@ -553,6 +553,9 @@ namespace Ma9MServer
 			public int[] Order;     // fielding spot per batting order slot (BestOrder)
 			public Lineup Lineup;   // for LineupEffects
 			public int FixedStarter = -1;  // plan: this SP slot starts every game (else the rotation)
+			// 작전 (2026-11-11, TCSIM_OPS in entry mode): the 작전실 and deck slots' 개인작전; null = neutral / follows the team.
+			public GameTactics Tactics;
+			public Dictionary<int, GameTactics> Own;
 		}
 
 		private static DevDeck Develop(Deck d)
@@ -603,6 +606,12 @@ namespace Ma9MServer
 			LineupEffects.Apply(t, x.Lineup ?? LineupOf(d, order), s_data.Catalog, x.Dev.Where(c => c != null));
 			for (int i = 0; i < 9; i++) TeamStrength.AddBonuses(t.Order[i], x.Dev[order[i]]);
 			for (int s = 0; s < 11; s++) TeamStrength.AddBonuses(t.Pitchers[s], x.Dev[FirstPitcher + s]);
+			if (x.Tactics != null) t.Tactics = x.Tactics;
+			if (x.Own != null)
+			{
+				for (int i = 0; i < 9; i++) if (x.Own.TryGetValue(order[i], out GameTactics o)) t.Order[i].Own = o;
+				for (int s = 0; s < 11; s++) if (x.Own.TryGetValue(FirstPitcher + s, out GameTactics o)) t.Pitchers[s].Own = o;
+			}
 			return t;
 		}
 

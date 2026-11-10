@@ -80,6 +80,11 @@ namespace Ma9MServer
 		// those counts).
 		private static readonly double[] Closer = { 0, 0.5, 1.5, 4, 48, 31, 12.5, 2.5, 0, 0 };
 
+		// 동군·서군 by card team code (the client's eTeamName): SK·SSG 9, 롯데 7, 삼성 8, 두산 0, OB 10, kt 19, 쌍방울 11 /
+		// KIA 5, 해태 1, LG 6, 한화 2, 빙그레 14, 히어로즈 3, NC 13, 현대 4, 태평양 15. Declared before Products (static order).
+		private static readonly HashSet<int> EastClubs = new HashSet<int> { 9, 7, 8, 0, 10, 19, 11 };
+		private static readonly HashSet<int> WestClubs = new HashSet<int> { 5, 1, 6, 2, 14, 3, 13, 4, 15 };
+
 		private static readonly Product[] Products = BuildProducts();
 
 		// 홈런볼 상점 (its own list; the client opens on tab 0).
@@ -104,15 +109,39 @@ namespace Ma9MServer
 			List<Product> list = new List<Product>
 			{
 				// Prices (user, 2026-10-22): 전체 6만 → 5만, 고급 15만 → 10만, 2~8볼 포지션팩 6만 → 4만; 1~7볼 3만 stays.
+				// Odds since 2026-11-11 (CardPacks; were 9볼 이상 3.5%·10볼 1% and 10%·3%).
 				new Product { Index = 101, Tab = 1, Order = 1, Image = "shop_pack_all", Type = "선수카드", Name = "전체 선수팩", Cost = 50_000, Kind = Kind.Pack,
-					Item = ItemCatalog.AllPlayersPack, Description = "1~10볼 선수카드 1장 (타자·투수 무작위).\n9볼 이상 3.5%, 10볼 1%" },
+					Item = ItemCatalog.AllPlayersPack, Description = "1~10볼 선수카드 1장 (타자·투수 무작위).\n9볼 이상 1.3%, 10볼 0.3%" },
 				new Product { Index = 102, Tab = 1, Order = 2, Image = "shop_pack_high", Type = "선수카드", Name = "고급 선수팩", Cost = 100_000, Kind = Kind.Pack,
-					Item = ItemCatalog.HighPlayersPack, Description = "4~10볼 선수카드 1장 (타자·투수 무작위).\n9볼 이상 10%, 10볼 3%" },
+					Item = ItemCatalog.HighPlayersPack, Description = "4~10볼 선수카드 1장 (타자·투수 무작위).\n9볼 이상 3.5%, 10볼 0.7%" },
 				// 레전드 선수팩 (user, 2026-11-08: "7만 MP로 하고, 2천만 MP가 레전드 1장의 기댓값으로"), shown and sold once the tables hold
 				// 레전드 cards (Visible).
 				new Product { Index = 103, Tab = 1, Order = 3, Image = "shop_pack_legend", Type = "선수카드", Name = "레전드 선수팩", Cost = CardPacks.LegendPackPrice, Kind = Kind.Pack,
 					Item = ItemCatalog.LegendPlayersPack, Description = $"3~10볼 선수카드 1장, 또는 레전드 선수 ({CardPacks.LegendChance * 100:0.##}%).\n레전드는 이 팩에서만 나옵니다." },
 			};
+			// 연대팩·동군팩·서군팩 (user, 2026-11-10 decision 6: "동군팩, 서군팩, 연대팩을 만들건데 … 팀별로 2.5억 MP정도"; 11-11: "동군, 서군팩,
+			// 연대팩도 괜찮은 제안인 것 같음"): the 전체 선수팩's odds over one decade's seasons (6만) or one half of the clubs (5만), the
+			// halves as the starting-club grid (Emblem.EastTeam/WestTeam) with each club's lineage. A single team-year set deck takes
+			// about 4,300 decade packs on average (tools/scripts/pack_cost.py).
+			const string allOdds = "9볼 이상 1.3%, 10볼 0.3%";
+			(int index, string code, string name, int from, int to)[] decades =
+			{
+				(104, "era90", "1990년대 선수팩", 1993, 1999), (105, "era00", "2000년대 선수팩", 2000, 2009),
+				(106, "era10", "2010년대 선수팩", 2010, 2019), (107, "era20", "2020년대 선수팩", 2020, 2029),
+			};
+			short packOrder = 4;
+			foreach ((int index, string code, string name, int from, int to) in decades)
+			{
+				list.Add(new Product { Index = index, Tab = 1, Order = packOrder++, Image = $"shop_pack_{code}", Type = "선수카드", Name = name, Cost = 60_000, Kind = Kind.Pack,
+					Item = index, Filter = c => c.Year >= from && c.Year <= to, Odds = CardPacks.AllOdds,
+					Description = $"{from}~{Math.Min(to, 2026)}년 시즌 선수카드 1장 (타자·투수 무작위).\n1~10볼, {allOdds}" });
+			}
+			list.Add(new Product { Index = 108, Tab = 1, Order = packOrder++, Image = "shop_pack_east", Type = "선수카드", Name = "동군 선수팩", Cost = 50_000, Kind = Kind.Pack,
+				Item = 108, Filter = c => EastClubs.Contains(c.TeamCode), Odds = CardPacks.AllOdds,
+				Description = $"SK·SSG 롯데 삼성 두산·OB kt 쌍방울 선수 1장.\n1~10볼, {allOdds}" });
+			list.Add(new Product { Index = 109, Tab = 1, Order = packOrder++, Image = "shop_pack_west", Type = "선수카드", Name = "서군 선수팩", Cost = 50_000, Kind = Kind.Pack,
+				Item = 109, Filter = c => WestClubs.Contains(c.TeamCode), Odds = CardPacks.AllOdds,
+				Description = $"KIA·해태 LG 한화·빙그레 히어로즈 NC 현대·태평양 선수 1장.\n1~10볼, {allOdds}" });
 			(string code, string name, string who, Func<CardInfo, bool> filter)[] positions =
 			{
 				("sp", "선발 투수팩", "선발 투수", c => !c.IsBatter && c.MainPosition == CardPos.SP),
@@ -122,7 +151,7 @@ namespace Ma9MServer
 				("if", "내야수팩", "포수·내야수", c => c.IsBatter && c.MainPosition != CardPos.LF && c.MainPosition != CardPos.CF && c.MainPosition != CardPos.RF && c.MainPosition != CardPos.DH),
 				("of", "외야수팩", "외야수·지명타자", c => c.IsBatter && (c.MainPosition == CardPos.LF || c.MainPosition == CardPos.CF || c.MainPosition == CardPos.RF || c.MainPosition == CardPos.DH))
 			};
-			short order = 3;
+			short order = packOrder;
 			for (int p = 0; p < positions.Length; p++)
 			{
 				(string code, string name, string who, Func<CardInfo, bool> filter) = positions[p];
@@ -973,6 +1002,14 @@ namespace Ma9MServer
 				bool wrong = p.Filter != null && drawn.Any(c => !p.Filter(c) || p.Odds[c.Ball - 1] <= 0);
 				Check(drawn.Count == 200 && !wrong, $"{p.Name}: 200 cards by ball " + string.Join(" ", Enumerable.Range(1, 10).Where(b => balls[b] > 0).Select(b => $"{b}:{balls[b]}")));
 			}
+			// 연대팩·동군·서군팩 (2026-11-11): every drawable card in exactly one decade pack and in exactly one of 동군·서군.
+			Product[] decadePacks = Products.Where(p => p.Index >= 104 && p.Index <= 107).ToArray();
+			Product[] halves = Products.Where(p => p.Index == 108 || p.Index == 109).ToArray();
+			int strayDecade = catalog.Drawable.Count(c => decadePacks.Count(p => p.Filter(c)) != 1);
+			int strayHalf = catalog.Drawable.Count(c => halves.Count(p => p.Filter(c)) != 1);
+			Check(decadePacks.Length == 4 && halves.Length == 2 && strayDecade == 0 && strayHalf == 0,
+				$"연대팩 4종·동서군팩: 카드 {catalog.Drawable.Count():N0}장, " + string.Join(" ", decadePacks.Concat(halves).Select(p => $"{p.Name} {catalog.Drawable.Count(p.Filter):N0}"))
+				+ $", 연대 밖·겹침 {strayDecade}, 동서군 밖·겹침 {strayHalf}");
 
 			uint user = LeagueService.Store.ActiveTeams().Select(t => t.code).FirstOrDefault();
 			if (user == 0)

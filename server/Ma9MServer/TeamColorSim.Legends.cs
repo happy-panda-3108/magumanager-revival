@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Ma9MSim;
 
 namespace Ma9MServer
 {
@@ -115,6 +116,48 @@ namespace Ma9MServer
 			int bats = legends.Count(c => c.IsBatter), arms = legends.Count - bats;
 			return bats > RosterHandlers.MaxLegendBatters || arms > RosterHandlers.MaxLegendPitchers
 				? $"레전드 타자 {bats}명·투수 {arms}명(1명씩까지)" : null;
+		}
+
+		// TCSIM_OPS="<deck>#<tag>=<op>|<op>…;…" (2026-11-11, user: "작전 방침이랑 작전실 방침도 같이 승률이 높은 쪽으로 설정하는 방법"):
+		// B=<5 values with "."> the 작전실 batting sliders (타격 공격 도루 번트 수비), P=<5> the pitching ones (투수성향 승부 제구 투구
+		// 교체), O<token>=<4> one card's 개인작전 (batter 타격 공격 도루 번트, pitcher 투수성향 승부 제구 투구; the token a name or
+		// idx of the deck's 25). Unset = 50 / follows the team. The field decks keep the neutral 50s.
+		private static Dictionary<string, string> OpsSpecs() => (Environment.GetEnvironmentVariable("TCSIM_OPS") ?? string.Empty)
+			.Split(';', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Split('=', 2)).Where(kv => kv.Length == 2)
+			.ToDictionary(kv => kv[0].Trim(), kv => kv[1].Trim());
+
+		private static string ApplyOps(DevDeck y, string spec)
+		{
+			byte[] Values(string text, int n)
+			{
+				byte[] b = text.Split('.').Select(x => (byte)Math.Clamp(int.Parse(x), 0, 100)).ToArray();
+				return b.Length == n ? b : null;
+			}
+			byte[] off = { 50, 50, 50, 50, 50 }, def = { 50, 50, 50, 50, 50 };
+			List<(string token, byte[] values)> own = new List<(string, byte[])>();
+			foreach (string op in spec.Split('|', StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()))
+			{
+				string[] kv = op.Split('=', 2);
+				if (kv.Length != 2) return $"작전 {op}?";
+				byte[] v = kv[0].StartsWith("O") ? Values(kv[1], 4) : Values(kv[1], 5);
+				if (v == null) return $"작전 {op}: 값 개수";
+				if (kv[0] == "B") off = v;
+				else if (kv[0] == "P") def = v;
+				else if (kv[0].StartsWith("O")) own.Add((kv[0].Substring(1), v));
+				else return $"작전 {op}?";
+			}
+			y.Tactics = GameTactics.From(off, def);
+			y.Own = new Dictionary<int, GameTactics>();
+			foreach ((string token, byte[] values) in own)
+			{
+				int slot = Array.FindIndex(y.D.At, c => c != null && (c.Info.Name == token || NamesakeBase(c.Info.Name) == token || c.Info.Idx.ToString() == token));
+				if (slot < 0) return $"개인작전 {token} 없음";
+				bool pitcher = slot >= FirstPitcher;
+				byte[] o = (byte[])off.Clone(), d = (byte[])def.Clone();
+				Array.Copy(values, pitcher ? d : o, 4);
+				y.Own[slot] = GameTactics.From(o, d);
+			}
+			return null;
 		}
 
 		// "1.박진만7 SS, … | 벤치 …" for a deck and order.
