@@ -1,0 +1,263 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Ma9MSim;
+
+namespace Ma9MServer
+{
+	// 팀 특성 in games: the effects the systems session balanced in tools/traitsim (traits.json, the
+	// user's season-2 trees), applied the way its Arena applied them.
+	// 1. Stat gains, in shown points, raise the cards at the development weight (like bonus points);
+	//    starters and the set-up/closing pair have their own gains.
+	// 2. Rate effects multiply the game model's talents after it is built: own batters' HR, K, BB,
+	//    extra-base hits and steal attempts; the opponents' extra-base hits and steal attempts; own
+	//    pitchers' strikeouts, hits on balls in play and home runs; caught stealing through the catchers.
+	// Effects are left out of the league reference (the systems session's recommendation), so they
+	// are applied after TeamStrength.ApplyLeagueReference.
+	public static class TraitEffects
+	{
+		public sealed class Effect
+		{
+			public double[] Bat = new double[6];   // 컨택 파워 선구 주력 정신 수비 (CardRow.R order)
+			public double[] Pit = new double[6];   // 체력 구속 컨트롤 테크닉 구위 정신, every pitcher
+			public double[] Late = new double[6];  // set-up man and closer only
+			public double[] Start = new double[6]; // the five starters only
+			public double HR = 1, K = 1, BB = 1, XBH = 1, StealTry = 1, StealCaught = 1;    // own batting
+			public double PK = 1, PBabip = 1, PHR = 1, PXBH = 1, PStealTry = 1, PCaught = 1; // own pitching
+			public double StartLimit;  // pitches added to a starter's limit (needs the fatigue engine)
+
+			public bool IsEmpty => Bat.Concat(Pit).Concat(Late).Concat(Start).All(x => x == 0)
+				&& new[] { HR, K, BB, XBH, StealTry, StealCaught, PK, PBabip, PHR, PXBH, PStealTry, PCaught }.All(x => x == 1);
+		}
+
+		// Effect per point, from traits.json (perPoint).
+		private static readonly Dictionary<int, (string key, double value)[]> PerPoint = new Dictionary<int, (string, double)[]>
+		{
+			[101] = new[] { ("컨택", 1.0) },
+			[102] = new[] { ("주력", 7.0) },
+			[103] = new[] { ("H정신", 8.0) },
+			[104] = new[] { ("파워", 1.1) },
+			[105] = new[] { ("도루시도%", 20.0), ("도루자%", -15.0) },
+			[106] = new[] { ("선구", 1.4) },
+			[107] = new[] { ("수비", 9.5) },
+			[110] = new[] { ("컨택", 1.0), ("H정신", 2.0) },
+			[111] = new[] { ("도루자%", -20.0) },
+			[112] = new[] { ("홈런%", 4.0) },
+			[113] = new[] { ("컨택", 1.0), ("주력", 4.0) },
+			[114] = new[] { ("삼진%", -2.0), ("볼넷%", 2.0) },
+			[115] = new[] { ("컨택", 1.0), ("파워", 0.5) },
+			[118] = new[] { ("타자전체", 1.0) },
+			[120] = new[] { ("홈런%", 6.0), ("장타%", 6.0) },
+			[121] = new[] { ("구위", 1.6) },
+			[122] = new[] { ("구속", 2.8) },
+			[123] = new[] { ("체력", 10.0), ("선발전체", 0.45) },
+			[124] = new[] { ("P정신", 10.0) },
+			[125] = new[] { ("테크닉", 2.2) },
+			[126] = new[] { ("컨트롤", 3.3) },
+			[127] = new[] { ("상대도루시도%", -5.0), ("도루저지%", 22.0) },
+			[130] = new[] { ("컨트롤", 1.5), ("테크닉", 1.5) },
+			[131] = new[] { ("구속", 2.0), ("구위", 1.0) },
+			[132] = new[] { ("선발한계", 10.0), ("선발전체", 0.6) },
+			[133] = new[] { ("피안타%", -0.5), ("탈삼진%", 2.0) },
+			[134] = new[] { ("피장타%", -4.0), ("피홈런%", -3.0) },
+			[135] = new[] { ("피안타%", -0.5), ("구속", 2.5) },
+			[138] = new[] { ("투수전체", 1.5) },
+			[140] = new[] { ("필승조전체", 10.0) },
+		};
+
+		// The team's saved traits as one effect (null when it has none).
+		public static Effect Of(uint userCode)
+		{
+			return FromPoints(TeamPropertyHandlers.Points(userCode));
+		}
+
+		public static Effect FromPoints(Dictionary<byte, byte> points)
+		{
+			if (points == null || points.Count == 0)
+			{
+				return null;
+			}
+			Effect e = new Effect();
+			foreach ((byte index, byte p) in points)
+			{
+				if (!PerPoint.TryGetValue(index, out (string key, double value)[] parts))
+				{
+					continue;
+				}
+				foreach ((string key, double value) in parts)
+				{
+					Add(e, key, value * p);
+				}
+			}
+			return e.IsEmpty ? null : e;
+		}
+
+		private static void Add(Effect e, string key, double x)
+		{
+			double m = 1 + x / 100;
+			switch (key)
+			{
+				case "컨택": e.Bat[0] += x; break;
+				case "파워": e.Bat[1] += x; break;
+				case "선구": e.Bat[2] += x; break;
+				case "주력": e.Bat[3] += x; break;
+				case "H정신": e.Bat[4] += x; break;
+				case "수비": e.Bat[5] += x; break;
+				case "타자전체": for (int j = 0; j < 6; j++) e.Bat[j] += x; break;
+				case "체력": e.Pit[0] += x; break;
+				case "구속": e.Pit[1] += x; break;
+				case "컨트롤": e.Pit[2] += x; break;
+				case "테크닉": e.Pit[3] += x; break;
+				case "구위": e.Pit[4] += x; break;
+				case "P정신": e.Pit[5] += x; break;
+				case "투수전체": for (int j = 0; j < 6; j++) e.Pit[j] += x; break;
+				case "필승조전체": for (int j = 0; j < 6; j++) e.Late[j] += x; break;
+				case "선발전체": for (int j = 0; j < 6; j++) e.Start[j] += x; break;
+				case "홈런%": e.HR *= m; break;
+				case "삼진%": e.K *= m; break;
+				case "볼넷%": e.BB *= m; break;
+				case "장타%": e.XBH *= m; break;
+				case "도루시도%": e.StealTry *= m; break;
+				case "도루자%": e.StealCaught *= m; break;
+				case "탈삼진%": e.PK *= m; break;
+				case "피안타%": e.PBabip *= m; break;
+				case "피홈런%": e.PHR *= m; break;
+				case "피장타%": e.PXBH *= m; break;
+				case "상대도루시도%": e.PStealTry *= m; break;
+				case "도루저지%": e.PCaught *= m; break;
+				case "선발한계": e.StartLimit += x; break;
+				default: throw new ArgumentException("unknown trait effect " + key);
+			}
+		}
+
+		// Step 1: the team's cards with the stat gains (after the league reference).
+		public static void Raise(GameTeam t, Effect e)
+		{
+			if (t == null || e == null)
+			{
+				return;
+			}
+			for (int k = 0; k < t.Order.Length; k++)
+			{
+				if (t.Order[k] != null)
+				{
+					t.Order[k].Row = Raised(t.Order[k].Row, e.Bat);
+				}
+			}
+			for (int s = 0; s < t.Pitchers.Length; s++)
+			{
+				if (t.Pitchers[s] == null)
+				{
+					continue;
+				}
+				double[] extra = s >= 9 ? e.Late : s < 5 ? e.Start : new double[6];
+				t.Pitchers[s].Row = Raised(t.Pitchers[s].Row, e.Pit.Zip(extra, (a, b) => a + b).ToArray());
+			}
+		}
+
+		// A card with shown gains, played at the development weight (gains capped at 140 shown).
+		private static CardRow Raised(CardRow c, double[] gains)
+		{
+			if (c == null || gains.All(g => g == 0))
+			{
+				return c;
+			}
+			CardRow r = c.Clone();
+			double Gain(double v, double d) => d > 0 ? Math.Max(0, Math.Min(TeamStrength.ShownCap, v + d) - v) : d;
+			for (int j = 0; j < 6; j++)
+			{
+				r.R[j] += TeamStrength.DevWeight * Gain(c.R[j], gains[j]);
+			}
+			if (c.Kind == 'B' && gains[5] != 0)
+			{
+				for (int p = 0; p < 8; p++)
+				{
+					if (c.Defs[p] > 20)
+					{
+						r.Defs[p] += TeamStrength.DevWeight * Gain(c.Defs[p], gains[5]);
+					}
+				}
+			}
+			if (c.Kind == 'P' && gains[4] != 0)
+			{
+				r.Pitches = c.Pitches.Select(x => (x.code, x.rating + TeamStrength.DevWeight * Gain(x.rating, gains[4]))).ToList();
+			}
+			return r;
+		}
+
+		// Step 2: the rate effects on the built model. side = the team's index in the model
+		// (CardGame.Build puts home at 0 and away at 1).
+		public static void Apply(SeasonModel m, int side, Effect e)
+		{
+			if (m == null || e == null)
+			{
+				return;
+			}
+			int other = 1 - side;
+			foreach (int i in m.TeamBatters[side])
+			{
+				BatterTalent t = m.BT[i];
+				t.K = Math.Clamp(t.K * e.K, 0.01, 0.6);
+				t.BB = Math.Clamp(t.BB * e.BB, 0.005, 0.35);
+				t.HR = Math.Clamp(t.HR * e.HR, 0.0003, 0.2);
+				t.Double = Math.Clamp(t.Double * e.XBH, 0.03, 0.5);
+				t.Triple = Math.Clamp(t.Triple * e.XBH, 0.0005, 0.15);
+				t.Steal = Math.Clamp(t.Steal * e.StealTry, 0.001, 0.6);
+			}
+			foreach (int i in m.TeamBatters[other])
+			{
+				BatterTalent t = m.BT[i];
+				t.Double = Math.Clamp(t.Double * e.PXBH, 0.03, 0.5);
+				t.Triple = Math.Clamp(t.Triple * e.PXBH, 0.0005, 0.15);
+				t.Steal = Math.Clamp(t.Steal * e.PStealTry, 0.001, 0.6);
+			}
+			GameDeck d = m.Decks[side];
+			for (int s = 0; s < d.Pitchers.Length; s++)
+			{
+				int p = d.Pitchers[s];
+				if (p < 0)
+				{
+					continue;
+				}
+				PitcherTalent t = m.PT[p];
+				t.K = Math.Clamp(t.K * e.PK, 0.02, 0.6);
+				t.Babip = Math.Clamp(t.Babip * e.PBabip, 0.12, 0.5);
+				t.HR = Math.Clamp(t.HR * e.PHR, 0.001, 0.15);
+				// 선발한계: the five starters' pitch limit in the fatigue engine.
+				if (s < 5 && m.Tac != null)
+				{
+					m.Tac.Limit[p] = Math.Min(m.Tac.R.LimitMax, m.Tac.Limit[p] + e.StartLimit);
+				}
+			}
+			ScaleCaught(m, other, e.StealCaught);  // our runners against their catcher
+			ScaleCaught(m, side, e.PCaught);       // their runners against our catcher
+		}
+
+		// The catcher's effective defence moved so the caught-stealing share is multiplied by f; the
+		// shown value stays, so his boost to the pitchers does not change.
+		private static void ScaleCaught(SeasonModel m, int team, double f)
+		{
+			if (f == 1 || m.Defs == null)
+			{
+				return;
+			}
+			int i = m.Decks[team].At[0];
+			if (i < 0)
+			{
+				return;
+			}
+			FieldRules fr = m.Field;
+			double orig = m.Defs[i][0];
+			double now = fr.CaughtMult((orig - 65) / 10.0);
+			double y = (f * now - 1) / fr.CaughtPer10;
+			double x = y <= 3 ? y : 3 + 2 * (y - 3);
+			m.CatcherShown ??= Enumerable.Repeat(double.NaN, m.Batters.Length).ToArray();
+			if (double.IsNaN(m.CatcherShown[i]))
+			{
+				m.CatcherShown[i] = orig;
+			}
+			m.Defs[i] = (double[])m.Defs[i].Clone();
+			m.Defs[i][0] = 65 + 10 * x;
+		}
+	}
+}

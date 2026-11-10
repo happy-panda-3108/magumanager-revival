@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>12.0</LangVersion>
+    <RootNamespace>TraitSim</RootNamespace>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+  </PropertyGroup>
+
+  <!-- engine/ = a copy of sim/Ma9MSim (2026-10-18 18:26, without Program.cs) with the prototype
+       changes (fatigue, pitch counts, tactics, league reference); engine_base/ = the untouched copy
+       for diffing. The engine session owns the real files. -->
+  <ItemGroup>
+    <Compile Remove="engine_base/**" />
+  </ItemGroup>
+
+</Project>

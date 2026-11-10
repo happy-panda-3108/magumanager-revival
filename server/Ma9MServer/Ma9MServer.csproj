@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>12.0</LangVersion>
+    <RootNamespace>Ma9MServer</RootNamespace>
+    <!-- The shared client code is decompiled; keep its warnings out of the way. -->
+    <NoWarn>$(NoWarn);CS0168;CS0169;CS0219;CS0414;CS0649;CS0618;CS8632;SYSLIB0021;SYSLIB0011</NoWarn>
+  </PropertyGroup>
+
+  <!-- Packet definitions and the network library are shared with the Unity client so both
+       sides always agree on the wire format. -->
+  <PropertyGroup>
+    <ClientScripts>..\..\port\Ma9MClient\Assets\Scripts\Assembly-CSharp</ClientScripts>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(ClientScripts)\NetworkLibrary\**\*.cs" Link="Shared\NetworkLibrary\%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="$(ClientScripts)\Ma9MPackets\**\*.cs" Link="Shared\Ma9MPackets\%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="$(ClientScripts)\LitJson\*.cs" Link="Shared\LitJson\%(Filename)%(Extension)" />
+    <Compile Include="$(ClientScripts)\eBuyType.cs;$(ClientScripts)\eShowCountType.cs;$(ClientScripts)\eShopCostType.cs;$(ClientScripts)\eUniformPart.cs;$(ClientScripts)\eCondition.cs;$(ClientScripts)\ErrorInfoObject.cs" Link="Shared\Enums\%(Filename)%(Extension)" />
+    <!-- XML documents the client deserializes, and the table-bundle cipher. -->
+    <Compile Include="$(ClientScripts)\ConnectionClientInfo.cs;$(ClientScripts)\ConnectionInfo.cs;$(ClientScripts)\GameServerInfo.cs;$(ClientScripts)\eServiceStatus.cs;$(ClientScripts)\eGameServerInfoCheckMenu.cs;$(ClientScripts)\ResourceInfo.cs;$(ClientScripts)\ResourceInfoTypes.cs;$(ClientScripts)\MyCryptoGraphy.cs" Link="Shared\Client\%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.11" />
+  </ItemGroup>
+  <!-- The game engine: the same simulator the cards were calibrated with. -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\sim\Ma9MSim\Ma9MSim.csproj" />
+  </ItemGroup>
+
+</Project>
