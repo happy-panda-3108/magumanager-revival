@@ -65,6 +65,39 @@ namespace Ma9MServer
 			[140] = new[] { ("필승조전체", 10.0) },
 		};
 
+		// 특성 세기 다시 맞추기 (engine session, 2026-11-11; user 20:4x "특성 세기는 가 안으로 해줘", 21:2x "진행합시다. 특성을 가장 승률 높은
+		// 조합으로 자동 배분해주는 기능이 생길 때 같이 반영합시다"): every trait worth its tier's target again in full games on average
+		// rosters (--traitbalancesim 400 pairs × 100 games, paired; batter .36 .42 .48 .55 1.10 %p a point, pitcher ×1.1). The 10-18
+		// amounts were set when 정신력 and 수비 were worth next to nothing in the engine; after the 10-30 clutch rework and the fielding
+		// engine 103·124·107 played about 3× their tier, most pitcher traits 1.3-1.8×. Before → after (%p a point): 103 1.17 → 0.32,
+		// 124 1.55 → 0.40, 107 1.47 → 0.43, 110 0.67 → 0.47, 114 0.39 → 0.62, 122 0.67 → 0.48, 126 0.67 → 0.47, 130 0.71 → 0.51,
+		// 131 0.72 → 0.53, 135 0.93 → 0.69, 138 1.81 → 1.12, 140 2.23 → 1.08; the rest unchanged (within their tier's range). With it
+		// the caught-stealing share scales by itself (SeasonModel.CaughtScale; ScaleCaught). Off until the 특성 자동 배분 screen ships:
+		// MA9M_TRAIT_V2=1 turns it on (then flip the default).
+		public static readonly bool V2 = Environment.GetEnvironmentVariable("MA9M_TRAIT_V2") == "1";
+
+		private static readonly Dictionary<int, (string key, double value)[]> PerPointV2 = new Dictionary<int, (string, double)[]>(PerPoint)
+		{
+			[103] = new[] { ("H정신", 2.5) },
+			[107] = new[] { ("수비", 2.8) },
+			[110] = new[] { ("컨택", 0.7), ("H정신", 1.4) },
+			[114] = new[] { ("삼진%", -2.8), ("볼넷%", 2.8) },
+			[122] = new[] { ("구속", 1.65) },
+			[124] = new[] { ("P정신", 2.6) },
+			[126] = new[] { ("컨트롤", 2.3) },
+			[130] = new[] { ("컨트롤", 1.1), ("테크닉", 1.1) },
+			[131] = new[] { ("구속", 1.5), ("구위", 0.75) },
+			[135] = new[] { ("피안타%", -0.33), ("구속", 1.6) },
+			[138] = new[] { ("투수전체", 1.0) },
+			[140] = new[] { ("필승조전체", 5.4) },
+		};
+
+		// Dev (engine session, 2026-11-11, 특성 세기 다시 맞추기): MA9M_TRAIT_SCALE="103:0.29,124:0.3" plays those traits' per-point
+		// amounts times the share (tests on data copies only).
+		private static readonly Dictionary<byte, double> s_scale = (Environment.GetEnvironmentVariable("MA9M_TRAIT_SCALE") ?? string.Empty)
+			.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(x => x.Split(':')).Where(x => x.Length == 2)
+			.ToDictionary(x => byte.Parse(x[0]), x => double.Parse(x[1], System.Globalization.CultureInfo.InvariantCulture));
+
 		// The team's saved traits as one effect (null when it has none).
 		public static Effect Of(uint userCode)
 		{
@@ -80,13 +113,14 @@ namespace Ma9MServer
 			Effect e = new Effect();
 			foreach ((byte index, byte p) in points)
 			{
-				if (!PerPoint.TryGetValue(index, out (string key, double value)[] parts))
+				if (!(V2 ? PerPointV2 : PerPoint).TryGetValue(index, out (string key, double value)[] parts))
 				{
 					continue;
 				}
+				double scale = s_scale.TryGetValue(index, out double sc) ? sc : 1;
 				foreach ((string key, double value) in parts)
 				{
-					Add(e, key, value * p);
+					Add(e, key, value * p * scale);
 				}
 			}
 			return e.IsEmpty ? null : e;
@@ -233,12 +267,23 @@ namespace Ma9MServer
 			ScaleCaught(m, side, e.PCaught);       // their runners against our catcher
 		}
 
-		// The catcher's effective defence moved so the caught-stealing share is multiplied by f; the
-		// shown value stays, so his boost to the pitchers does not change.
+		// The caught-stealing share against the team's catcher multiplied by f (SeasonModel.CaughtScale; engine session,
+		// 2026-11-11). Before, the catcher's effective defence was moved for it, through an inverse that missed the fielding
+		// tune (Defence.TunedX): 도루 억제 2점 (×1.49) set an 85 catcher's defence near 290 for the whole game, so 105·111·127
+		// played 1.0-1.3%p a point in full games where the steals alone are worth about a third. Goes with V2 (the user: the trait
+		// changes together, with the 특성 자동 배분 screen); MA9M_TRAIT_CAUGHT_OLD=1 / 0 forces the old / new way for tests.
+		private static readonly bool CaughtOld = (Environment.GetEnvironmentVariable("MA9M_TRAIT_CAUGHT_OLD") ?? (V2 ? "0" : "1")) == "1";
+
 		private static void ScaleCaught(SeasonModel m, int team, double f)
 		{
 			if (f == 1 || m.Defs == null)
 			{
+				return;
+			}
+			if (!CaughtOld)
+			{
+				m.CaughtScale ??= new double[] { 1, 1 };
+				m.CaughtScale[team] *= f;
 				return;
 			}
 			int i = m.Decks[team].At[0];

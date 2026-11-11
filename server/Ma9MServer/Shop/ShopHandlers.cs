@@ -117,7 +117,7 @@ namespace Ma9MServer
 				// 레전드 선수팩 (user, 2026-11-08: "7만 MP로 하고, 2천만 MP가 레전드 1장의 기댓값으로"), shown and sold once the tables hold
 				// 레전드 cards (Visible).
 				new Product { Index = 103, Tab = 1, Order = 3, Image = "shop_pack_legend", Type = "선수카드", Name = "레전드 선수팩", Cost = CardPacks.LegendPackPrice, Kind = Kind.Pack,
-					Item = ItemCatalog.LegendPlayersPack, Description = $"3~10볼 선수카드 1장, 또는 레전드 선수 ({CardPacks.LegendChance * 100:0.##}%).\n레전드는 이 팩에서만 나옵니다." },
+					Item = ItemCatalog.LegendPlayersPack, Description = $"3~10볼 선수카드 1장, 또는 레전드 선수 ({CardPacks.LegendChance * 100:0.##}%).\n9볼 이상 3.3%, 10볼 0.9%. 레전드는 이 팩에서만 나옵니다." },
 			};
 			// 연대팩·동군팩·서군팩 (user, 2026-11-10 decision 6: "동군팩, 서군팩, 연대팩을 만들건데 … 팀별로 2.5억 MP정도"; 11-11: "동군, 서군팩,
 			// 연대팩도 괜찮은 제안인 것 같음"): the 전체 선수팩's odds over one decade's seasons (6만) or one half of the clubs (5만), the

@@ -66,6 +66,7 @@ namespace Ma9MServer
 				.Select(s => s.Split('=', 2)).Where(kv => kv.Length == 2).ToDictionary(kv => kv[0].Trim(), kv => kv[1]);
 			Dictionary<string, string> batsOf = BatsSpecs();
 			Dictionary<string, string> opsOf = OpsSpecs();
+			Dictionary<string, string> devOf = DevSpecs();
 			string buildPick = Environment.GetEnvironmentVariable("TCSIM_ENTRY_BUILD");
 			Dictionary<string, Deck> baseOf = new Dictionary<string, Deck>();
 			foreach (string label in (Environment.GetEnvironmentVariable("TCSIM_DECKS") ?? string.Empty).Split(';').Select(x => x.Trim()).Where(x => x.Length > 0))
@@ -153,6 +154,16 @@ namespace Ma9MServer
 				for (int r = 0; r < 11; r++)
 				{
 					if (pti[r] != 0) y.Dev[FirstPitcher + r].PositionTrainingInfo = pti[r];
+				}
+				// TCSIM_DEV (TeamColorSim.Legends.cs): the book's 특강·트레이닝·재계약 numbers per card.
+				if (devOf.TryGetValue(label, out string devSpec))
+				{
+					string problem = ApplyDev(y, devSpec);
+					if (problem != null)
+					{
+						ServerLog.Info($"tcsim entry: {label} {problem}");
+						continue;
+					}
 				}
 				string Who(int r)
 				{

@@ -61,6 +61,36 @@ namespace Ma9MServer
 		public static double Fill(CardInfo main, IEnumerable<CardInfo> support) =>
 			Math.Clamp(support.Sum(c => c.Ball) / (7.0 * main.Ball), 0, 1);
 
+		// 조합 확률 게이지 (user, 2026-11-11 18:4x: "메인 카드를 기준으로 볼 합계 게이지에 따라 몇 볼의 카드가 몇 %로 등장"; 19:1x layout (가)):
+		// this table goes into the table bundle as ma9m_fusion_odds.txt, so the app draws the gauge and the odds line from the
+		// server's numbers (a change here needs no new app). Lines: "anchor" + the fill points, "full" + the support balls per main
+		// ball for a full gauge, "legend" + the balls for a sure 레전드 조합, then per main rung "odds main outcome w0..w4" (%).
+		public const string OddsTableName = "ma9m_fusion_odds.txt";
+
+		public static string OddsTable()
+		{
+			System.Text.StringBuilder sb = new System.Text.StringBuilder();
+			sb.Append("kind\tmain\tout\tw0\tw1\tw2\tw3\tw4\n");
+			sb.Append("anchor\t-\t-\t" + string.Join("\t", Anchor.Select(a => a.ToString(System.Globalization.CultureInfo.InvariantCulture))) + "\n");
+			sb.Append("full\t-\t-\t7\n");
+			sb.Append($"legend\t-\t-\t{FusionHandlers.LegendFullBalls}\n");
+			for (int r = 0; r <= 10; r++)
+			{
+				(int[] rungs, double[][] w) = Table(r);
+				for (int k = 0; k < rungs.Length; k++)
+				{
+					sb.Append($"odds\t{r}\t{rungs[k]}\t" + string.Join("\t", w.Select(row => row[k].ToString(System.Globalization.CultureInfo.InvariantCulture))) + "\n");
+				}
+			}
+			return sb.ToString();
+		}
+
+		public static void WriteOddsTable(string tablesDir)
+		{
+			System.IO.Directory.CreateDirectory(tablesDir);
+			System.IO.File.WriteAllText(System.IO.Path.Combine(tablesDir, OddsTableName), OddsTable(), new System.Text.UTF8Encoding(false));
+		}
+
 		// The outcome distribution of a main rung at a fill.
 		public static List<(int rung, double p)> Odds(int rung, double fill)
 		{

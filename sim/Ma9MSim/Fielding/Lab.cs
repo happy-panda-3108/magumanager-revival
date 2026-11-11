@@ -24,6 +24,7 @@ namespace Ma9MSim.Fielding
 			FielderSkill.PivotBase = O("pivot", FielderSkill.PivotBase);
 			Defence.OfExtra = O("ofextra", Defence.OfExtra);
 			Defence.OfDecay = O("ofdecay", Defence.OfDecay);
+			Resolver.SecondGoBar = O("secondbar", Resolver.SecondGoBar);
 			BipLibrary lib = BipLibrary.Build(per, 0x6D61676Bul);
 			log($"library: {per} balls per hand in {sw.Elapsed.TotalSeconds:F1}s");
 			if (what == "lib" || what == "all")
@@ -213,6 +214,8 @@ namespace Ma9MSim.Fielding
 			long bytes = 0, segs = 0;
 			int shown = 0;
 			Dictionary<string, int> counts = new Dictionary<string, int>();
+			ScriptCheck.Report kindRep = new ScriptCheck.Report();
+			int kindShown = 0;
 			for (int i = 0; i < n; i++)
 			{
 				int hand = rng.Next() < 0.62 ? 0 : 1;
@@ -297,6 +300,14 @@ namespace Ma9MSim.Fielding
 					"latethrow" => o.Throws.Count == 0 && sc.Segs.Any(g => g.Kind == SegKind.Throw && (g.Actor == Geometry.SS || g.Actor == Geometry.B2)),
 					"latehome" => o.Throws.Count == 0 && sc.Segs.Any(g => g.Kind == SegKind.Throw && g.Arg == Geometry.C),
 					"latesacfly" => o.SacFly && o.Throws.Count == 0 && sc.Segs.Any(g => g.Kind == SegKind.Throw && g.Arg == Geometry.C),
+					// The runner from second thrown at third after the throw to first (Resolver.SecondOnThrowToFirst, 2026-11-11).
+					"second3" => o.Throws.Count >= 2 && o.Throws[0].Base == 1 && o.Throws.Any(t => t.Base == 3 && t.Runner == 2),
+					"second3out" => o.Throws.Count >= 2 && o.Throws[0].Base == 1 && o.Throws.Any(t => t.Base == 3 && t.Runner == 2 && t.Out),
+					"second3safe" => o.Throws.Count >= 2 && o.Throws[0].Base == 1 && o.Throws.Any(t => t.Base == 3 && t.Runner == 2 && !t.Out),
+					"second3hit" => o.Throws.Count >= 2 && o.Throws[0].Base == 1 && !o.Throws[0].Out && o.Throws.Any(t => t.Base == 3 && t.Runner == 2),
+					// The runner from third thrown at home after the throw to first (Resolver.ThirdOnThrowToFirst).
+					"third0" => o.Throws.Count >= 2 && o.Throws[0].Base == 1 && o.Throws.Any(t => t.Base == 0 && t.Runner == 3),
+					"third0hit" => o.Throws.Count >= 2 && o.Throws[0].Base == 1 && !o.Throws[0].Out && o.Throws.Any(t => t.Base == 0 && t.Runner == 3),
 					_ => false
 				};
 				if (opt.TryGetValue("export", out string ex) && Is(opt.TryGetValue("exportwhat", out string what) ? what : "tagbatter"))
@@ -323,6 +334,19 @@ namespace Ma9MSim.Fielding
 						if (Is(kind)) counts[kind] = counts.TryGetValue(kind, out int cc) ? cc + 1 : 1;
 					}
 				}
+				// --checkkind kind: the checks again for that kind's plays alone, and the first flagged scripts printed.
+				if (opt.TryGetValue("checkkind", out string ck) && Is(ck))
+				{
+					ScriptCheck.Report one = new ScriptCheck.Report();
+					ScriptCheck.Check(sc, d, one, tag);
+					ScriptCheck.Check(sc, d, kindRep, tag);
+					if (one.Count.Count > 0 && kindShown < 3)
+					{
+						kindShown++;
+						log($"--- {ck} flagged {string.Join(", ", one.Count.Keys)}: {tag} dest [{string.Join(",", o.Dest)}]");
+						foreach (Seg g in sc.Segs.OrderBy(g => g.T0)) log("    " + Actor(g.Actor) + " " + g);
+					}
+				}
 				bytes += enc.Length;
 				segs += sc.Segs.Count;
 				if (shown < dump)
@@ -334,6 +358,11 @@ namespace Ma9MSim.Fielding
 			}
 			log($"{rep.Plays} plays: {(double)segs / Math.Max(1, rep.Plays):F1} pieces, {(double)bytes / Math.Max(1, rep.Plays):F0} bytes a play");
 			foreach (var kv in counts) log($"  count {kv.Key}: {kv.Value} ({100.0 * kv.Value / Math.Max(1, rep.Plays):F2}%)");
+			foreach (var kv in kindRep.Count.OrderByDescending(x => x.Value))
+			{
+				log($"  [{opt["checkkind"]} only] {kv.Key}: {kv.Value}");
+				foreach (string ex in kindRep.Examples[kv.Key]) log("      " + ex);
+			}
 			foreach (var kv in rep.Count.OrderByDescending(x => x.Value))
 			{
 				log($"  {kv.Key}: {kv.Value} ({100.0 * kv.Value / rep.Plays:F1}%)");

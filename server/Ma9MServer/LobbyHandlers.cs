@@ -46,8 +46,9 @@ namespace Ma9MServer
 			// The client asks for the top bar now and then (EventManager, tutorial alarms).
 			loop.Register<Ma9MPacket.PKS_CS_GLOBAL_INFO>((session, packet) => TopBar.Send(session));
 			loop.Register<Ma9MPacket.PKS_CS_SEND_DEVICE_ID>((session, packet) => { });
-			// The OK of a server popup (PKS_SC_POPUP, e.g. the 시즌 완주 보너스 notice): nothing to do.
-			loop.Register<Ma9MPacket.PKS_CS_POPUP_ACK>((session, packet) => { });
+			// The OK of a server popup (PKS_SC_POPUP, e.g. the 시즌 완주 보너스 notice): nothing to do, except the 적용/취소 of a
+			// 특성 추천 배분 · 자동 편성 popup (type 10, ACK 10/11; AdviceHandlers, 2026-11-11).
+			loop.Register<Ma9MPacket.PKS_CS_POPUP_ACK>(AdviceHandlers.Ack);
 			loop.Register<Ma9MPacket.PKS_CS_REQ_SCENE_TUTORIAL>(SceneTutorial);
 			loop.Register<Ma9MPacket.PKS_CS_REQ_CURRENT_TUTORIAL>(CurrentTutorial);
 		}
@@ -117,6 +118,11 @@ namespace Ma9MServer
 
 		private static void SceneTutorial(GameSession session, Ma9MPacket.PKS_CS_REQ_SCENE_TUTORIAL packet)
 		{
+			// "ma9m:…" = a request of ours (AdviceHandlers: 특성 추천 배분, 자동 편성), answered with a popup instead.
+			if (AdviceHandlers.TryHandle(session, packet.scene_name.str))
+			{
+				return;
+			}
 			// No per-scene tutorial popups yet.
 			Ma9MPacket.PKS_SC_REQ_SCENE_TUTORIAL reply = new Ma9MPacket.PKS_SC_REQ_SCENE_TUTORIAL();
 			reply.tutorial_index_array.array = Array.Empty<PInteger>();

@@ -62,7 +62,8 @@ public class Ma9MShow : MonoBehaviour
 
 	private static void Log(string what)
 	{
-		Debug.Log("[Ma9MShow] " + what + " (t=" + Time.time.ToString("F2") + ")");
+		int scene = DataCenter.instance != null ? DataCenter.instance.GetCurrentSceneNum() : -1;
+		Debug.Log("[Ma9MShow] " + what + " (scene " + scene + ", t=" + Time.time.ToString("F2") + ")");
 	}
 
 	private void Awake()
@@ -218,13 +219,14 @@ public class Ma9MShow : MonoBehaviour
 	private struct HomerReaction
 	{
 		public string Clip;
-		public float Skip, Turn, CamYaw, LookAhead, LookY, CamUp, Shot;
+		public float Skip, Turn, CamYaw, LookAhead, LookY, CamUp, Shot, CamDist;
 	}
 
 	private static readonly HomerReaction[] s_homerReactions =
 	{
-		// Turns to watch it go, then hangs his head with his back to the plate.
-		new HomerReaction { Clip = "M_Pitcher_HomeRun01", Skip = 0f, Turn = 185f, CamYaw = 0f, LookY = 0.95f, CamUp = 1.25f, Shot = 2.6f },
+		// Turns to watch it go, then hangs his head with his back to the plate. He walks a step or two toward the camera
+		// as he bows: from further off and to a side (at 4.6 m his cap filled the picture).
+		new HomerReaction { Clip = "M_Pitcher_HomeRun01", Skip = 0f, Turn = 185f, CamYaw = 35f, LookY = 0.85f, CamUp = 1.35f, Shot = 2.6f, CamDist = 6.2f },
 		// Both hands to his cap.
 		new HomerReaction { Clip = "M_Pitcher_HomeRun02", Skip = 0f, Turn = 0f, CamYaw = -30f, LookY = 0.95f, CamUp = 1.25f, Shot = 2.4f },
 		// Bent over, hands on his knees.
@@ -275,7 +277,7 @@ public class Ma9MShow : MonoBehaviour
 		Vector3 cam = Quaternion.Euler(0f, r.CamYaw, 0f) * key;
 		Vector3 side = Vector3.Cross(Vector3.up, cam);
 		Vector3 look = home * r.LookAhead + Vector3.up * r.LookY;
-		Cam(pp + cam * 4.6f + side * 1.1f + Vector3.up * r.CamUp, () => p.transform.position + look, 30f, -1.5f);
+		Cam(pp + cam * (r.CamDist > 0f ? r.CamDist : 4.6f) + side * 1.1f + Vector3.up * r.CamUp, () => p.transform.position + look, 30f, -1.5f);
 		Log($"pitcher reaction {r.Clip} from {r.Skip:F1} s, shot {r.Shot:F1} s");
 		shot = r.Shot;
 		return true;
@@ -319,11 +321,13 @@ public class Ma9MShow : MonoBehaviour
 			Cam(bp + toBall * 4.3f + side * 0.8f + Vector3.up * 1.3f, () => batter.transform.position + Vector3.up * 0.9f, 34f, -2.5f);
 		}
 		yield return new WaitForSeconds(1.7f);
-		// Into the stands: from behind the plate, closing in as it carries.
+		// Into the stands: from behind the plate, closing in as it carries. The score popup comes up here, as it lands,
+		// and has gone by the pitcher's shot (2.2 s; it had covered his reaction, user 2026-11-11).
 		Cam(new Vector3(-7f, 2.6f, -7f), () => ball.transform.position, 40f, -9f, 16f);
 		PitcherReaction(angry);
 		Play(batter, "Bat_FourBallproud", 0.3f);
-		yield return new WaitForSeconds(1.6f);
+		ScorePopup(RunsOnHomer());
+		yield return new WaitForSeconds(2.2f);
 		// watch it go or kicking the dirt at the plate.
 		Pitcher p = ThePitcher;
 		float shot = 2.2f;
@@ -335,8 +339,21 @@ public class Ma9MShow : MonoBehaviour
 			Vector3 side = Vector3.Cross(Vector3.up, face);
 			Cam(pp + face * 4.6f + side * 1.1f + Vector3.up * 1.25f, () => p.transform.position + Vector3.up * 0.95f, 30f, -1.5f);
 		}
-		ScorePopup(RunsOnHomer());
-		yield return new WaitForSeconds(shot);
+		// Dev (-ma9mscriptshots): the pitcher's shot every 0.25 s.
+		string dir = Ma9MScriptPlayer.ShotDirectory;
+		if (dir != null)
+		{
+			int scene = DataCenter.instance.GetCurrentSceneNum();
+			for (float t = 0f; t < shot; t += 0.25f)
+			{
+				Ma9MBatchShot.Save(System.IO.Path.Combine(dir, $"hr{scene:000}_{Mathf.RoundToInt(t * 100):0000}.png"));
+				yield return new WaitForSeconds(0.25f);
+			}
+		}
+		else
+		{
+			yield return new WaitForSeconds(shot);
+		}
 		CamOff();
 		m_show = null;
 	}

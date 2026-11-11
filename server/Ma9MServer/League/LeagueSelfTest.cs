@@ -120,6 +120,13 @@ namespace Ma9MServer
 					&& Fits(many) && Fits(variedLines) && Fits(paidLines);
 				if (!manyOk) opProblems++;
 				ServerLog.Info($"시즌 완주 보너스 여러 시즌: {(manyOk ? "ok" : "FAIL")} — 지급 {gotMany:N0}: {string.Join(" / ", many)}; 12시즌 글 {variedLines.Count}줄 (가장 넓은 {variedLines.Max(PopupText.Px):F0} px): {string.Join(" / ", variedLines)}");
+				// The season now under way (systems session, 2026-11-11): two lines after the bonus, every tier's rule in the box.
+				List<string> nowLines = SeasonBonus.NowLines(bonusUser, (store.Load(bonusUser)?.Season ?? 1) - 1, 3);
+				List<string> rules = Enumerable.Range(0, LeagueRules.TierNames.Length).Select(SeasonBonus.Rule).ToList();
+				bool nowOk = nowLines.Count == 2 && Fits(nowLines) && rules.All(x => PopupText.Px(x) <= PopupText.Limit)
+					&& SeasonBonus.NowLines(bonusUser, 99999, 3).Count == 0;
+				if (!nowOk) opProblems++;
+				ServerLog.Info($"새 시즌 안내: {(nowOk ? "ok" : "FAIL")} — {string.Join(" / ", nowLines)}; 등급별 {string.Join(" / ", rules.Select(r => $"{r} ({PopupText.Px(r):F0} px)"))}");
 			}
 			// 포지션 변경 in the games (2026-10-24): the first team's SP1 changed (a starter to RP, else to SP), as a team card
 			// only (no DB write): its stats move at full weight by PositionChangeHandlers.Delta (체력 −ToBullpenHealth /

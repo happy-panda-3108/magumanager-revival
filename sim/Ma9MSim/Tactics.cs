@@ -43,9 +43,19 @@ namespace Ma9MSim
 		public double BigHR = 0.25, BigK = 0.12, BigBabip = -0.03, BigDouble = 0.07, BigBunt = -0.6;
 		// 공격: 끈질긴승부 sees more pitches (tires the pitcher), walks and strikes out more.
 		public double PatPitches = 0.15, PatBB = 0.11, PatK = 0.08, PatBabip = -0.005;
-		// 도루: 적극적 adds attempts for runners whose odds are good (RunGood is a sure-enough bet,
-		// RunBad not worth it), 소극적 cuts attempts across the board; safe share − RunSafe·s.
+		// 도루: 적극적 adds RunTry more attempts for every runner, 소극적 cuts them across the board; the odds stay the
+		// runner's against the catcher (safe share − RunSafe·s), so 적극 costs runs for a runner below the break-even and
+		// gains for one above it (user, 2026-11-11 18:4x: "빠른 주자가 적극적으로 뛴다고 해서 성공률이 낮아지는게 논리적으로
+		// 이상한 것 같음. 그냥 시도 자체가 많아지고, 도루의 팀적가치 손익분기점이 70%인가 그런데, 그 미만인 선수는 손해일거고,
+		// 그 이상인 선수는 이득이지 않을까"; before, 적극 added attempts only for runners whose odds passed RunBad, most at
+		// RunGood, so it never cost anything: 97쌍방울 +2.7%p, 25LG +2.3%p). StealByOdds (MA9M_STEAL_ODDS=1) = that rule.
 		public double RunTry = 0.8, RunSafe = 0.0, RunGood = 0.78, RunBad = 0.66;
+		public bool StealByOdds = Environment.GetEnvironmentVariable("MA9M_STEAL_ODDS") == "1";
+		// The same slider sends runners on batted balls (fielding engine, Resolver.Aggression: the decision thresholds
+		// −0.10 / −0.08 at 적극), times RunAggression (tests: --runningtest --aggr). Each runner goes by his own setting since
+		// 2026-11-11; AggrByBatter (MA9M_AGGR_BATTER=1) = the batter's setting for every runner, as before.
+		public double RunAggression = 1.0;
+		public bool AggrByBatter = Environment.GetEnvironmentVariable("MA9M_AGGR_BATTER") == "1";
 		// 번트: the base rate of sacrifice bunts moves to close late games (BuntLate×, else
 		// BuntEarly×; same total), weaker hitters first; 번트권장 bunts BuntMore more there.
 		public double BuntMore = 1.0, BuntLate = 2.0, BuntEarly = 0.3;
@@ -103,6 +113,11 @@ namespace Ma9MSim
 		// rule before, for comparisons.
 		public static readonly bool Bullpen2 = Environment.GetEnvironmentVariable("MA9M_BULLPEN2") != "0";
 		public int ReliefRuns = Bullpen2 ? 3 : 4, ReliefRunsLopsided = 4, ReliefReached = Bullpen2 ? 4 : 0;
+		// A save spot from the 9th at any out brings in the closer, or the set-up man when the closer is tired or used, and a
+		// mop-up man loses his lopsided leeway once the game is no longer lopsided (user, 2026-11-11: "9회말 1아웃 11대8이 된
+		// 상황이면 세이브 상황으로 알고 있는데 왜 조규제가 나오지 않은 것이지?? 세이브 상황이 되면 바로 마무리, 마무리가 연투나
+		// 지쳐있어서 등판하기 힘들면 셋업이 올라와줘야할 것 같은데?"). MA9M_SAVESPOT=0 = the rule before, for comparisons.
+		public static readonly bool SaveSpot = Environment.GetEnvironmentVariable("MA9M_SAVESPOT") != "0";
 		// A close late game (|lead| ≤ 2 from the 7th) starts each inning with a fresh arm once a reliever has thrown
 		// FreshAfter pitches.
 		public int FreshAfter = 20;
@@ -196,7 +211,7 @@ namespace Ma9MSim
 		public double StealTry(int runner, double safe)
 		{
 			double s = BatRun[runner];
-			if (s <= 0) return Math.Max(0, 1 + R.RunTry * s);
+			if (s <= 0 || !R.StealByOdds) return Math.Max(0, 1 + R.RunTry * s);
 			return 1 + R.RunTry * s * Math.Clamp((safe - R.RunBad) / (R.RunGood - R.RunBad), 0, 1.5);
 		}
 

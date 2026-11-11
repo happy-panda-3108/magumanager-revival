@@ -99,6 +99,10 @@ namespace Ma9MSim
 		// catcher's boost). Null outside card mode: positions are not tracked.
 		public double[][] Defs;
 		public double[] CatcherShown;   // card mode: shown catcher defence when it differs from the effective one (NaN = same)
+		// Per team (model team index): the caught-stealing share against its catcher times this (팀 특성 도루 저지·도루 성공;
+		// null = 1). Engine session, 2026-11-11: TraitEffects used to move the catcher's defence for it, through an inverse that
+		// missed the fielding tune (Defence.TunedX), so 도루 억제 2점 set an 85 catcher's defence near 290 for the whole game.
+		public double[] CaughtScale;
 		public bool[] IsCatcher;
 		public double[] RunX, VeloX;
 		public double[] RunBaseX;       // card mode: x of each batter's own 주력 (fielding range counts only what is above it)
@@ -355,7 +359,9 @@ namespace Ma9MSim
 			public readonly List<int> Used = new List<int>(8);
 			public readonly List<int> EntryLeads = new List<int>(8);
 			public readonly List<int> ExitLeads = new List<int>(8);
+			public readonly List<int> EntryOn = new List<int>(8);            // runners on base as each pitcher came in
 			public readonly Dictionary<int, int> OutsInGame = new Dictionary<int, int>(8);
+			public readonly Dictionary<int, int> RunsInGame = new Dictionary<int, int>(8);   // runs charged to him in this game
 			public int RecordPitcher = -1;
 			// Card mode: today's fielders (lineup index by position) and what they do on defence.
 			public readonly int[] At = new int[8];
@@ -402,7 +408,7 @@ namespace Ma9MSim
 			s.CatcherDef = m.Field.CatcherOverride ?? m.Defs[s.At[0]][0];
 			double shown = m.CatcherShown != null ? m.CatcherShown[s.At[0]] : double.NaN;
 			s.CatcherShown = m.Field.CatcherOverride ?? (double.IsNaN(shown) ? s.CatcherDef : shown);
-			s.CaughtMult = m.Field.CaughtMult((s.CatcherDef - 65) / 10.0);
+			s.CaughtMult = m.Field.CaughtMult((s.CatcherDef - 65) / 10.0) * (m.CaughtScale != null && s.Team < m.CaughtScale.Length ? m.CaughtScale[s.Team] : 1);
 			s.LeftCentreX = (X(5) + X(6)) / 2;
 			s.TripleKeep = m.Field.TripleKeep((X(6) + X(7)) / 2);
 			s.Def = Fielding.FieldEngine.On ? BuildDefence(s.At) : null;
@@ -489,7 +495,9 @@ namespace Ma9MSim
 			s.Used.Clear();
 			s.EntryLeads.Clear();
 			s.ExitLeads.Clear();
+			s.EntryOn.Clear();
 			s.OutsInGame.Clear();
+			s.RunsInGame.Clear();
 			s.RecordPitcher = -1;
 			if (m.Decks != null && m.Decks[team] != null)
 			{
@@ -645,7 +653,9 @@ namespace Ma9MSim
 			s.Used.Add(pitcher);
 			s.EntryLeads.Add(lead);
 			s.ExitLeads.Add(lead);
+			s.EntryOn.Add(start ? 0 : (bases[0] >= 0 ? 1 : 0) + (bases[1] >= 0 ? 1 : 0) + (bases[2] >= 0 ? 1 : 0));
 			s.OutsInGame[pitcher] = 0;
+			s.RunsInGame[pitcher] = 0;
 			int o = pitcher * PS.Count;
 			st.P[o + PS.G]++;
 			if (start)
@@ -789,6 +799,9 @@ namespace Ma9MSim
 			Enter(fld, pick, lead, false);
 		}
 
+		// Dev (--gametest): pitching changes the save-spot rule made (the closer, the set-up man) or could not (none left).
+		public static long SaveSpotCloser, SaveSpotSetup, SaveSpotNone;
+
 		// Tactics mode. The closer and set-up man keep their spots; otherwise a pitcher comes out at
 		// his limit (교체 성향 moves it 0.85-1.15), a starter before an inning he cannot finish under
 		// it, a tired pitcher in a close jam, or anyone knocked around. Blowouts stretch the limit.
@@ -805,6 +818,23 @@ namespace Ma9MSim
 				Enter(fld, closer, lead, false);
 				fld.AppearanceTarget = 3;
 				return;
+			}
+			// A save spot from the 9th, at any out (TacticRules.SaveSpot; user, 2026-11-11, '09 LG 8 - 11: up 11-2 into the
+			// 9th, the mop-up man kept his four-run leeway and then RP2 stayed on at 11-8 with one out, the closer never
+			// came): the tying run on base, at bat or on deck, or a lead of three or less. The closer if rested and not yet
+			// used, else the set-up man (unless he is already pitching); the closer already in stays.
+			int onBase = (bases[0] >= 0 ? 1 : 0) + (bases[1] >= 0 ? 1 : 0) + (bases[2] >= 0 ? 1 : 0);
+			bool saveSpot = TacticRules.SaveSpot && inning >= 9 && lead >= 1 && (lead <= 3 || lead <= onBase + 2);
+			if (saveSpot && fld.Pitcher != closer)
+			{
+				int arm = Fresh(closer) && t.Rested(closer) ? closer : fld.Pitcher != setup && Fresh(setup) && t.Rested(setup) ? setup : -1;
+				System.Threading.Interlocked.Increment(ref arm == closer ? ref SaveSpotCloser : ref arm >= 0 ? ref SaveSpotSetup : ref SaveSpotNone);
+				if (arm >= 0)
+				{
+					Enter(fld, arm, lead, false);
+					fld.AppearanceTarget = 3 - outs;
+					return;
+				}
 			}
 			double h = t.HookOf(fld.Team);
 			double limit = t.Limit[fld.Pitcher];
@@ -829,7 +859,8 @@ namespace Ma9MSim
 				// half-inning's batters of his not out (TacticRules.ReliefRuns).
 				bool between = outs == 0 && empty;
 				// The mop-up man by the score he came into: one who turned a close game into a rout is not it.
-				bool mopUp = fld.EntryLead <= -4 || Math.Abs(fld.EntryLead) >= 7;
+				// And not once the game is close again (TacticRules.SaveSpot): his leeway was for a rout.
+				bool mopUp = (fld.EntryLead <= -4 || Math.Abs(fld.EntryLead) >= 7) && (!TacticRules.SaveSpot || lopsided);
 				bool hit = fld.PitcherRuns >= (mopUp ? t.R.ReliefRunsLopsided : t.R.ReliefRuns) - adj
 					|| (t.R.ReliefReached > 0 && !mopUp && fld.InningFaced - fld.InningOuts >= t.R.ReliefReached - adj);
 				change = isStarter
@@ -1640,8 +1671,9 @@ namespace Ma9MSim
 					CountPitches(fld, batter, pitcher, pitchEv);
 				}
 				EndPlay(kind);
-				// Blown save: a reliever who came in with a 1-3 run lead lets the other side tie or go ahead.
-				if (bat.Score >= fld.Score && scoredBefore < fld.Score && fld.Used.Count > 1 && fld.EntryLead >= 1 && fld.EntryLead <= 3 && !fld.Blown)
+				// Blown save: a reliever who came in with a save spot (a 1-3 run lead, or by the official rule also the tying run
+				// on base, at bat or on deck) lets the other side tie or go ahead.
+				if (bat.Score >= fld.Score && scoredBefore < fld.Score && fld.Used.Count > 1 && SaveSpotAtEntry(fld, fld.Used.Count - 1) && !fld.Blown)
 				{
 					fld.Blown = true;
 					st.P[pitcher * PS.Count + PS.BS]++;
@@ -1708,6 +1740,15 @@ namespace Ma9MSim
 
 		// ... and the catcher's defence decides how many of them are thrown out.
 		private double StealSafe(BatterTalent r, Side fld) => StealSafeWith(r, fld.CaughtMult);
+
+		// Tests (--stealvalue): a runner's odds on a steal against the side now fielding (by its team), as the engine
+		// draws them, and that side's catcher's defence.
+		public (double odds, double catcher) StealOdds(int runner, int fieldTeam)
+		{
+			Side fld = side[0].Team == fieldTeam ? side[0] : side[1];
+			double odds = StealSafe(m.BT[runner], fld) + (m.Tac != null ? m.Tac.StealSafeShift(runner) : 0);
+			return (Math.Clamp(odds, 0, 1), fld.CatcherDef);
+		}
 
 		private double StealSafeWith(BatterTalent r, double caughtMult)
 		{
@@ -1810,6 +1851,10 @@ namespace Ma9MSim
 			{
 				fld.PitcherRuns++;
 			}
+			if (fld.RunsInGame.TryGetValue(pitcher, out int charged))
+			{
+				fld.RunsInGame[pitcher] = charged + 1;
+			}
 		}
 
 		private void Finish(Side h, Side a, int lossLeader)
@@ -1827,29 +1872,99 @@ namespace Ma9MSim
 			int w = win.RecordPitcher >= 0 ? win.RecordPitcher : win.Starter;
 			if (w == win.Starter && win.Used.Count > 1 && win.OutsInGame[win.Starter] < 15)
 			{
-				w = win.Used[1]; // starter short of five innings: first reliever takes the win
+				// Starter short of five innings: the first reliever took the win; by the official rule the most effective one.
+				w = OfficialScoring ? MostEffective(win, 1) : win.Used[1];
+				if (OfficialScoring && w != win.Used[1])
+				{
+					System.Threading.Interlocked.Increment(ref ScoringWinBest);
+					ShowScoring(0, $"win to #{w} (starter short)", win);
+				}
+			}
+			else if (OfficialScoring && w != win.Starter && win.OutsInGame[w] < 3 && win.RunsInGame[w] >= 2)
+			{
+				// A reliever ineffective in a brief appearance does not get the win when one after him kept the lead well.
+				int later = MostEffective(win, win.Used.IndexOf(w) + 1);
+				if (later >= 0 && win.OutsInGame[later] >= 3 && win.RunsInGame[later] == 0)
+				{
+					ShowScoring(1, $"win #{w} -> #{later} (brief and ineffective)", win);
+					w = later;
+					System.Threading.Interlocked.Increment(ref ScoringWinLater);
+				}
 			}
 			int l = lose.RecordPitcher >= 0 ? lose.RecordPitcher : lose.Starter;
 			st.P[w * PS.Count + PS.W]++;
 			st.P[l * PS.Count + PS.L]++;
 
-			int finisher = win.Used[win.Used.Count - 1];
-			int entry = win.EntryLeads[win.Used.Count - 1];
-			if (finisher != w && win.Used.Count > 1 && entry > 0 && (entry <= 3 || win.OutsInGame[finisher] >= 9))
+			int last = win.Used.Count - 1, finisher = win.Used[last];
+			int entry = win.EntryLeads[last], outs = win.OutsInGame[finisher];
+			bool save = OfficialScoring
+				? outs >= 1 && entry > 0 && ((entry <= 3 && outs >= 3) || entry <= win.EntryOn[last] + 2 || outs >= 9)
+				: entry > 0 && (entry <= 3 || outs >= 9);
+			if (finisher != w && win.Used.Count > 1 && save)
 			{
 				st.P[finisher * PS.Count + PS.SV]++;
+				if (OfficialScoring && entry > 3 && outs < 9) ShowScoring(2, $"save #{finisher}, tying run within reach (W #{w})", win);
+				if (OfficialScoring && entry > 3 && outs >= 9) ShowScoring(3, $"save #{finisher}, three innings (W #{w})", win);
+			}
+			else if (OfficialScoring && finisher != w && win.Used.Count > 1 && entry >= 1 && entry <= 3 && outs < 3)
+			{
+				ShowScoring(4, $"no save #{finisher}: in at {entry} for {outs} outs (W #{w})", win);
 			}
 			foreach (Side s in new[] { win, lose })
 			{
 				for (int i = 1; i < s.Used.Count - 1; i++)
 				{
 					int p = s.Used[i];
-					if (p != w && p != l && s.EntryLeads[i] >= 1 && s.EntryLeads[i] <= 3 && s.ExitLeads[i] > 0)
+					if (p != w && p != l && SaveSpotAtEntry(s, i) && s.ExitLeads[i] > 0 && (!OfficialScoring || s.OutsInGame[p] >= 1))
 					{
 						st.P[p * PS.Count + PS.HLD]++;
 					}
 				}
 			}
+		}
+
+		// Official scoring (KBO 공식야구규칙 10.17 승리투수, 10.19 세이브, 홀드; engine session 2026-11-11, AI tester kt: 시범경기 10:0
+		// 세이브, 리그 10:4 승리투수가 WORST). Win: a starter short of five innings gives it to the most effective reliever, not the
+		// first one, and a reliever who was ineffective in a brief appearance (under an inning, 2+ runs) gives it to a later
+		// one who kept the lead (an inning or more, no run). Save: the last pitcher of the winner, not the winner, at least one
+		// out, and (1) in with a lead of 1-3 and an inning or more, (2) in with the tying run on base, at bat or on deck, or
+		// (3) three innings or more, whatever the lead (so the 10:0 save was right: four scoreless innings to the end). Before,
+		// (1) needed no inning and (2) was missing. Hold and blown save: in with a save spot (1-3 run lead or the tying run
+		// within reach), and a hold needs an out. MA9M_SCORING=0 = the rules before. Records only: no game plays differently.
+		public static readonly bool OfficialScoring = Environment.GetEnvironmentVariable("MA9M_SCORING") != "0";
+		public static long ScoringWinBest, ScoringWinLater;   // dev (--gametest): wins the official rule gave to another reliever
+		public static Action<string> ScoringLog;             // dev (--gametest): the first cases of each rule, to check by eye
+		private static readonly int[] s_scoringShown = new int[5];
+
+		private static void ShowScoring(int kind, string what, Side win)
+		{
+			if (ScoringLog == null || System.Threading.Interlocked.Increment(ref s_scoringShown[kind]) > 3) return;
+			ScoringLog($"    {what}: " + string.Join(", ", win.Used.Select((p, i) => $"#{p} in lead {win.EntryLeads[i]} on {win.EntryOn[i]}, {win.OutsInGame[p]} outs {win.RunsInGame[p]} R")));
+		}
+
+		private static bool SaveSpotAtEntry(Side s, int i)
+		{
+			int lead = s.EntryLeads[i];
+			return lead >= 1 && (lead <= 3 || (OfficialScoring && lead <= s.EntryOn[i] + 2));
+		}
+
+		// The reliever (from Used[from] on) the official scorer would call most effective: outs less three per run charged,
+		// then more outs, then the earlier one; −1 if there is none.
+		private static int MostEffective(Side s, int from)
+		{
+			int best = -1;
+			double bestScore = double.MinValue;
+			for (int i = from; i < s.Used.Count; i++)
+			{
+				int p = s.Used[i], outs = s.OutsInGame[p];
+				double score = outs - 3.0 * s.RunsInGame[p];
+				if (score > bestScore || (score == bestScore && outs > s.OutsInGame[best]))
+				{
+					best = p;
+					bestScore = score;
+				}
+			}
+			return best;
 		}
 	}
 }

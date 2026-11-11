@@ -280,6 +280,21 @@ namespace Ma9MServer
 			return command.ExecuteScalar() as string;
 		}
 
+		// 특성 추천 배분 (AdviceHandlers, 2026-11-11): the points as an 적용 from the screen would save them; the refusal or null.
+		public static string ApplyPoints(uint userCode, Dictionary<byte, byte> points, string why)
+		{
+			string problem = Validate(points, AvailableCp(userCode));
+			if (problem != null)
+			{
+				ServerLog.Warn($"team traits ({why}) of {userCode} rejected: {problem}");
+				return "특성 배분을 저장하지 못했습니다. 다시 계산해 주세요.";
+			}
+			SaveOrder(userCode, NextOrder(Order(userCode, Points(userCode)), Points(userCode), points));
+			Save(userCode, points);
+			ServerLog.Info($"team traits ({why}) of {userCode}: {string.Join(" ", points.Where(p => p.Value > 0).Select(p => $"{p.Key}:{p.Value}"))}");
+			return null;
+		}
+
 		private static void Save(uint userCode, Dictionary<byte, byte> points)
 		{
 			byte[] clean = points.Where(p => p.Value > 0).OrderBy(p => p.Key).SelectMany(p => new[] { p.Key, p.Value }).ToArray();

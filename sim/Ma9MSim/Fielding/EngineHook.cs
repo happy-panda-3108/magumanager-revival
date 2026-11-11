@@ -193,6 +193,7 @@ namespace Ma9MSim
 			s.Batter = br;
 			s.OutsBefore = res.OutsBefore;
 			s.Aggression = res.Aggression;
+			Array.Copy(res.Aggr, s.Aggr, 4);
 			s.ErrScale = res.ErrScale;
 			for (int b = 1; b <= 3; b++)
 			{
@@ -281,7 +282,14 @@ namespace Ma9MSim
 			res.D = d;
 			res.Batter = br;
 			res.OutsBefore = outs;
-			res.Aggression = (m.Tac != null ? m.Tac.BatRun[batter] : 0) + RunEnvAggr * Math.Log(Math.Max(0.3, prm.RunEnvironment) / RunEnvRef);
+			double envAggr = RunEnvAggr * Math.Log(Math.Max(0.3, prm.RunEnvironment) / RunEnvRef);
+			res.Aggression = (m.Tac != null ? m.Tac.R.RunAggression * m.Tac.BatRun[batter] : 0) + envAggr;
+			for (int b = 1; b <= 3; b++)
+			{
+				// Each runner by his own setting (2026-11-11); TacticRules.AggrByBatter: the batter's for everybody, as before.
+				int who = m.Tac == null || m.Tac.R.AggrByBatter || bases[b - 1] < 0 ? batter : bases[b - 1];
+				res.Aggr[b] = (m.Tac != null ? m.Tac.R.RunAggression * m.Tac.BatRun[who] : 0) + envAggr;
+			}
 			// Errors: the league's rate, the 작전실 field setting, and in replays the team's own rate (in card
 			// games each fielder's defence already sets his own error rate, so ErrorMult is not applied twice).
 			res.ErrScale = Math.Clamp(prm.ReachOnError / Resolver.ErrRefRoe

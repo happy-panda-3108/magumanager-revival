@@ -9,7 +9,7 @@ namespace Ma9MServer
 	// The player window's 트레이닝 tab (PlayerInfo_SubWindow_Training): the books the team owns, and
 	// training a card with one (see TrainingBooks for the rules). Books come from 트레이닝 카드팩
 	// (InventoryHandlers.UseCardPack).
-	public static class TrainingHandlers
+	public static partial class TrainingHandlers
 	{
 		// The client allows training only with at least one TP charge (1,000-3,000 by ball) and shows up
 		// to six. Before TRAINING POINT existed the gauge was always full.
@@ -58,6 +58,12 @@ namespace Ma9MServer
 		private static void Mix(GameSession session, Ma9MPacket.PKS_CS_PROC_TCARD_MIX packet)
 		{
 			int[] books = (packet.Cards.array ?? Array.Empty<PInteger>()).Select(p => p.n).ToArray();
+			// 빠른 조합 · 목표 교환 (TrainingQuick.cs, 2026-11-11).
+			if (IsQuick(books))
+			{
+				Quick(session, books);
+				return;
+			}
 			Ma9MPacket.PKS_SC_PROC_TCARD_MIX reply = new Ma9MPacket.PKS_SC_PROC_TCARD_MIX();
 			reply.error.SetNoError();
 			// A combine of III books (트레이닝코치, CoachHandlers.TopMixBooks) ends in a 0 from the client, so two of them are not

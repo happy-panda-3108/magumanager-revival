@@ -432,7 +432,7 @@ public class Ma9MRemote : MonoBehaviour
 		done(result);
 	}
 
-	private static Texture2D RenderCameras()
+	internal static Texture2D RenderCameras()
 	{
 		int w = Mathf.Max(16, Screen.width), h = Mathf.Max(16, Screen.height);
 		RenderTexture rt = RenderTexture.GetTemporary(w, h, 24, RenderTextureFormat.ARGB32);

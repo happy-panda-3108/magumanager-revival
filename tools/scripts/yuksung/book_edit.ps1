@@ -18,6 +18,10 @@ try {
   $h.DisplayAlerts = $false
   $wb = $h.Workbooks.Open((Resolve-Path $s.src).Path)
   $ws = $wb.Worksheets.Item($s.sheet)
+  # 2026-11-11 (후보 블록 below the 마무리): "insert_rows": [[row, count], ...] inserts whole rows before `row` (the notes
+  # under the blocks move down), then "copy": [[srcRange, dstCell], ...] copies a block (formulas, formats) there.
+  foreach ($ins in $s.insert_rows) { $ws.Range("$($ins[0]):$($ins[0] + $ins[1] - 1)").EntireRow.Insert() | Out-Null }
+  foreach ($cp in $s.copy) { $ws.Range($cp[0]).Copy($ws.Range($cp[1])) | Out-Null }
   foreach ($v in $s.values) {
     $cell = $ws.Range($v[0])
     if ($null -eq $v[1]) { $cell.ClearContents() | Out-Null }

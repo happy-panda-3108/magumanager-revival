@@ -160,6 +160,39 @@ namespace Ma9MServer
 			return null;
 		}
 
+		// TCSIM_DEV (2026-11-11, user 20:0x: "25LG 육성표도 방금 약간 수정했으니 그걸로 반영해서 진행해줘"): the book's own development
+		// per card instead of the generic plan (DevelopCard), "label=token:E/T/C|token:E/T/C…;label2=…", each of E (특강), T (트레이닝),
+		// C (재계약) six numbers with "." in the book's column order (batter 컨택 파워 스피드 선구 수비 H정신, pitcher 체력 구속 컨트롤
+		// 테크닉 구위 P정신 = TeamCard order). Team colour stays the generic one (+ TCSIM_ENTRY_BONUS for the coaching set).
+		private static Dictionary<string, string> DevSpecs() => (Environment.GetEnvironmentVariable("TCSIM_DEV") ?? string.Empty)
+			.Split(';', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Split('=', 2)).Where(kv => kv.Length == 2)
+			.ToDictionary(kv => kv[0].Trim(), kv => kv[1].Trim());
+
+		private static string ApplyDev(DevDeck y, string spec)
+		{
+			int set = 0;
+			foreach (string part in spec.Split('|', StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()))
+			{
+				string[] kv = part.Split(':', 2);
+				string[] rows = kv.Length == 2 ? kv[1].Split('/') : Array.Empty<string>();
+				if (rows.Length != 3) return $"육성 {part}?";
+				int slot = Array.FindIndex(y.D.At, c => c != null && (c.Info.Name == kv[0] || NamesakeBase(c.Info.Name) == kv[0] || c.Info.Idx.ToString() == kv[0]));
+				if (slot < 0) return $"육성 {kv[0]} 없음";
+				sbyte[][] v = rows.Select(r => r.Split('.').Select(x => (sbyte)Math.Clamp(int.Parse(x), -100, 100)).ToArray()).ToArray();
+				if (v.Any(r => r.Length != 6)) return $"육성 {kv[0]}: 값 개수";
+				TeamCard t = y.Dev[slot];
+				for (int k = 0; k < 6; k++)
+				{
+					t.Educated[k] = v[0][k];
+					t.Training[k] = v[1][k];
+					t.Contract[k] = v[2][k];
+				}
+				set++;
+			}
+			ServerLog.Info($"tcsim entry: {y.D.Label} 육성표 숫자 {set}장");
+			return null;
+		}
+
 		// "1.박진만7 SS, … | 벤치 …" for a deck and order.
 		private static string BatsText(Deck d, int[] order) =>
 			string.Join(", ", Enumerable.Range(0, 9).Select(i => $"{i + 1}.{SpotText(d.At[order[i]], order[i])}"))

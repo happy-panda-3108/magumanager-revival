@@ -552,6 +552,15 @@ namespace Ma9MServer
 			return bonus;
 		}
 
+		// A candidate 1군's bonuses as the 자동 등록 would give them (each slot its strongest entry) and those entries (engine
+		// session, 2026-11-11: 자동 편성 counts the team colour a 1군 would get).
+		public static (Dictionary<int, int> bonus, int[] entries) AutoBonuses(Lineup l)
+		{
+			HashSet<int> available = Available(l);
+			int[] choice = Enumerable.Range(0, 3).Select(slot => Strongest(l, slot, available)).ToArray();
+			return (Bonuses(l, choice), choice);
+		}
+
 		// Writes the bonuses into team_card.team_color (every card; 0 off the 1군). Call after the lineup or
 		// the choice changes.
 		public static void Refresh(uint user)
@@ -803,18 +812,26 @@ namespace Ma9MServer
 			if (gained.Length > 0) SetState(user, "fresh", 1);
 			if (reg.SequenceEqual(wasRegistered)) return (null, gained);
 			int manual = State(user, "manual");
-			List<string> lines = new List<string>();
+			// Sentences (user, 2026-11-11 18:4x: "\"@@ S 팀컬러가 해제되었습니다.\" << 이 멘트가 나오게 합시다"): a slot that lost its entry says so, and
+			// one that changed to another entry says both (it used to say only "… 등록", AI tester kt 4회차). Five lines fit the box
+			// (PopupText); with more, one short line per slot.
+			List<string> lines = new List<string>(), compact = new List<string>();
 			for (int slot = 0; slot < 3; slot++)
 			{
-				if (reg[slot] != wasRegistered[slot])
+				int old = wasRegistered[slot], got = reg[slot];
+				if (got != old)
 				{
-					lines.Add(reg[slot] != 0 ? $"{Short(reg[slot])} 등록" : $"{Short(wasRegistered[slot])} 해제");
+					if (old != 0) lines.Add($"{Short(old)} 팀컬러가 해제되었습니다.");
+					if (got != 0) lines.Add($"{Short(got)} 팀컬러가 등록되었습니다.");
+					compact.Add(old != 0 && got != 0 ? $"{Short(old)} 해제 → {Short(got)} 등록" : old != 0 ? $"{Short(old)} 해제" : $"{Short(got)} 등록");
 				}
-				else if ((manual & 1 << slot) != 0 && reg[slot] != 0 && Strongest(after, slot, now) != reg[slot])
+				else if ((manual & 1 << slot) != 0 && got != 0 && Strongest(after, slot, now) != got)
 				{
-					lines.Add($"직접 고른 {Short(reg[slot])} 그대로");
+					lines.Add($"직접 고른 {Short(got)} 그대로");
+					compact.Add($"직접 고른 {Short(got)} 그대로");
 				}
 			}
+			if (lines.Count > 4 || lines.Any(line => PopupText.Px(line) > PopupText.Width)) lines = compact;
 			lines.Add("팀 관리 > 팀컬러에서 바꿀 수 있습니다.");
 			Ma9MPacket.PKS_SC_POPUP popup = new Ma9MPacket.PKS_SC_POPUP();
 			popup.Type.n = 1;

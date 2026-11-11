@@ -180,6 +180,13 @@ namespace Ma9MServer
 					a.Second = field.Where(x => RankOf(x.v) == 2).Select(x => x.p).ToList();
 					a.Third = field.Where(x => RankOf(x.v) == 3).Select(x => x.p).ToList();
 				}
+				else
+				{
+					// 2026-11-11 (AI tester 두산 불편 25: "승률 -" looked like a blank, a bug): say why nobody won.
+					a.Note = cat.Name == "승률" ? "10승 이상 투수 없음"
+						: cat.Rate ? (cat.Pitcher ? "규정이닝을 채운 투수 없음" : "규정타석을 채운 타자 없음")
+						: "기록한 선수 없음";
+				}
 				awards.Add(a);
 			}
 			// League MVP: the highest WAR (bWAR for pitchers) of the season.
@@ -400,7 +407,8 @@ namespace Ma9MServer
 					int titles = awards.Sum(a => a.Winners.Count(w => w.Club == s.MyIndex));
 					int placed = awards.Sum(a => a.Second.Count(w => w.Club == s.MyIndex) + a.Third.Count(w => w.Club == s.MyIndex));
 					lines.Add(titles + placed > 0
-						? $"[FFD200]우리 구단 수상 {titles}개{(placed > 0 ? $" · 2·3위 {placed}명" : string.Empty)} · 보상 {mp:N0} MP[-]"
+						// "지급됨" (AI tester 두산 불편 25: the 2위 reward never showed coming in; Settle pays it when the 144th game ends).
+						? $"[FFD200]우리 구단 수상 {titles}개{(placed > 0 ? $" · 2·3위 {placed}명" : string.Empty)} · 보상 {mp:N0} MP 지급됨[-]"
 						: "우리 구단 수상 없음");
 				}
 				pages.Add($"{s.Season}시즌 {LeagueRules.TierNames[Math.Clamp(s.Tier, 0, LeagueRules.TierNames.Length - 1)]} 리그 시상식 ({page + 1}/3)");

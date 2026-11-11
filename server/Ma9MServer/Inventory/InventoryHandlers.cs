@@ -79,6 +79,14 @@ namespace Ma9MServer
 				// + 1,000 레전드 선수팩 (user, 2026-11-08: "카드팩 준비가 완료되면, 이전에 1억 MP + 코치카드 200장 있는 쿠폰에 레전드 선수팩 1,000장을
 				// 추가"); accounts that used it before get them once (TopUpCoachCoupon).
 				Items = new[] { (CoachCatalog.Pack, 200), (ItemCatalog.LegendPlayersPack, CoachCouponLegendPacks) }
+			},
+			// The 특별수강 coupon (user, 2026-11-11 20:3x via the engine session: "육성 테스트 시간을 줄이기 위해 쿠폰을 하나 더 만듭시다.
+			// ai테스터들도 사용할 수 있게 해줘. 1억 MP + 특강 행운권 10장 + 특강 즉시 완료권 10장 + 특강 초기화권 10장"), once per account,
+			// the user's and the AI testers' accounts alike (not TesterOnly).
+			new CouponDef
+			{
+				Code = "LESSON2026", Mp = 100_000_000,
+				Items = new[] { (LessonHandlers.Lucky, 10), (LessonHandlers.Instant, 10), (LessonHandlers.Reset, 10) }
 			}
 		};
 
@@ -270,11 +278,26 @@ namespace Ma9MServer
 			reply.error_info.SetNoError();
 			if (item == ShopHandlers.RosterTicket && s_store.Amount(user, item) > 0)
 			{
-				if (ShopHandlers.UseRosterTicket(user, out short before, out short after))
+				// Several at once (user, 2026-11-11 19:1x: "로스터 확장권을 여러 장 한 번에 쓰는 기능을 만듭시다"): the count in arg1 (empty from
+				// the 1.0.43 app and before: one), as many as the tickets held and the room to MaxCapacity allow. The reply's
+				// arg1..3 = tickets used, storage before, after (the app's message; older apps add 20 themselves).
+				int want = int.TryParse(packet.arg1.str, out int asked) && asked > 1 ? Math.Min(asked, 255) : 1;
+				int have = s_store.Amount(user, item), used = 0;
+				short first = 0, last = 0;
+				while (used < want && used < have && ShopHandlers.UseRosterTicket(user, out short before, out short after))
 				{
-					s_store.Add(user, item, -1);
+					if (used == 0) first = before;
+					last = after;
+					used++;
+				}
+				if (used > 0)
+				{
+					s_store.Add(user, item, -used);
 					reply.result.n = 0;
-					ServerLog.Info($"[{session.Id}] 로스터 확장권: 보관함 {before} → {after}");
+					reply.arg1.str = used.ToString();
+					reply.arg2.str = first.ToString();
+					reply.arg3.str = last.ToString();
+					ServerLog.Info($"[{session.Id}] 로스터 확장권 x{used}: 보관함 {first} → {last}");
 				}
 				else
 				{

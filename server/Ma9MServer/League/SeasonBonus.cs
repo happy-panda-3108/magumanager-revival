@@ -144,7 +144,8 @@ namespace Ma9MServer
 		public static void Deliver(GameSession session)
 		{
 			if (session.Team == null) return;
-			List<string> lines = Pay(session.Team.UserCode);
+			List<(int season, int tier, int rank, int mp)> paid = PayDue(session.Team.UserCode);
+			List<string> lines = Lines(paid);
 			string trim = TeamPropertyHandlers.TakeTrimNotice(session.Team.UserCode);
 			if (trim != null)
 			{
@@ -152,9 +153,40 @@ namespace Ma9MServer
 				ServerLog.Info($"[{session.Id}] trait trim notice: {trim.Replace("\n", " / ")}");
 			}
 			if (lines.Count == 0) return;
+			lines.AddRange(NowLines(session.Team.UserCode, paid.Max(p => p.season), 5 - lines.Count));
 			Popup(session, "시즌 완주 보너스", string.Join("\n", lines));
 			TopBar.Send(session);
 			ServerLog.Info($"[{session.Id}] season bonus: {string.Join(" / ", lines)}");
+		}
+
+		// The season now under way (AI testers 11-11, NC 5 and 두산 25: nothing said a new season had begun, in which league or
+		// what it takes to go up): its tier and the rule LeagueRules.NextTier plays, in the lines the box has left (five at most).
+		internal static List<string> NowLines(uint user, int paidSeason, int room)
+		{
+			List<string> lines = new List<string>();
+			LeagueState s = room > 0 ? LeagueService.Store?.Load(user) : null;
+			if (s == null || s.Season <= paidSeason) return lines;
+			lines.Add($"{s.Season}시즌 {Tier(s.Tier)} 리그가 시작됐습니다({LeagueRules.Games}경기).");
+			if (room > 1) lines.Add(Rule(s.Tier));
+			return lines;
+		}
+
+		internal static string Rule(int tier)
+		{
+			if (tier >= LeagueRules.ChampionsTier)
+			{
+				return $"최종 1~{LeagueRules.TopTierKept}위 잔류 · {LeagueRules.TopTierKept + 1}~{LeagueRules.Clubs}위 {Tier(LeagueRules.GateTier)}로 강등";
+			}
+			if (tier == LeagueRules.GateTier)
+			{
+				return $"최종 1~{LeagueRules.MajorPromoted}위 {Tier(LeagueRules.ChampionsTier)} 승격 · {LeagueRules.MajorPromoted + 1}~{LeagueRules.MajorKept}위 잔류 · "
+					+ $"{LeagueRules.MajorKept + 1}~{LeagueRules.Clubs}위 강등";
+			}
+			if (!LeagueRules.HasPostseason(tier))
+			{
+				return $"1~{LeagueRules.PromotedPlaces}위 승격 · 포스트시즌 없음";
+			}
+			return $"포스트시즌 최종 1~{LeagueRules.PromotedPlaces}위 승격 · 정규 {LeagueRules.Clubs - LeagueRules.RelegatedPlaces + 1}~{LeagueRules.Clubs}위 강등";
 		}
 
 		private static void Popup(GameSession session, string title, string text)

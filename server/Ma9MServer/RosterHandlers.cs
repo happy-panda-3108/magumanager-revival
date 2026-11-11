@@ -308,6 +308,46 @@ namespace Ma9MServer
 			session.Send(reply);
 		}
 
+		// 자동 편성 (AdviceHandlers, systems session 2026-11-11): a whole 1군 saved at once with the checks of a save from the roster
+		// screen (owned and valid, 특별수강, 레전드 1+1, 선발 5경기 제한), the 선발 제한 recorded and the 팀컬러 registered again.
+		// Returns the refusal or null; colours = the 팀컬러 change text (TeamColors.AfterSave), null when it is as before.
+		public static string SaveWhole(uint user, Lineup lineup, out string colours)
+		{
+			colours = null;
+			HashSet<int> owned = s_db.GetCards(user).Select(c => c.Idx).ToHashSet();
+			if (!lineup.IsValid(owned))
+			{
+				return "가진 카드가 바뀌어 이 편성을 쓸 수 없습니다. 다시 계산해 주세요.";
+			}
+			HashSet<int> inLesson = LessonHandlers.InLesson(user);
+			if (lineup.Batters.Concat(lineup.Pitchers).Any(inLesson.Contains))
+			{
+				return "특별수강 중인 선수가 들어 있어 쓸 수 없습니다. 다시 계산해 주세요.";
+			}
+			string legend = LegendProblem(lineup);
+			if (legend != null)
+			{
+				return legend;
+			}
+			Lineup stored = s_db.GetLineup(user);
+			string sp = stored != null ? SpBlock.Problem(user, stored, lineup, s_catalog) : null;
+			if (sp != null)
+			{
+				return sp;
+			}
+			int[] was = TeamColors.Registered(user);
+			s_db.SaveLineup(user, lineup);
+			if (stored != null)
+			{
+				SpBlock.Record(user, stored, lineup, out _);
+			}
+			TeamColors.Refresh(user);
+			Ma9MPacket.PKS_SC_POPUP popup = TeamColors.AfterSave(user, stored ?? lineup, was).popup;
+			colours = popup?.Messages.array?.Length > 1 ? popup.Messages.array[1].str : null;
+			ServerLog.Info($"auto lineup of {user} saved: {lineup.Serialize()}");
+			return null;
+		}
+
 		// 레전드 카드 in the 1군 (user, 2026-11-08: "로스터별로 투타 레전드 1장씩만 사용 가능"): at most this many of each.
 		public const int MaxLegendBatters = 1, MaxLegendPitchers = 1;
 

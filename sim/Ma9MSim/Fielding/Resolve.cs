@@ -110,15 +110,18 @@ namespace Ma9MSim.Fielding
 		public readonly RunnerSkill[] Run = new RunnerSkill[4];
 		public readonly bool[] On = new bool[4];
 		public int OutsBefore;
-		public double Aggression;   // -1 (station to station) .. +1 (send everybody), 작전실 주루
+		public double Aggression;   // -1 (station to station) .. +1 (send everybody), 작전실 주루: the batter's setting (before 11-11)
+		// Each runner's own (by his base, 1-3): his 도루 성향 sends him, not the batter's (2026-11-11, with the steal rule: a
+		// 개인작전 적극 on a fast runner made the others run whenever he batted). Set by the engine; AggrByBatter = all Aggression.
+		public readonly double[] Aggr = new double[4];
 
 		private readonly FieldOutcome o = new FieldOutcome();
 
 		// Safe chance a runner needs to try for that base: [base 2/3/home][outs before].
-		private double Need(int toBase, int outs)
+		private double Need(int toBase, int outs, int runner)
 		{
 			double n = toBase == 4 ? NeedHome[Math.Min(2, outs)] : toBase == 3 ? NeedThird[Math.Min(2, outs)] : 0.88;
-			return n - 0.10 * Aggression - NeedShift;
+			return n - 0.10 * Aggr[runner] - NeedShift;
 		}
 
 		private static double N(ref Rng rng) => BallGenerator.Normal(ref rng);
@@ -268,7 +271,7 @@ namespace Ma9MSim.Fielding
 				relay[b] = rl;
 				pSafe[b] = FMath.Phi((thr[b] - arr[b]) / TagSd);
 				double need = to == 4 ? (OutsBefore == 0 ? TagHome0 : TagHome1) : to == 3 ? (OutsBefore == 0 ? TagThird0 : TagThird1) : 0.97;
-				go[b] = pSafe[b] + DecideSd * N(ref rng) >= need - 0.08 * Aggression;
+				go[b] = pSafe[b] + DecideSd * N(ref rng) >= need - 0.08 * Aggr[b];
 			}
 			// The throw goes after the lead runner who can be had; the others are safe.
 			int target = -1;
@@ -454,7 +457,7 @@ namespace Ma9MSim.Fielding
 			double aHome = Arrival(f, q, tg, 0, f, q, out _) + Tag;
 			if (On[3])
 			{
-				go3 = f3 || twoOut || FMath.Phi((aHome - r3) / TagSd) + DecideSd * N(ref rng) >= 0.62 - 0.08 * Aggression;
+				go3 = f3 || twoOut || FMath.Phi((aHome - r3) / TagSd) + DecideSd * N(ref rng) >= 0.62 - 0.08 * Aggr[3];
 			}
 			double bt1 = plan.BT1;
 			// Options for the first throw.
@@ -623,7 +626,11 @@ namespace Ma9MSim.Fielding
 			// The client counts the batter out on its own for a double play: only when he was.
 			o.Kind = o.Outs >= 2 && batterOut ? Ma9MSim.PlayKind.DoublePlay : o.Hit > 0 ? Ma9MSim.PlayKind.Single : Ma9MSim.PlayKind.GroundOut;
 			bool inningOver = outs >= 3;
-			bool sent3 = false;
+			bool sent3 = false, sent2 = false;
+			// A batter safe at first beat the throw there: the broadcast shows it arriving just after him (Choreo, a safe call's
+			// throw), so a throw on from first, and a runner going as it is seen to leave, come that much later (2026-11-11: on
+			// infield hits the throw to third left the first baseman's hand as he caught it and flew at 50 m/s).
+			double shift1 = first == 1 && o.Throws.Count > 0 ? FirstShift(o.Throws[0], bt1) : 0;
 			// Everybody not thrown at: forced runners take the next base, the others as they went.
 			int occupied = dest[0] >= 1 && dest[0] <= 3 ? dest[0] : 0;
 			for (int b = 1; b <= 3; b++)
@@ -632,12 +639,13 @@ namespace Ma9MSim.Fielding
 				bool forced = b == 1 || (b == 2 && f1) || (b == 3 && f2);
 				int to;
 				if (forced) to = b + 1;
+				else if (b == 2 && SecondThrowRule && !go2 && first == 1 && !inningOver && !On[3]) to = SecondOnThrowToFirst(f, q, shift1, ref rng, ref outs, out sent2);
 				else if (b == 2) to = go2 || (first == 1 && rng.Next() < (q.H < 45 ? 0.7 : 0.25)) ? 3 : 2;
 				else if (go3 || first != 1 || inningOver) to = go3 ? 4 : 3;
-				else to = ThirdOnThrowToFirst(f, q, ref rng, ref outs, out sent3);
+				else to = ThirdOnThrowToFirst(f, q, ShiftRule ? shift1 : 0, ref rng, ref outs, out sent3);
 				dest[b] = to == b ? 0 : to;
 			}
-			if (dest[3] == 8 && first == 1)
+			if ((dest[3] == 8 || dest[2] == 7) && first == 1)
 			{
 				// Out at the plate after the out (or the hit) at first: one more out (a double play with the batter out;
 				// not a GIDP, nobody was forced), and maybe the inning.
@@ -674,7 +682,7 @@ namespace Ma9MSim.Fielding
 				if (dest[b] == 4) o.Rbi[b] = !o.Gidp && !o.Error;
 			}
 			// Tracks: who ran from contact and who went only on the throw.
-			double firstRelease = o.Throws.Count > 0 ? SeenRelease(o.Throws[0]) : tg;
+			double firstRelease = o.Throws.Count > 0 ? SeenRelease(o.Throws[0]) + (ShiftRule || sent2 ? shift1 : 0) : tg;
 			double OutAt(int slot)
 			{
 				foreach (Throw t in o.Throws) if (t.Runner == slot && t.Out) return t.Arrive;
@@ -711,26 +719,62 @@ namespace Ma9MSim.Fielding
 		// 1루에 바로 승부"); anywhere else he is held, and he breaks on the throw to first only when he can beat the throw
 		// home that follows, which is then made, out or safe (user: "결과가 세이프더라도 시도는 해야"; under the 10-31 rule he
 		// went 65% of the time and scored with nobody throwing). Where he ends: 3 held, 4 scores, 8 out at home.
-		private int ThirdOnThrowToFirst(int f, P q, ref Rng rng, ref int outs, out bool sent)
+		private int ThirdOnThrowToFirst(int f, P q, double shift, ref Rng rng, ref int outs, out bool sent)
 		{
 			sent = false;
 			if ((f == Geometry.B2 || f == Geometry.SS) && q.R >= MiddleBack)
 			{
-				sent = rng.Next() < GoHomeOnThrow + 0.1 * Aggression;
+				sent = rng.Next() < GoHomeOnThrow + 0.1 * Aggr[3];
 				return sent ? 4 : 3;
 			}
 			// The man with the ball at first (the fielder who took it there himself, or the one covering) throws home.
 			Throw t1 = o.Throws[0];
 			int recv = t1.Step ? t1.From : CoverOf(1, f, q);
-			double release = t1.Arrive + HomeTransfer;
+			double release = t1.Arrive + shift + HomeTransfer;
 			double ball = release + L / D.F[recv].Arm;
 			// He goes as the ball is seen to leave for first (the track's start), from his lead, standing.
-			double there = SeenRelease(t1) + 0.1 + Run[3].RunFrom(L - Lead[3], 0);
-			if (FMath.Phi((ball + Tag - there) / TagSd) + DecideSd * N(ref rng) < 0.62 - 0.08 * Aggression) return 3;
+			double there = SeenRelease(t1) + shift + 0.1 + Run[3].RunFrom(L - Lead[3], 0);
+			if (FMath.Phi((ball + Tag - there) / TagSd) + DecideSd * N(ref rng) < 0.62 - 0.08 * Aggr[3]) return 3;
 			bool outHome = there - ball - Tag + TagSd * N(ref rng) > 0;
 			o.Throws.Add(new Throw { From = recv, Base = 0, Relay = -1, Runner = 3, Out = outHome, Arrive = ball, Release = release, FromPoint = Geometry.Base[1] });
 			if (outHome) outs++;
 			return outHome ? 8 : 4;
+		}
+
+		// The runner on second, not forced, who did not go on contact (the ball was not to the right side), third base empty, on
+		// a ground ball the defence plays at first (user, 2026-11-11: "1사 2루에서 투수 땅볼때 1루로 던졌는데 2루주자가 3루로 뛰었음.
+		// 이때 1루수가 아웃 잡고 3루로 던져야하는데 안 던짐 … 이런거 세잎이더라도 3루에 던져서 태그까지"): he breaks for third on the throw
+		// to first only when he can beat the throw to third that follows (as ThirdOnThrowToFirst for home), which is then made,
+		// out or safe. Before, he went a quarter of the time whatever the throw would do, and nobody threw. Where he ends: 2 held,
+		// 3 safe, 7 out at third. MA9M_SECOND_ON_THROW=0 = the rule before.
+		public static readonly bool SecondThrowRule = Environment.GetEnvironmentVariable("MA9M_SECOND_ON_THROW") != "0";
+		public static double ThirdTransfer = 0.5;
+		// How sure he must be of beating the throw to go (as the runner on third's 0.62). --fieldlab script --secondbar -9
+		// makes every such runner go, to look at the throw to third and the tag (none went in 300k plays at 0.62).
+		public static double SecondGoBar = 0.62;
+
+		// How much later than the engine's arrival the broadcast shows the first throw at first: a safe call's throw is made
+		// to get there just after the batter (Choreo, the same 0.1/0.12 s). MA9M_FIRST_SHIFT=0 = the runner from third as
+		// before (the runner from second always uses it: his rule is new).
+		public static readonly bool ShiftRule = Environment.GetEnvironmentVariable("MA9M_FIRST_SHIFT") != "0";
+
+		private static double FirstShift(in Throw t1, double bt1) => !t1.Out && !t1.Wild && t1.Arrive < bt1 + 0.1 ? bt1 + 0.12 - t1.Arrive : 0;
+
+		private int SecondOnThrowToFirst(int f, P q, double shift, ref Rng rng, ref int outs, out bool sent)
+		{
+			sent = false;
+			Throw t1 = o.Throws[0];
+			int recv = t1.Step ? t1.From : CoverOf(1, f, q);
+			double release = t1.Arrive + shift + ThirdTransfer;
+			double ball = release + Geometry.Base[1].Dist(Geometry.Base[3]) / D.F[recv].Arm;
+			// He goes as the ball is seen to leave for first, from his lead, standing.
+			double there = SeenRelease(t1) + shift + 0.1 + Run[2].RunFrom(L - Lead[2], 0);
+			if (FMath.Phi((ball + Tag - there) / TagSd) + DecideSd * N(ref rng) < SecondGoBar - 0.08 * Aggr[2]) return 2;
+			sent = true;
+			bool out3 = there - ball - Tag + TagSd * N(ref rng) > 0;
+			o.Throws.Add(new Throw { From = recv, Base = 3, Relay = -1, Runner = 2, Out = out3, Arrive = ball, Release = release, FromPoint = Geometry.Base[1] });
+			if (out3) outs++;
+			return out3 ? 7 : 3;
 		}
 
 		// When a throw is seen to leave his hand: the broadcast holds one that would float to a man still on his way to the
@@ -813,7 +857,7 @@ namespace Ma9MSim.Fielding
 					(double t, int rly) = D.ThrowTime(f, q, k % 4);
 					double a = tr + t + Tag;
 					double ps = FMath.Phi((a - Arr(b, k)) / TagSd);
-					if (ps + DecideSd * N(ref rng) >= Need(k, OutsBefore))
+					if (ps + DecideSd * N(ref rng) >= Need(k, OutsBefore, b))
 					{
 						choice = k;
 						break;

@@ -441,13 +441,19 @@ namespace Ma9MSim.Fielding
 		// runner out wide of it, Ma9MParkWarp.MakeRoom). At home the catcher on the first-base side of the plate and a
 		// little behind it (he stood up the third-base line in front of it, where the runner slid into him). On a tag play
 		// at first he is closer (0.6 m).
+		// First base: 0.5 m from the bag's middle on the infield side, his foot on it (user, 2026-11-11: "병살 상황에서 1루에 송구를
+		// 했는데 1루수가 1루를 안 밟고 있음"; he stood 0.9 m off at (L − 0.4, 0.8)); the batter runs by on the foul side (z −0.5).
+		// MA9M_OLD_BAGS=1 = the spots and the force call before 2026-11-11 (comparisons).
+		private static readonly bool OldBags = Environment.GetEnvironmentVariable("MA9M_OLD_BAGS") == "1";
+		private static bool OldForceCall => OldBags;
+
 		public static P BagSpot(int baseNo, bool tag = false)
 		{
 			const double L = Geometry.BaseLine;
 			double o = tag ? 0.6 : 0.8;   // a foot on the bag (2-3 head figures: as near as they can be without standing in the runner)
 			switch (baseNo)
 			{
-				case 1: return new P(L - 0.4, o);
+				case 1: return OldBags ? new P(L - 0.4, o) : new P(L - 0.15, tag ? 0.6 : 0.45);
 				case 2: return new P(L - 0.3, L + 0.45);
 				case 3: return new P(-0.45, L - 0.3);
 				default: return new P(0.5, -0.4);
@@ -457,6 +463,9 @@ namespace Ma9MSim.Fielding
 		// Who takes a throw at a base: the same rules as the engine (Resolver.CoverOf) for infield
 		// plays; on throws from the outfield the base's own man, the shortstop or second baseman at
 		// second (whoever is not the cutoff), the catcher at home.
+		// MA9M_SECOND_COVER=0: the shortstop takes every throw in to second without a relay, as before 2026-11-11 (comparisons).
+		private static readonly bool OldSecondCover = Environment.GetEnvironmentVariable("MA9M_SECOND_COVER") == "0";
+
 		private static int Receiver(int baseNo, int thrower, P from, int cut)
 		{
 			bool outfield = Geometry.IsOutfielder(thrower) || cut >= 0;
@@ -464,7 +473,18 @@ namespace Ma9MSim.Fielding
 			{
 				case 1: return thrower == Geometry.B1 ? Geometry.Pit : Geometry.B1;
 				case 2:
-					if (outfield) return cut == Geometry.SS ? Geometry.B2 : Geometry.SS;
+					// From the outfield the man on the bag takes it: not the relay man, and without one not the middle
+					// infielder Helpers sent out toward the ball (the shortstop on the left half, the second baseman on the
+					// right). It was always the shortstop then: the second baseman stood on the bag and the shortstop came
+					// running back in to take it there (user, 2026-11-11: "2루수가 루에 붙어있음에도 유격수가 달려와서 2루에서
+					// 공을 받는 모습 … 굳이 유격수가 달려와서 2루에 겹칠 이유가 없음").
+					// (LateThrow passes the thrower as cut: an outfielder there is no relay man.)
+					if (outfield)
+					{
+						if (cut == Geometry.SS) return Geometry.B2;
+						if (cut == Geometry.B2) return Geometry.SS;
+						return from.H > 45 && !OldSecondCover ? Geometry.B2 : Geometry.SS;
+					}
 					return thrower == Geometry.SS || thrower == Geometry.B3 || ((thrower == Geometry.Pit || thrower == Geometry.C) && from.H > 45) ? Geometry.B2 : Geometry.SS;
 				case 3: return thrower == Geometry.B3 ? Geometry.SS : Geometry.B3;
 				default: return Geometry.C;
@@ -517,7 +537,10 @@ namespace Ma9MSim.Fielding
 				Throw th = o.Throws[ti];
 				int from = th.From;
 				P p0 = from == has ? m_pos[from] : th.FromPoint;
-				bool tagPlay = Geometry.IsOutfielder(th.From) || th.Relay >= 0 || (th.Base == 0 && !(th.Runner == 3 && o.Track[1].Set && o.Track[2].Set));
+				// The runner from second thrown at third after the throw to first is never forced there (Resolver.SecondOnThrowToFirst
+				// plays it only with first base empty): the third baseman tags him (2026-11-11, user: "3루에 던져서 태그까지").
+				bool tagPlay = Geometry.IsOutfielder(th.From) || th.Relay >= 0 || (th.Base == 0 && !(th.Runner == 3 && o.Track[1].Set && o.Track[2].Set))
+					|| (th.Base == 3 && th.Runner == 2 && ti > 0 && o.Throws[0].Base == 1);
 				double ballAt = th.Arrive - (Geometry.IsOutfielder(th.From) ? Tag : 0);
 				double late = 0;
 				if (!th.Out && !th.Wild && th.Runner >= 0 && th.Runner < 4)
@@ -860,9 +883,10 @@ namespace Ma9MSim.Fielding
 								}
 								else
 								{
-									// A force: called as his foot comes down a step behind the ball, or soon after the ball
-									// when he is far behind (it was 0.1 s after the ball, before he got there).
-									outAt = Math.Min(t, tag.T0 + 0.35);
+									// A force: called as the ball reaches the man on the bag (user, 2026-11-11: "아웃 효과음이 좀 늦게
+									// 나오는 것 같음. 타자 주자가 루를 밟을 때가 아니라 공이 루에 도착했을 때 주자가 도착해있냐 아니냐로
+									// out safe 판정"; it was at his foot, up to 0.35 s after the ball). OldForceCall = that.
+									outAt = OldForceCall ? Math.Min(t, tag.T0 + 0.35) : Math.Max(tag.T0, Math.Min(t, tag.T0 + 0.05));
 								}
 							}
 							s.Add(SegKind.Out, actor, outAt, outAt + 0.8, c, c, arg: baseNo);

@@ -86,8 +86,8 @@ public class Ma9MScriptPlayer : MonoBehaviour
 	private readonly Vector2[] m_stand = new Vector2[Actors];
 	private readonly float[] m_lungeFrom = new float[Actors], m_lungeAt = new float[Actors], m_lungeUntil = new float[Actors], m_scoopAt = new float[Actors];
 	// A slide's move so his front foot (hand) ends on the bag (ReachBag): from when, by when, until when.
-	private readonly Vector2[] m_slideShift = new Vector2[Actors];
-	private readonly float[] m_slideFrom = new float[Actors], m_slideAt = new float[Actors], m_slideUntil = new float[Actors];
+	private readonly Vector2[] m_slideShift = new Vector2[Actors], m_slideDir = new Vector2[Actors];
+	private readonly float[] m_slideFrom = new float[Actors], m_slideAt = new float[Actors], m_slideUntil = new float[Actors], m_slideLog = new float[Actors];
 	// The glove in the scoop's first frame (Def_GrounderCatchSuc and Def_InfldGrounderCatchSuc alike), from his feet:
 	// ahead of him and out to his glove side (m).
 	private const float ScoopForward = 0.25f, ScoopSide = 0.09f, LungeMax = 1.5f;
@@ -177,6 +177,7 @@ public class Ma9MScriptPlayer : MonoBehaviour
 	// Dev: "-ma9mscriptshots <dir>" saves a screenshot every half second of each scripted play and the
 	// script as text beside them, so plays can be checked without watching.
 	private static readonly string s_shotDir = ShotDir();
+	public static string ShotDirectory => s_shotDir;
 	private static string s_overrideName;
 	private static readonly bool s_oldCam = System.Array.IndexOf(System.Environment.GetCommandLineArgs(), "-ma9moldcam") >= 0;
 	private Ma9MCameraDirector m_director;
@@ -635,9 +636,16 @@ public class Ma9MScriptPlayer : MonoBehaviour
 					caught.Add(p.T0);
 					break;
 				case Ma9MSeg.Dive:
-					// Down on the grass: his catch frame is 0.12 s before he lands (LayOut).
-					AddSound(p.T1 + 0.12f, Ma9MSoundLibrary.SlidingSound, 0.8f);
+				{
+					// Down on the grass, the scrape's loudest (eff10 builds up to 0.17 s in) as he lands (user, 2026-11-11:
+					// "슬라이딩 타이밍과 슬라이딩 소리가 동시 타이밍이 아님, 소리가 약간 뒤늦게 들려서"; it started 0.12 s after the
+					// catch and peaked 0.1-0.15 s after he was down). A catch in the air (LayOut, style 2) lands 0.12 clip-s
+					// after its catch frame, about 0.17 s at the dive's usual speed 0.7; a dive at a ball on the grass (6) is down
+					// at its catch frame, and a dive that misses (10) about then.
+					float land = p.Style == 2 ? p.T1 + (DiveGroundAt - DiveAirAt) / DiveAirMinSpeed : p.T1;
+					AddSound(Mathf.Max(p.T0, land - SlideScrapePeak), Ma9MSoundLibrary.SlidingSound, 0.8f);
 					break;
+				}
 				case Ma9MSeg.Slide:
 					AddSound(p.T0, Ma9MSoundLibrary.SlidingSound, 1f);
 					break;
@@ -661,6 +669,9 @@ public class Ma9MScriptPlayer : MonoBehaviour
 	}
 
 	private void AddSound(float at, string clip, float vol) => m_events.Add(new Ev { At = at, Kind = EvKind.Sound, Clip = clip, Vol = vol });
+
+	// How far into eff10 (the slide) its scrape is loudest (0.17 s), with a little of a phone's output delay (0.03 s).
+	private const float SlideScrapePeak = 0.20f;
 
 	// When the play's last call is made (the score board waits for it, so it does not cover the close-up).
 	private static float LastCall(Ma9MPlayScript s)
@@ -762,7 +773,7 @@ public class Ma9MScriptPlayer : MonoBehaviour
 		}
 		if (m_t >= m_nextShot)
 		{
-			ScreenCapture.CaptureScreenshot(Path.Combine(s_shotDir, $"s{m_scene:000}_{Mathf.RoundToInt(m_nextShot * 100):0000}.png"));
+			Ma9MBatchShot.Save(Path.Combine(s_shotDir, $"s{m_scene:000}_{Mathf.RoundToInt(m_nextShot * 100):0000}.png"));
 			m_nextShot += s_shotStep;
 		}
 		if (m_coast) return;
@@ -1048,6 +1059,12 @@ public class Ma9MScriptPlayer : MonoBehaviour
 		if (m_offT0[a] >= 0 && m_t >= m_offT0[a]) pos += m_off[a] * (1f - Mathf.Clamp01((m_t - m_offT0[a]) / m_offDur[a]));
 		pos += Lunge(a, pos);
 		pos += SlideShift(a);
+		if (s_shotDir != null && m_slideAt[a] >= 0 && m_t >= m_slideAt[a] && m_slideLog[a] != m_slideAt[a])
+		{
+			// Dev: how far off the slide's way he lies at the bag.
+			m_slideLog[a] = m_slideAt[a];
+			Debug.Log($"[Ma9MScript] slide over by {a} t {m_t:F2}: facing {Vector2.SignedAngle(m_slideDir[a], new Vector2(tr.forward.x, tr.forward.z)):F0} deg off the slide");
+		}
 		if (m_offT0[a] >= 0 && m_t >= m_offT0[a])
 		{
 			float k = Mathf.Clamp01((m_t - m_offT0[a]) / m_offDur[a]);
@@ -1073,6 +1090,11 @@ public class Ma9MScriptPlayer : MonoBehaviour
 		{
 			// Where he really goes (a curve, a step in to the ball) once he is going, else the leg's way.
 			Vector2 dir = m_vel[a].sqrMagnitude > 1f ? m_vel[a] : active.P1 - active.P0;
+			// Into a slide, the slide's way: his measured way then has the shift that puts his hand or foot on the bag in it
+			// (ReachBag), and as the slide itself slowed at the bag that shift turned him (user, 2026-11-11: "1루 헤드퍼스트
+			// 슬라이딩 때 방향이 2루를 향하고 있음"; at first a batter-runner was moved 1.2 m back and 0.8 m in, and ended
+			// facing the infield).
+			if (m_slideAt[a] >= 0 && m_t <= m_slideAt[a] + 0.05f) dir = m_slideDir[a];
 			// Down for a ground ball he keeps facing it.
 			if (!Scooping(a)) FaceMoving(a, pos, dir);
 			if (m_t >= m_actionUntil[a])
@@ -1677,6 +1699,7 @@ public class Ma9MScriptPlayer : MonoBehaviour
 		Vector2 reach = dir * ahead + right * side;
 		Vector2 bag = BaseOf(p.Arg) - dir * (head ? 0.12f : 0.05f);
 		m_slideShift[a] = Vector2.ClampMagnitude(bag - (p.P1 + reach), 2.5f);
+		m_slideDir[a] = dir;
 		m_slideFrom[a] = m_t;
 		m_slideAt[a] = p.T1;
 		m_slideUntil[a] = m_tl.NextMove(a, p.T1);

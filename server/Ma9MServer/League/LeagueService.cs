@@ -826,9 +826,15 @@ namespace Ma9MServer
 			return up;
 		}
 
+		// Dev (systems session, 2026-11-11; user 18:4x "루키 AI덱 세기를 조정합시다"): MA9M_AI_BONUS = "tier:points,…" replaces
+		// LeagueRules.AiBonus for those tiers, to measure a change with --deckcompare on a copy before choosing it. Unset = the rule.
+		private static readonly Dictionary<int, int> s_aiBonusOverride = (Environment.GetEnvironmentVariable("MA9M_AI_BONUS") ?? string.Empty)
+			.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(p => p.Split(':')).Where(p => p.Length == 2)
+			.ToDictionary(p => int.Parse(p[0]), p => int.Parse(p[1]));
+
 		private static TeamCard AiDevelopment(int tier)
 		{
-			sbyte b = (sbyte)LeagueRules.AiBonus[tier];
+			sbyte b = (sbyte)(s_aiBonusOverride.TryGetValue(tier, out int over) ? over : LeagueRules.AiBonus[tier]);
 			TeamCard t = new TeamCard();
 			for (int j = 0; j < 6; j++) t.Training[j] = b;
 			return t;
@@ -846,7 +852,9 @@ namespace Ma9MServer
 
 		// Every club's team for a slot (the league reference is over the whole league, also in the
 		// postseason); rotation(club) = the game number the club's starter follows (RotationOf).
-		private static (GameTeam[] teams, Lineup[] lineups, TraitEffects.Effect[] traits) Teams(LeagueState s, int game, Func<int, int> rotation)
+		// bareClub (engine session, 2026-11-11, 특성 자동 배분): that club's 팀 특성 are left off its team (still in traits).
+		// raw (자동 편성): the teams before the league reference and the traits (TeamStrength.LeagueShift of them).
+		private static (GameTeam[] teams, Lineup[] lineups, TraitEffects.Effect[] traits) Teams(LeagueState s, int game, Func<int, int> rotation, int bareClub = -1, bool raw = false)
 		{
 			DateTime day = s.SlotTime(game);  // the slot's time: a 컨디션 회복제 counts by the hour (Condition.For)
 			GameTeam[] teams = new GameTeam[LeagueRules.Clubs];
@@ -880,14 +888,15 @@ namespace Ma9MServer
 					}
 				}
 			}
-			// League reference over the whole league.
-			TeamStrength.ApplyLeagueReference(teams);
 			// 팀 특성, outside the league reference: a real team's saved points, each AI club's 90% build.
 			TraitEffects.Effect[] traits = s.Clubs.Select(c => c.IsHuman ? TraitEffects.Of(c.Owner)
 				: TraitEffects.FromPoints(AiTeamOf(s, c)?.Traits ?? new Dictionary<byte, byte>())).ToArray();
+			if (raw) return (teams, lineups, traits);
+			// League reference over the whole league.
+			TeamStrength.ApplyLeagueReference(teams);
 			for (int i = 0; i < teams.Length; i++)
 			{
-				TraitEffects.Raise(teams[i], traits[i]);
+				if (i != bareClub) TraitEffects.Raise(teams[i], traits[i]);
 			}
 			return (teams, lineups, traits);
 		}

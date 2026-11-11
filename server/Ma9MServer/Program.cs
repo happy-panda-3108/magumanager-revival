@@ -120,6 +120,7 @@ namespace Ma9MServer
 			TrainingHandlers.Register(loop, db, catalog, Path.Combine(dataDir, "ma9m.db"));  // 트레이닝 (선수 정보 > 트레이닝)
 			AlbumHandlers.Register(loop, db, catalog, Path.Combine(dataDir, "ma9m.db"));  // 구단앨범 (구단정보 마지막 페이지, 상단 엠블렘)
 			FusionHandlers.Register(loop, db, catalog);  // 선수카드 조합
+			FusionRules.WriteOddsTable(Path.Combine(dataDir, "tables"));  // 조합 확률 게이지의 표 (시스템 세션 2026-11-11)
 			TeamDeleteHandlers.Register(loop, Path.Combine(dataDir, "ma9m.db"));  // 구단 삭제 (구단 선택 화면)
 			ShopHandlers.Register(loop, db, catalog, Path.Combine(dataDir, "ma9m.db"));  // 상점 (선수팩·트레이닝팩·로스터 확장)
 			NextMatchHandlers.Register(loop);  // 다음 경기 상대 1군 (로비 i 버튼, 로스터 상대 버튼)
@@ -164,6 +165,32 @@ namespace Ma9MServer
 				}
 				int cmpSeasons = deckCmp + 2 < args.Length && int.TryParse(args[deckCmp + 2], out int cs) ? cs : 10;
 				Environment.Exit(LeagueService.DeckCompare(args[deckCmp + 1], cmpSeasons, Environment.GetEnvironmentVariable("DECKCMP_VARIANTS"), Path.Combine(dataDir, "ma9m.db")));
+			}
+			int traitAdvice = Array.IndexOf(args, "--traitadvice");
+			if (traitAdvice >= 0 && traitAdvice + 1 < args.Length)
+			{
+				// Dev (engine session, 2026-11-11): 특성 자동 배분 for "<team name>" (LeagueService.AdviseTraits); on a copy of the data.
+				Environment.Exit(LeagueService.TraitAdviceTest(args[traitAdvice + 1], Path.Combine(dataDir, "ma9m.db")));
+			}
+			int traitBalanceSim = Array.IndexOf(args, "--traitbalancesim");
+			if (traitBalanceSim >= 0)
+			{
+				// Dev (engine session, 2026-11-11): each 팀 특성's value on average rosters in full games ("[pairs] [games]").
+				int Arg(int k, int def) => traitBalanceSim + k < args.Length && int.TryParse(args[traitBalanceSim + k], out int v) ? v : def;
+				Environment.Exit(LeagueService.TraitBalanceSim(Arg(1, 200), Arg(2, 100)));
+			}
+			int traitBalance = Array.IndexOf(args, "--traitbalance");
+			if (traitBalance >= 0)
+			{
+				// Dev (engine session, 2026-11-11): each 팀 특성's value on average rosters against its tier's target (TraitBalanceTest).
+				Environment.Exit(LeagueService.TraitBalanceTest(traitBalance + 1 < args.Length && int.TryParse(args[traitBalance + 1], out int tbp) ? tbp : 300));
+			}
+			int autoLineup = Array.IndexOf(args, "--autolineup");
+			if (autoLineup >= 0 && autoLineup + 1 < args.Length)
+			{
+				// Dev (engine session, 2026-11-11): 자동 편성 for "<team name>" [keep] (LeagueService.AutoLineup); on a copy of the data.
+				bool keepColour = autoLineup + 2 < args.Length && args[autoLineup + 2] == "keep";
+				Environment.Exit(LeagueService.AutoLineupTest(args[autoLineup + 1], keepColour, Path.Combine(dataDir, "ma9m.db")));
 			}
 			if (Array.IndexOf(args, "--coachtest") >= 0)
 			{

@@ -47,6 +47,38 @@ public static class Ma9MResultsAuto
 		s_pending = false;
 	}
 
+	// A server restart drops the connection, and the app only comes back (its access token) when it next sends something:
+	// left on the lobby or the results screen it heard nothing, the bar stayed 경기중 and no game joined the list until a
+	// tap (AI tester LG, 11-11: down at 00:52, back at 01:08 when the bar was pressed). Gone for ReconnectAfter seconds
+	// (the restart is over by then; an earlier try only shows the can't-connect popup), it asks for the top bar again,
+	// which reconnects and logs in as any request does; again every ReconnectEvery seconds while it stays down.
+	private const float ReconnectAfter = 60f, ReconnectEvery = 60f;
+
+	private static float s_downSince = -1f, s_nextReconnect;
+
+	private static void KeepConnected()
+	{
+		float now = Time.realtimeSinceStartup;
+		if (NetworkConnector.IsAlive())
+		{
+			s_downSince = -1f;
+			return;
+		}
+		if (s_downSince < 0f)
+		{
+			s_downSince = now;
+			s_nextReconnect = now + ReconnectAfter;
+			return;
+		}
+		if (now < s_nextReconnect)
+		{
+			return;
+		}
+		s_nextReconnect = now + ReconnectEvery;
+		Debug.Log($"[Ma9MResultsAuto] connection down {now - s_downSince:F0} s on {SceneChanger.GetLoadedLevelName()}: asking for the top bar to come back");
+		NetworkConnector.SendPKS_CS_GLOBAL_INFO();
+	}
+
 	// Every frame, from the top bar.
 	public static void Tick()
 	{
@@ -54,6 +86,7 @@ public static class Ma9MResultsAuto
 		{
 			s_lastTouch = Time.realtimeSinceStartup;
 		}
+		KeepConnected();
 		if (!s_pending)
 		{
 			return;

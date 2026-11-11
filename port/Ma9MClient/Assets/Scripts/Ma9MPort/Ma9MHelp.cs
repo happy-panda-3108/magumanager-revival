@@ -15,7 +15,7 @@ public class Ma9MHelp : MonoBehaviour
 	private static Ma9MHelp s_runner;
 
 	private static readonly string Condition =
-		"컨디션은 선수마다 날마다 정해지고 하루 종일 같습니다.\n" +
+		"컨디션은 선수마다 날마다 정해지고,\n저절로는 하루 동안 바뀌지 않습니다.\n" +
 		"화살표가 위를 볼수록 좋습니다.\n최상 · 상 · 보통 · 나쁨 · 매우 나쁨\n" +
 		"경기에서 모든 능력치가 최상 +10%, 상 +5%,\n나쁨 −5%, 매우 나쁨 −10%가 됩니다.";
 
@@ -36,12 +36,16 @@ public class Ma9MHelp : MonoBehaviour
 			"레전드 카드는 1군에 타자 1장, 투수 1장까지입니다.\n" +
 			"같은 선수의 카드(레전드 포함)는 1군에 한 장만 됩니다.\n" +
 			"수비할 수 없는 자리의 타자는 능력치가 10%,\n보직이 아닌 자리의 투수는 15% 낮아집니다.",
+			// AI 테스터 불편 6·61 (타순 바꾸는 법을 1~5회차에 못 찾음).
+			"타순 바꾸기: 타순 줄을 1초쯤 꾹 누른 채\n다른 줄로 끌면 두 줄의 타순이 맞바뀝니다\n(수비 자리는 그대로).\n" +
+			"다 바꾼 뒤 \"등록하기\"를 눌러야 저장됩니다.",
 			Condition,
 			ConditionUp
 		},
 		["Scene_ContractManage"] = () => new[]
 		{
-			"새 카드의 계약은 7일입니다.\n연장하면 7일이 늘어납니다(최대 99일).\n" +
+			// AI 테스터 두산 불편 (11-11): 카드 왼쪽 아래 숫자가 무엇인지, 7일이 실제 날인지.
+			"새 카드의 계약은 7일입니다(0시마다 하루씩 줄어듦).\n카드 왼쪽 아래 숫자가 남은 계약일입니다.\n연장하면 7일이 늘어납니다(최대 99일).\n" +
 			"계약금은 볼 × 4만 MP입니다.\n" +
 			"남은 계약이 " + TableReader.ContractCost.Ma9MSurchargeAfter + "일을 넘을 때 연장하면\n하루마다 계약금이 20%씩 더 붙습니다.",
 			"처음 6번 연장할 때마다 보너스 3점을\n원하는 능력치에 나눠 찍습니다(최대 +18).\n" +
@@ -70,6 +74,20 @@ public class Ma9MHelp : MonoBehaviour
 		},
 		["Scene_CoachingStaff"] = () => new[]
 		{
+			// AI 테스터 두산·NC (11-11): 코치를 어디서 얻는지, 세트 보너스, "북 조합" 버튼이 없음. CoachCatalog (PackGradeOdds,
+			// TrainingChance, TopMixBooks, CheerPercent, SetBonus, SP), CoachingStaff_Main.OnBtn_TodayPlayers.
+			"코치 카드는 상점 > 트레이닝 탭의\n코칭스태프 카드팩(30만 MP)에서 나옵니다.\n" +
+			"(노말 83% · 스페셜 14.5% · 레어 2% · 엘리트 0.5%)\n" +
+			"칸은 다섯입니다: 수석코치 · 타격코치 · 투수코치\n· 트레이닝코치 · 치어리더. 넣은 뒤 등록하세요.",
+			"코치는 자기 구단(계보) 선수에게만 일합니다.\n" +
+			"수석코치: 면담실에 선수를 보냅니다(뒤쪽).\n" +
+			"타격·투수코치: 트레이닝에 나와(노말 20% ~ 엘리트 50%)\nSP 50을 쓰면 결과가 한 칸 오릅니다.\n" +
+			"치어리더: 리그 경기 MP +3% · 6% · 10% · 15%",
+			"트레이닝코치: \"북 조합\" 버튼(트레이닝북 조합)에서\nIII 트레이닝북 5·4·3·2권으로 IV 1권을 만들고,\n그 구단 선수의 트레이닝 결과를 좋게 합니다.\n" +
+			"다섯 칸이 모두 한 구단(계보)이면 세트 보너스로\n그 구단 선수 능력치가 오릅니다(가장 낮은 등급 기준\n스페셜 +1 · 레어 +2 · 엘리트 +3, 노말은 없음).",
+			"SP: 접속 +50, 리그 승리 +30 (최대 2,000)\n" +
+			"코치 카드 4장(엘리트 3장)으로 한 등급 위 카드를\n만들 수 있습니다(전력강화 > 코칭스태프 조합).\n" +
+			"코치는 100장까지 가질 수 있습니다.",
 			"면담실: 면담 시간은 0시~12시, 12시~24시입니다.\n" +
 			"수석코치 구단(계보)의 1군 선수 중 컨디션이\n나쁨·매우 나쁨인 선수가 찾아옵니다(후보 제외).\n" +
 			"한 시간대에 수석코치 등급만큼 옵니다.\n(노말 2 · 스페셜 3 · 레어 4 · 엘리트 5명)",
@@ -81,11 +99,11 @@ public class Ma9MHelp : MonoBehaviour
 		["Scene_TeamProperty"] = () => new[]
 		{
 			"리그 등급이 오를수록 쓸 수 있는 CP가 늘어납니다.\n" +
-			"타자·투수 특성의 줄은 바로 아래 줄에 점수가\n쌓여야 열립니다.\n" +
+			"타자·투수 특성의 줄은 바로 위 줄에 점수가\n쌓여야 열립니다(첫째 줄이 맨 위).\n" +
 			"둘째 줄: 첫째 줄에 6점, 셋째 줄: 둘째 줄에 4점\n넷째 줄: 셋째 줄에 4점, 다섯째 줄: 넷째 줄에 3점",
 			"\"(OO 마스터 필요)\" 특성은 그 특성을\n최대까지 올려야 찍을 수 있습니다.\n" +
 			"강등되어 CP가 줄면 마지막에 넣은 특성부터 빠집니다.\n" +
-			"쓰지 않은 CP가 있으면 메뉴에 붉은 점이 뜹니다."
+			"쓰지 않은 CP가 있으면 팀 관리 메뉴의 특성관리에\n빨간 N 표시가 뜹니다."
 		},
 		["Scene_TeamColor"] = () => new[]
 		{
@@ -94,21 +112,100 @@ public class Ma9MHelp : MonoBehaviour
 			"같은 연도·같은 구단이 많을수록 강합니다.",
 			"강한 순서\n1. 단일 년도 팀  2. 단일 년도 듀얼 팀\n3. 듀얼 년도 단일 팀  4. 연대 단일 팀\n" +
 			"5. 단일 년도 올스타  6. 단일 팀 올스타\n7. 듀얼 팀 올스타",
+			"듀얼 팀: 같은 해의 두 구단\n듀얼 년도: 한 구단의 두 해\n연대: 한 구단의 같은 연대(예: 2000~2009)",
 			"등급(S·A·B·C)은 조건에 맞는 인원으로 정해집니다.\n" +
 			"전체: S 25명 · A 19 · B 14 · C 11\n타자진: S 14 · A 11 · B 8 · C 6\n투수진: S 11 · A 8 · B 6 · C 5\n" +
-			"레전드는 연도와 상관없이 자기 구단(계보)에 들어갑니다."
+			"레전드는 연도와 상관없이 자기 구단(계보)에 들어갑니다.",
+			// AI 테스터 불편 3·61 (넣는 법과 효과 크기가 없음), TeamColors.Kinds / GradeShare.
+			// 2026-11-11 (AI 테스터 kt 4회차): "저절로 걸리지 않는다"는 틀림. 11-09부터 자동 등록(TeamColors.AutoRegister).
+			"1군을 등록하면 칸마다 조건을 채운 가장 강한\n팀컬러가 저절로 등록됩니다.\n" +
+			"다른 것을 쓰려면 목록의 칸을 두 번 눌러 고른 뒤 등록하세요\n(직접 고른 것은 조건을 채우는 동안 그대로 둡니다).\n" +
+			"보라색 칸 = 조건을 채움, 회색 칸 = 아직 못 채움.",
+			"효과(S 등급): 해당 선수의 모든 능력치 +\n" +
+			"전체 칸: 단일 년도 팀 15 · 단일 년도 듀얼 팀 15\n듀얼 년도 14 · 연대 8 · 년도 올스타 3\n팀 올스타 2 · 듀얼 팀 올스타 1\n" +
+			"타자진·투수진 칸: 6·4·4·3·2·1·1 (같은 순서)\n" +
+			"A는 S의 45%, B 25%, C 15%(반올림). 칸끼리 더해집니다."
 		},
 		["Scene_Combine"] = () => new[]
 		{
 			"넣은 카드 중 볼이 가장 높은 카드가 기준 카드이고,\n나머지는 재료입니다(2~8장).\n" +
-			"재료 볼 합계가 기준 볼 × 7이면 가득입니다.\n(예: 8볼 기준에 재료 56볼)\n" +
+			"재료 볼 합계가 기준 볼 × 7이면 가득(오를 확률이 가장 큼)입니다.\n(예: 8볼 기준에 재료 56볼)\n" +
 			"결과는 기준 카드와 같은 쪽(타자/투수) 무작위입니다.",
 			"재료가 적으면 한 단계 내려갈 수 있고,\n많을수록 오를 확률이 큽니다(한 번에 최대 +2볼).\n" +
 			"엘리트는 레어·엘리트 기준 카드에서만 나옵니다.\n" +
 			"보호 아이템을 쓰면 결과가 낮을 때\n기준 카드가 남습니다.",
+			// 2026-11-11 레어 기준 조합 강화 (server FusionRules.Table 7·8; user "이대로 적용합시다").
+			"기준 카드가 안 내려가는 재료 볼 합계:\n" +
+			"노멀·스페셜·엘리트는 가득의 35%\n(예: 7볼 18볼, 10볼 엘리트 25볼)\n" +
+			"레어는 가득의 65%(8볼 37볼, 9볼 41볼).\n" +
+			"레어에서 엘리트는 재료가 많을수록 잘 나옵니다.",
 			"레전드 조합: 레전드 1장 + 다른 카드 7장까지.\n" +
-			"다른 카드 볼 합계 60볼이면 100% 보존\n(1볼에 1.67%). 보존되면 없는 레전드 중 하나.\n" +
+			"다른 카드 볼 합계 60볼이면 100% 성공(1볼에 1.67%).\n성공하면 아직 없는 레전드 한 장으로 바뀝니다.\n" +
 			"실패하면 같은 쪽 10볼 엘리트가 나옵니다.\n레전드 보호 아이템을 쓰면 실패해도 레전드가 남습니다."
+		},
+		// AI 테스터 불편 59 (2026-11-11): 특별강좌·코치카드조합에 도움말이 없음. LessonHandlers, CoachCatalog (MixCards), ShopHandlers 가격.
+		["Scene_SpecialLecture"] = () => new[]
+		{
+			"타격 코치 1명(첫 쪽)과 투수 코치 1명(옆으로 넘김)이\n매일 0시에 바뀝니다(KBO 감독 22명이 차례로).\n" +
+			"코치마다 나이 조건(25세 이하 · 26~32세 · 33세 이상,\n또는 용병만)에 맞는 그 쪽 선수만 받습니다.",
+			"1군 선수는 신청할 수 없고, 한 번에 6명까지입니다.\n" +
+			"수강료: 1~4볼 8만 · 5~7볼 20만 · 8~9볼 40만 · 10볼 80만\n" +
+			"18시간 뒤 주 능력치 +4(70%) 또는 +5(30%),\n보조 능력치 둘 +2씩. 수강 중에는 1군·조합·방출 불가.\n" +
+			"취소해도 수강료는 돌려받지 않습니다.",
+			"결과는 카드마다 하나입니다.\n다시 들으려면 특별강좌 초기화권(100만 MP).\n" +
+			"행운권(40만): +5 확률 30% → 60%.\n" +
+			"즉시 완료권(300만): 신청할 때 쓰거나,\n수강 중인 선수 카드를 눌러 바로 끝냅니다."
+		},
+		["Scene_CoachCardCombine"] = () => new[]
+		{
+			"같은 등급 코치 카드 4장을 넣으면\n한 등급 위 카드 1장이 나옵니다(스태프에 있는 카드는 못 넣음).\n" +
+			"같은 카드 4장: 그 카드의 한 등급 위\n같은 계보 4장: 그 계보의 한 등급 위 카드\n그 밖의 4장: 무작위 한 등급 위 카드",
+			"엘리트는 3장으로 새 엘리트 1장을 받습니다\n(같은 계보 3장이면 그 계보의 엘리트).\n" +
+			"계보는 이름이 바뀐 구단을 한 구단으로 봅니다\n(예: 해태·KIA, OB·두산, 빙그레·한화)."
+		},
+		// AI 테스터 NC (11-11): 작전실·순위표에 (?)가 없음. sim TacticRules (Tactics.cs), LeagueState.Ranked, LeagueRules.NextTier.
+		["Scene_OperationRoom"] = () => new[]
+		{
+			"막대는 0~100, 가운데 50이 보통이고\n끝으로 갈수록 효과가 커집니다.\n" +
+			"타자 작전 5개 · 투수 작전 5개가 팀 전체에 걸립니다.\n" +
+			"선수 정보 창 > 개인작전에서 한 선수만 따로 정하면\n그 선수는 작전실을 바꿔도 자기 값대로 뜁니다(수비·교체는 팀만).",
+			"타격: 빅볼은 홈런과 삼진이 함께 늘어\n장타력 높은 타자에게 맞습니다.\n스몰볼은 공을 맞히는 쪽입니다(번트도 늘어남).\n" +
+			"공격: 끈질긴 승부는 공을 많이 봐 볼넷·삼진이 늘고\n상대 투수가 빨리 지칩니다.",
+			"도루: 적극적일수록 더 자주 뜁니다.\n" +
+			"번트: 권장일수록 경기 후반 접전에서\n약한 타자부터 희생번트를 댑니다.\n" +
+			"수비: 적극적은 안타를 더 막고(수비 좋을수록)\n실책도 늘어납니다.",
+			"투수 성향: 직구 위주는 투구 수와 볼넷이 줄어듭니다.\n" +
+			"승부: 유인구는 삼진·볼넷·투구 수가 늘고 타구가 약해집니다\n(컨트롤 좋은 투수일수록 볼넷 손해가 적음).\n" +
+			"제구: 바깥쪽은 홈런을 줄이고 볼넷·단타가 늘어납니다\n(홈런을 잘 맞는 투수일수록 효과가 큼).",
+			"투구: 전력투구는 능력치가 조금 오르고 빨리 지쳐\n짧게 던지는 불펜에 맞습니다.\n" +
+			"교체: 권장은 투수를 일찍 바꾸고, 자제는 오래 던지게 합니다.\n" +
+			"투수가 던질 수 있는 투구 수는 체력으로 정해집니다."
+		},
+		["Scene_LeagueRankingChart"] = () => new[]
+		{
+			"순위는 승률(승 ÷ (승+패), 무승부 제외) 순입니다.\n" +
+			"승률이 같으면 그 팀끼리의 맞대결 성적,\n그다음 득실차로 정합니다.\n" +
+			"시즌은 144경기, 20분마다 한 경기씩 열립니다.",
+			"승격·강등 (10팀)\n" +
+			"비기너: 1~4위 승격(포스트시즌 없음)\n" +
+			"루키·트리플A·메이저: 포스트시즌 최종 1~4위 승격,\n정규 8~10위 강등\n" +
+			"레전드: 최종 1~3위 챔피언스, 4~6위 잔류, 7~10위 강등\n" +
+			"챔피언스: 최종 1~3위 잔류, 나머지는 레전드로"
+		},
+		// 2026-11-11 빠른조합·목표교환 (Ma9MBookQuick; server TrainingHandlers TryMix/TryExchange/TryQuickMix/TryTargetExchange).
+		["Scene_CombineTraining"] = () => CombineTraining_Main.Ma9MExchange ? new[]
+		{
+			"교환소: III·IV 트레이닝북 1권을 같은 등급\n다른 능력치 책 1권으로 바꿉니다(무료).\n" +
+			"책을 칸에 올리고 교환을 눌러 능력치를 고릅니다.",
+			"목표교환: 능력치별로 갖고 싶은 권수를 정하면\n목표보다 많은 책(목표 0인 능력치부터)을\n" +
+			"모자란 능력치로 한 번에 바꿉니다.\n목표는 이 기기에 구단별로 기억됩니다(III·IV 따로).\n" +
+			"줄을 눌러 고르고 -1/+1(꾹 누르면 빠르게)."
+		} : new[]
+		{
+			"같은 등급 트레이닝북 4권 → 한 등급 위 1권\n(능력치는 무작위). III은 트레이닝코치가 있으면\n" +
+			"코치 등급에 따라 5·4·3·2권으로 IV 1권.\n빠른선택: 같은 등급 4권을 칸에 올립니다.",
+			"빠른조합: 고른 등급(II·III·IV)까지 가진 책을\n아래 등급부터 한 번에 모두 조합합니다.\n" +
+			"모자라 남는 책은 그대로입니다.\n끝나면 결과 창에서 목표교환을 바로 열 수 있습니다."
 		},
 		["Scene_Unconfirmed"] = () => new[]
 		{
@@ -195,15 +292,29 @@ public class Ma9MHelp : MonoBehaviour
 		}
 		UILabel q = go.GetComponent<UILabel>();
 		q.text = "(?)";
-		q.color = new Color(1f, 0.82f, 0f);
-		// Right of the title: its bounds in the parent, the button's left edge 10 units past them.
+		// AI 테스터 8회차 불편 59 (2026-11-11: "작고 어두워 확대해야 보인다", 손가락으로 누르기 작다): brighter, outlined, a third
+		// larger, a wider touch box, and a pulse on each visit until that screen's help has been opened once.
+		q.color = new Color(1f, 0.88f, 0.15f);
+		q.effectStyle = UILabel.Effect.Outline;
+		q.effectColor = new Color(0.3f, 0.15f, 0f);
+		go.transform.localScale = title.transform.localScale * 1.35f;
+		// Right of the title: its bounds in the parent, the button's left edge 10 units past them, centred on the title's line.
 		Bounds titleBounds = NGUIMath.CalculateRelativeWidgetBounds(title.transform.parent, title.transform);
 		go.transform.localPosition = title.transform.localPosition;
 		Bounds own = NGUIMath.CalculateRelativeWidgetBounds(title.transform.parent, go.transform);
-		go.transform.localPosition += new Vector3(titleBounds.max.x + 10f - own.min.x, 0f, 0f);
-		NGUITools.AddWidgetCollider(go);
+		go.transform.localPosition += new Vector3(titleBounds.max.x + 10f - own.min.x, titleBounds.center.y - own.center.y, 0f);
+		BoxCollider box = NGUITools.AddWidgetCollider(go);
+		if (box != null)
+		{
+			box.size = new Vector3(box.size.x * 1.8f, box.size.y * 2.2f, box.size.z);
+		}
 		go.AddComponent<Ma9MHelpButton>().Scene = scene;
 		go.SetActive(true);
+	}
+
+	public static string SeenKey(string scene)
+	{
+		return "Ma9M_HelpSeen_" + scene;
 	}
 
 	public static void Show(string scene)
@@ -234,8 +345,49 @@ public class Ma9MHelpButton : MonoBehaviour
 {
 	public string Scene;
 
+	private IEnumerator Start()
+	{
+		bool seen = false;
+		try
+		{
+			seen = PlayerPrefs.GetInt(Ma9MHelp.SeenKey(Scene), 0) == 1;
+		}
+		catch (Exception)
+		{
+		}
+		if (seen)
+		{
+			yield break;
+		}
+		// Three pulses (up to 1.3× and back) when the screen opens.
+		Vector3 baseScale = transform.localScale;
+		for (int n = 0; n < 3; n++)
+		{
+			for (float t = 0f; t < 0.5f; t += Time.unscaledDeltaTime)
+			{
+				if (this == null)
+				{
+					yield break;
+				}
+				float k = 1f + 0.3f * Mathf.Sin(Mathf.PI * t / 0.5f);
+				transform.localScale = baseScale * k;
+				yield return null;
+			}
+			transform.localScale = baseScale;
+			yield return new WaitForSecondsRealtime(0.25f);
+		}
+	}
+
 	private void OnClick()
 	{
+		try
+		{
+			PlayerPrefs.SetInt(Ma9MHelp.SeenKey(Scene), 1);
+			PlayerPrefs.Save();
+		}
+		catch (Exception)
+		{
+		}
 		Ma9MHelp.Show(Scene);
 	}
 }

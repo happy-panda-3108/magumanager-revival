@@ -58,8 +58,9 @@ def field():
     raise SystemExit("no field")
 
 
-def write(path, variants, note):
-    decks, staffs, bats, ops = [], [], [], []
+def write(path, variants, note, dev=None):
+    """dev: deck → TCSIM_DEV spec (book_dev.py; 2026-11-11, the books' own 특강·트레이닝·재계약 numbers), for every variant of it."""
+    decks, staffs, bats, ops, devs = [], [], [], [], []
     for deck, vs in variants.items():
         b, st = DECKS[deck]
         for tag, op in vs:
@@ -68,11 +69,14 @@ def write(path, variants, note):
             staffs.append(f"{label}={st}")
             bats.append(f"{label}={b}")
             ops.append(f"{label}={op}")
+            if dev and deck in dev:
+                devs.append(f"{label}={dev[deck]}")
     with open(path, "w", encoding="utf-8", newline=chr(10)) as f:
         f.write("# " + note + chr(10))
         f.write(field() + chr(10))
-        for key, items in (("TCSIM_DECKS", decks), ("TCSIM_STAFF", staffs), ("TCSIM_BATS", bats), ("TCSIM_OPS", ops)):
-            f.write(key + "=" + ";".join(items) + chr(10))
+        for key, items in (("TCSIM_DECKS", decks), ("TCSIM_STAFF", staffs), ("TCSIM_BATS", bats), ("TCSIM_OPS", ops), ("TCSIM_DEV", devs)):
+            if items:
+                f.write(key + "=" + ";".join(items) + chr(10))
         f.write("TCSIM_ENTRY_BONUS=3" + chr(10) + "TCSIM_LECTURE_MAIN=5" + chr(10) + "MA9M_FIELD_ENGINE=1" + chr(10))
     print(path, len(decks), "variants")
 
@@ -82,6 +86,6 @@ if __name__ == "__main__":
         scope = {"DECKS": DECKS, "SAVED": SAVED, "N": N, "sliders": sliders}
         exec(open(sys.argv[1], encoding="utf-8").read(), scope)
         name = os.path.splitext(os.path.basename(sys.argv[1]))[0]
-        write(os.path.join(HERE, f"{name}_env.txt"), scope["ROUND"], scope.get("NOTE", name))
+        write(os.path.join(HERE, f"{name}_env.txt"), scope["ROUND"], scope.get("NOTE", name), scope.get("DEV"))
     else:
         write(os.path.join(HERE, "ops_env.txt"), round1(), "2026-11-11 round 1: saved, neutral, each 작전실 slider at 0/100 (gen_ops_env.py)")

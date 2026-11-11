@@ -231,26 +231,34 @@ namespace Ma9MServer
 		public static void ApplyLeagueReference(IList<GameTeam> league)
 		{
 			if (s_refBat == null || Mode == RefMode.None) return;
-			(double[] bat, double[] pit, double def) = LeagueShift(league);
+			var shift = LeagueShift(league);
 			foreach (GameTeam t in league)
 			{
-				foreach (GameCard g in t.Order.Concat(t.Pitchers))
+				ApplyShift(t, shift);
+			}
+		}
+
+		// One team moved by a league's shift (LeagueShift); the engine session's 자동 편성 (2026-11-11) applies the league's
+		// shift of now to candidate 1군s.
+		public static void ApplyShift(GameTeam t, (double[] bat, double[] pit, double def) shift)
+		{
+			if (s_refBat == null || Mode == RefMode.None) return;
+			foreach (GameCard g in t.Order.Concat(t.Pitchers))
+			{
+				if (g == null) continue;
+				CardRow c = g.Row.Clone();
+				if (c.Kind == 'B' && double.IsNaN(c.ShownCatcher)) c.ShownCatcher = c.Defs[0];
+				if (c.Kind == 'B' && double.IsNaN(c.SpeedBase)) c.SpeedBase = c.R[3];
+				double[] s = c.Kind == 'B' ? shift.bat : shift.pit;
+				for (int j = 0; j < 6; j++) c.R[j] -= s[j];
+				if (c.Kind == 'B')
 				{
-					if (g == null) continue;
-					CardRow c = g.Row.Clone();
-					if (c.Kind == 'B' && double.IsNaN(c.ShownCatcher)) c.ShownCatcher = c.Defs[0];
-					if (c.Kind == 'B' && double.IsNaN(c.SpeedBase)) c.SpeedBase = c.R[3];
-					double[] shift = c.Kind == 'B' ? bat : pit;
-					for (int j = 0; j < 6; j++) c.R[j] -= shift[j];
-					if (c.Kind == 'B')
+					for (int p = 0; p < 8; p++)
 					{
-						for (int p = 0; p < 8; p++)
-						{
-							if (c.Defs[p] > 20) c.Defs[p] -= def;
-						}
+						if (c.Defs[p] > 20) c.Defs[p] -= shift.def;
 					}
-					g.Row = c;
 				}
+				g.Row = c;
 			}
 		}
 	}

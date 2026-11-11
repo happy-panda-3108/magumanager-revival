@@ -84,6 +84,15 @@ namespace Ma9MServer
 				case "oldseason":
 					OldSeason();
 					break;
+				case "rosterticket":
+					RosterTickets();
+					break;
+				case "lessoncoupon":
+					LessonCoupon();
+					break;
+				case "advice":
+					Advice(catalog);
+					break;
 				default:
 					Log($"unknown scenario {scenario}");
 					return 2;
@@ -770,6 +779,109 @@ namespace Ma9MServer
 			Check(fodder.Length == CoachCatalog.MixCardsOf(grade0) && mixed.error_info.error_code.n == 0 && afterMix.Length == listed.Length - fodder.Length + 1 && afterMix.Contains(mixed.NewCoachCard.n)
 				&& grade1 == Math.Min(grade0 + 1, CoachCatalog.Elite),
 				$"조합: {string.Join(" + ", fodder.Select(i => $"{CoachCatalog.GradeNames[CoachCatalog.Grade(i)]} {CoachCatalog.Name(i)}"))} → {CoachCatalog.GradeNames[grade1]} {CoachCatalog.Name(mixed.NewCoachCard.n)}");
+		}
+
+		// 로스터 확장권 여러 장 (systems session, 2026-11-11): three at once (arg1 "3"), then one the way the 1.0.43 app asks (arg1
+		// empty). Needs four tickets on the team (a copy of the data: put them in team_item first).
+		private static void RosterTickets()
+		{
+			int before = Inventory().GetValueOrDefault(ShopHandlers.RosterTicket);
+			Log($"로스터 확장권 {before}장");
+			Send(new Ma9MPacket.PKS_CS_USE_ITEM { item_index = { n = ShopHandlers.RosterTicket }, arg1 = { str = "3" }, arg2 = { str = string.Empty }, arg3 = { str = string.Empty } });
+			Ma9MPacket.PKS_SC_USE_ITEM three = Await<Ma9MPacket.PKS_SC_USE_ITEM>();
+			int used = int.TryParse(three.arg1.str, out int u) ? u : -1;
+			int from = int.TryParse(three.arg2.str, out int f) ? f : -1, to = int.TryParse(three.arg3.str, out int t) ? t : -1;
+			int left = Inventory().GetValueOrDefault(ShopHandlers.RosterTicket);
+			Check(three.result.n == 0 && used == Math.Min(3, before) && to - from == 20 * used && left == before - used,
+				$"3장 요청: result {three.result.n}, {used}장 사용, 보관함 {from} → {to}, 남은 확장권 {left}");
+			Send(new Ma9MPacket.PKS_CS_USE_ITEM { item_index = { n = ShopHandlers.RosterTicket }, arg1 = { str = string.Empty }, arg2 = { str = string.Empty }, arg3 = { str = string.Empty } });
+			Ma9MPacket.PKS_SC_USE_ITEM one = Await<Ma9MPacket.PKS_SC_USE_ITEM>();
+			int left2 = Inventory().GetValueOrDefault(ShopHandlers.RosterTicket);
+			Check(one.result.n == 0 && one.arg1.str == "1" && one.arg2.str == to.ToString() && left2 == left - 1,
+				$"옛 앱처럼 1장: result {one.result.n}, arg {one.arg1.str}/{one.arg2.str}/{one.arg3.str}, 남은 확장권 {left2}");
+		}
+
+		// LESSON2026 (2026-11-11; the user allowed it for the AI tester accounts): 1억 MP and ten of each 특강 item, once per account.
+		// On a copy of the data only, with an AI tester account (autotest3..6).
+		private static void LessonCoupon()
+		{
+			Dictionary<int, int> before = Inventory();
+			Send(new Ma9MPacket.PKS_CS_USE_COUPON { coupon_code = { str = "LESSON2026" } });
+			Ma9MPacket.PKS_SC_USE_COUPON first = Await<Ma9MPacket.PKS_SC_USE_COUPON>();
+			Dictionary<int, int> after = Inventory();
+			int Gain(int item) => after.GetValueOrDefault(item) - before.GetValueOrDefault(item);
+			Check(first.result.n == 0 && Gain(LessonHandlers.Lucky) == 10 && Gain(LessonHandlers.Instant) == 10 && Gain(LessonHandlers.Reset) == 10,
+				$"LESSON2026: result {first.result.n}, 행운권 +{Gain(LessonHandlers.Lucky)}, 즉시 완료권 +{Gain(LessonHandlers.Instant)}, 초기화권 +{Gain(LessonHandlers.Reset)}");
+			Send(new Ma9MPacket.PKS_CS_USE_COUPON { coupon_code = { str = "LESSON2026" } });
+			Ma9MPacket.PKS_SC_USE_COUPON again = Await<Ma9MPacket.PKS_SC_USE_COUPON>();
+			Check(again.result.n == 2, $"LESSON2026 두 번째: result {again.result.n} (2 = 이미 씀)");
+		}
+
+		// 특성 추천 배분 · 자동 편성 (AdviceHandlers, 2026-11-11) on a data copy: each asked with REQ_SCENE_TUTORIAL "ma9m:…" comes
+		// back as POPUP type 10; a plain OK (ACK 0, as types 1/2 send) changes nothing; 적용 (ACK 10) saves it and answers type 11.
+		private static void Advice(CardCatalog catalog)
+		{
+			Ma9MPacket.PKS_SC_POPUP Ask(string what)
+			{
+				Send(new Ma9MPacket.PKS_CS_REQ_SCENE_TUTORIAL { scene_name = { str = what } });
+				return Await<Ma9MPacket.PKS_SC_POPUP>(60000);
+			}
+			void Ack(byte n) => Send(new Ma9MPacket.PKS_CS_POPUP_ACK { Ack = { n = n } });
+			string Text(Ma9MPacket.PKS_SC_POPUP p) => string.Join(" / ", (p.Messages.array ?? Array.Empty<PLongString>()).Select(m => m.str.Replace("\n", " | ")));
+			string Traits()
+			{
+				Send(new Ma9MPacket.PKS_CS_ENTER_TEAM_PROPERTY());
+				Ma9MPacket.PKS_SC_ENTER_TEAM_PROPERTY r = Await<Ma9MPacket.PKS_SC_ENTER_TEAM_PROPERTY>();
+				byte[] b = r.buff.bytes ?? Array.Empty<byte>();
+				return string.Join(" ", Enumerable.Range(0, b.Length / 2).Where(i => b[2 * i + 1] > 0).Select(i => $"{b[2 * i]}:{b[2 * i + 1]}"));
+			}
+			string Lineup()
+			{
+				Send(new Ma9MPacket.PKS_CS_ENTER_ROSTER_INFO());
+				Ma9MPacket.PKS_SC_ENTER_ROSTER_INFO r = Await<Ma9MPacket.PKS_SC_ENTER_ROSTER_INFO>();
+				return string.Join(",", r.batters.array.Select(p => p.n)) + "|" + string.Join(",", r.fielders.array.Select(p => p.n)) + "|" + string.Join(",", r.pitchers.array.Select(p => p.n));
+			}
+
+			string traitsBefore = Traits();
+			Ma9MPacket.PKS_SC_POPUP t = Ask("ma9m:traitadvice");
+			Log($"traits now [{traitsBefore}]; asked: type {t.Type.n}: {Text(t)}");
+			if (t.Type.n == AdviceHandlers.AskType)
+			{
+				Ack(0);
+				Check(Traits() == traitsBefore, "a plain OK (ACK 0) did not apply the advice");
+				Ack(AdviceHandlers.AckApply);
+				Ma9MPacket.PKS_SC_POPUP done = Await<Ma9MPacket.PKS_SC_POPUP>(10000);
+				string traitsAfter = Traits();
+				Check(done.Type.n == AdviceHandlers.DoneType && traitsAfter != traitsBefore, $"적용: type {done.Type.n}: {Text(done)}; traits now [{traitsAfter}]");
+				Ma9MPacket.PKS_SC_POPUP again = Ask("ma9m:traitadvice");
+				Check(again.Type.n == 1, $"asked again: type {again.Type.n}: {Text(again)}");
+			}
+			else
+			{
+				Check(t.Type.n == 1, "no advice: a plain message");
+			}
+
+			foreach (string mode in new[] { "free", "keep" })
+			{
+				string before = Lineup();
+				Ma9MPacket.PKS_SC_POPUP l = Ask("ma9m:autolineup:" + mode);
+				Log($"auto lineup {mode}: type {l.Type.n}: {Text(l)}");
+				if (l.Type.n != AdviceHandlers.AskType)
+				{
+					continue;
+				}
+				if (mode == "keep")
+				{
+					Ack(AdviceHandlers.AckCancel);
+					Check(Lineup() == before, "취소 (ACK 11): the 1군 stays");
+					continue;
+				}
+				Ack(AdviceHandlers.AckApply);
+				Ma9MPacket.PKS_SC_POPUP done = Await<Ma9MPacket.PKS_SC_POPUP>(10000);
+				string after = Lineup();
+				Check(done.Type.n == AdviceHandlers.DoneType && after != before, $"적용: type {done.Type.n}: {Text(done)}; 1군 changed");
+				Log($"  1군 now: {string.Join(", ", after.Split('|')[0].Split(',').Take(9).Select(s => catalog.Get(int.Parse(s))?.Name ?? s))} | {string.Join(", ", after.Split('|')[2].Split(',').Select(s => catalog.Get(int.Parse(s))?.Name ?? s))}");
+			}
 		}
 
 		private static Dictionary<int, int> Inventory()

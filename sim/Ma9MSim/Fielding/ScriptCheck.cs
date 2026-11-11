@@ -141,6 +141,18 @@ namespace Ma9MSim.Fielding
 					if (m[i].T0 < m[i - 1].T1 - 0.05) rep.Flag("fielder: moves overlap", $"{tag} {Geometry.PosName[f]} {m[i - 1].Kind} {m[i - 1].T0:F2}-{m[i - 1].T1:F2} / {m[i].Kind} {m[i].T0:F2}");
 				}
 			}
+			// 5b. A throw in from the outfield caught at second with the other middle infielder there too (user, 2026-11-11:
+			// "2루수가 루에 붙어있음에도 유격수가 달려와서 2루에서 공을 받는 모습"): two men on the bag.
+			foreach (Seg g in s.Segs.Where(g => g.Kind == SegKind.Catch && (g.Actor == Geometry.SS || g.Actor == Geometry.B2)))
+			{
+				P bag = Geometry.Base[2];
+				if (g.P1.Dist(bag) > 2.5) continue;
+				int ti = s.Segs.FindLastIndex(t => t.Kind == SegKind.BallThrow && Math.Abs(t.T1 - g.T0) < 0.05);
+				if (ti < 0 || s.Segs[ti].P0.R < 45) continue;
+				int other = g.Actor == Geometry.SS ? Geometry.B2 : Geometry.SS;
+				P o = ActorAt(s, other, g.T0, d.Pos[other]);
+				if (o.Dist(bag) < 2.0) rep.Flag("second: both middle infielders on the bag for a throw in", $"{tag} {Geometry.PosName[g.Actor]} takes it at {g.P1} from {Geometry.PosName[s.Segs.LastOrDefault(t => t.Kind == SegKind.Throw && Math.Abs(t.T0 - s.Segs[ti].T0) < 0.05).Actor]} {s.Segs[ti].P0} t{g.T0:F2}, {Geometry.PosName[other]} {o.Dist(bag):F1} m off the bag; throws {s.Segs.Count(t => t.Kind == SegKind.BallThrow)}");
+			}
 			// 6. Runners: speed, and no two on a base at the end.
 			foreach (Seg g in s.Segs.Where(g => g.Kind == SegKind.Run))
 			{

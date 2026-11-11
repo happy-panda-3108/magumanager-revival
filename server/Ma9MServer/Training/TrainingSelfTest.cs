@@ -162,6 +162,57 @@ namespace Ma9MServer
 					&& InventoryHandlers.ItemAmount(user, p4) == p4Before + 1 && InventoryHandlers.ItemAmount(user, c3) == c3Before,
 					$"트레이닝북 교환 IV: {TrainingBooks.Name(c4)} → {TrainingBooks.Name(swappedIv)}; IV → III '{ivToIii}', III → IV '{iiiToIv}'");
 			}
+			// 빠른 조합 (2026-11-11, TrainingQuick.cs): 13 I and 3 II, up to III → I 12 → II 3, II 6 → III 1 (I 1, II 2 left).
+			void Clear(int grade)
+			{
+				for (int s = 1; s <= 12; s++)
+				{
+					int b = TrainingBooks.Book(s, grade);
+					InventoryHandlers.AddItem(user, b, -InventoryHandlers.ItemAmount(user, b));
+				}
+			}
+			int Total(int grade) => Enumerable.Range(1, 12).Sum(s => InventoryHandlers.ItemAmount(user, TrainingBooks.Book(s, grade)));
+			for (int g = 1; g <= TrainingBooks.TopGrade; g++)
+			{
+				Clear(g);
+			}
+			InventoryHandlers.AddItem(user, TrainingBooks.Book(1, 1), 9);
+			InventoryHandlers.AddItem(user, TrainingBooks.Book(2, 1), 4);
+			InventoryHandlers.AddItem(user, TrainingBooks.Book(4, 2), 3);
+			string badStop = TrainingHandlers.TryQuickMix(user, 1, out _, out _);
+			string quick = TrainingHandlers.TryQuickMix(user, 3, out int quickMade, out string quickLog);
+			Check(badStop != null && quick == null && quickMade == 1 && Total(1) == 1 && Total(2) == 2 && Total(3) == 1,
+				$"빠른 조합 III까지: made {quickMade}, I {Total(1)} · II {Total(2)} · III {Total(3)} ({quickLog}); 등급 1 '{badStop}'");
+			string nothing = TrainingHandlers.TryQuickMix(user, 3, out _, out _);
+			// IV: refused without a 트레이닝코치, and with one too (III 1 left, a IV takes at least 2).
+			string toIv = TrainingHandlers.TryQuickMix(user, 4, out _, out _);
+			Check(nothing != null && toIv != null, $"책이 모자랄 때 '{nothing}'; IV까지 ({(TrainingHandlers.QuickTop(user) == 4 ? "트레이닝코치 있음" : "트레이닝코치 없음")}) '{toIv}'");
+			// 목표 교환: III 컨택 5 · 선구 2 · 구위 3, targets 컨택 2 · 파워 3 · 선구 2 → the 구위 (target 0) books go to 파워 first;
+			// 컨택's surplus stays.
+			Clear(3);
+			InventoryHandlers.AddItem(user, TrainingBooks.Book(1, 3), 5);
+			InventoryHandlers.AddItem(user, TrainingBooks.Book(4, 3), 2);
+			InventoryHandlers.AddItem(user, TrainingBooks.Book(11, 3), 3);
+			int[] targets = new int[12];
+			targets[0] = 2;
+			targets[1] = 3;
+			targets[3] = 2;
+			string zero = TrainingHandlers.TryTargetExchange(user, 3, new int[12], out _, out _);
+			string shortList = TrainingHandlers.TryTargetExchange(user, 3, new int[11], out _, out _);
+			string gradeII = TrainingHandlers.TryTargetExchange(user, 2, targets, out _, out _);
+			string swap = TrainingHandlers.TryTargetExchange(user, 3, targets, out int moved, out string swapLog);
+			int[] now = Enumerable.Range(1, 12).Select(s => InventoryHandlers.ItemAmount(user, TrainingBooks.Book(s, 3))).ToArray();
+			Check(zero != null && shortList != null && gradeII != null && swap == null && moved == 3 && now[0] == 5 && now[1] == 3 && now[3] == 2 && now[10] == 0 && now.Sum() == 10,
+				$"목표 교환 III: {moved}권 ({swapLog}); 목표 0 '{zero}', 11칸 '{shortList}', II '{gradeII}'");
+			targets[2] = 4;
+			string more = TrainingHandlers.TryTargetExchange(user, 3, targets, out int moved2, out string moreLog);
+			now = Enumerable.Range(1, 12).Select(s => InventoryHandlers.ItemAmount(user, TrainingBooks.Book(s, 3))).ToArray();
+			string met = TrainingHandlers.TryTargetExchange(user, 3, new[] { 2, 3, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0 }, out _, out _);
+			Check(more == null && moved2 == 3 && now[0] == 2 && now[2] == 3 && met != null,
+				$"목표 교환 모자랄 때: {moved2}권 ({moreLog}); 다 채웠을 때 '{met}'");
+			Clear(3);
+			Clear(1);
+			Clear(2);
 			return problems == 0 ? 0 : 1;
 		}
 	}
