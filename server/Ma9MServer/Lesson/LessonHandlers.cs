@@ -314,6 +314,13 @@ namespace Ma9MServer
 
 		public static bool InLesson(uint user, int idx) => InLesson(user).Contains(idx);
 
+		// A card that holds this coach's +5 (main stat) from a finished lesson is not his player any more (user, 2026-11-12
+		// 10:4x: "해당 특강 코치의 5 특강을 받은 선수는 더이상 등장 안 하는걸로 … 염경엽 코치에 한해서는 더이상 리스트에 나오지 않게");
+		// other coaches still list him (with the 초기화권 as before).
+		private static bool TopFromCoach(Lesson l, Coach coach, TeamCard card) =>
+			l != null && coach != null && card != null && l.State != 0 && l.Coach == coach.Code && l.Result != null && l.Result.Length > coach.Main
+			&& (sbyte)l.Result[coach.Main] >= 5 && card.Educated.Any(v => v != 0);
+
 		// Ends every lesson that is due: its result into the card, the 업적 counted. Lessons whose card is gone
 		// (released or combined away; not possible while in a lesson, but an old row) are dropped.
 		public static void FinishDue(DateTime now)
@@ -401,6 +408,9 @@ namespace Ma9MServer
 			{
 				return;
 			}
+			// The 1.0.45 app also shows the info popup (type 10) as a 추천 배분 / 자동 편성 window (user 11-12 01:0x): its 적용 must
+			// find nothing waiting (AdviceHandlers, types 20/21 from 1.0.46).
+			AdviceHandlers.DropOld(session.Team.UserCode);
 			foreach (NetworkLibrary.Packet.PKS_PACKET reply in EnterReplies(session.Team.UserCode, DateTime.Now))
 			{
 				session.Send(reply);
@@ -433,9 +443,12 @@ namespace Ma9MServer
 				new PLongString { str = RotationHours >= 24 ? " * 매일 0시에 코치가 바뀝니다. 수강 중인 선수는 신청한 코치에게 끝까지 배웁니다."
 					: $" * {RotationHours}시간마다({string.Join("·", Enumerable.Range(0, 24 / RotationHours).Select(k => k * RotationHours))}시) 코치가 바뀝니다. 수강 중인 선수는 신청한 코치에게 끝까지 배웁니다." },
 				new PLongString { str = results },
-				new PLongString { str = LessonHours.ToString(CultureInfo.InvariantCulture) }
+				new PLongString { str = LessonHours.ToString(CultureInfo.InvariantCulture) },
+				// The 1군's cards (app 1.0.46: picking one turns the 즉시 완료권 on, user 11-12 10:4x; older apps read five or six).
+				new PLongString { str = string.Join(",", lineup.OrderBy(i => i)) }
 			};
 			replies.Add(info);
+			Dictionary<int, Lesson> byCard = lessons.GroupBy(l => l.Idx).ToDictionary(g => g.Key, g => g.First());
 			foreach ((Coach coach, DateTime from, DateTime until) in new[] { bat, pit })
 			{
 				bool pitcher = coach.Pitcher;
@@ -445,7 +458,8 @@ namespace Ma9MServer
 				int otherSide = active.Count - mine.Count;
 				page.in_lesson.array = mine.Select(c => Info(user, c, now)).ToArray();
 				// 1군 players too since 2026-11-09 (they enroll with the 즉시 완료권 only, FirstTeamText).
-				page.players.array = cards.Where(c => !active.Contains(c.Idx) && Eligible(coach, s_catalog.Get(c.Idx)))
+				// Not the cards that already hold this coach's +5 (TopFromCoach, 2026-11-12).
+				page.players.array = cards.Where(c => !active.Contains(c.Idx) && Eligible(coach, s_catalog.Get(c.Idx)) && !TopFromCoach(byCard.GetValueOrDefault(c.Idx), coach, c))
 					.Select(c => Info(user, c, now)).ToArray();
 				page.max_student.n = (byte)Math.Max(0, MaxStudents - otherSide);
 				// No ball limit: the 볼제한 box shows the players in lessons out of six.
@@ -531,9 +545,10 @@ namespace Ma9MServer
 			Coach coach = info == null ? null : OnDuty(!info.IsBatter, now).coach;
 			bool hasResult = card != null && card.Educated.Any(v => v != 0);
 			int fee = info == null ? 0 : Fee(info.Ball);
+			bool topDone = TopFromCoach(Lessons(user).FirstOrDefault(l => l.Idx == idx), coach, card);
 			byte result =
 				card == null || info == null || active.Contains(idx) ? Failed :
-				!Eligible(coach, info) ? NotEligible :
+				!Eligible(coach, info) || topDone ? NotEligible :
 				!instant && Lineup(user).Contains(idx) ? InFirstTeam :
 				active.Count >= MaxStudents ? Full :
 				hasResult && !reset ? HasResult :
@@ -859,6 +874,40 @@ namespace Ma9MServer
 			List<NetworkLibrary.Packet.PKS_PACKET> pages2 = EnterReplies(user, now);
 			Check(pages2[1] is Ma9MPacket.PKS_SC_ENTER_LESSON bp && bp.item_index.array.Length == 3 && bp.item_index.array.Any(x => x.n == Instant)
 				&& LessonHandlers.Items().Any(d => d.Index == Instant && d.File == "lesson_instant"), "입장 패킷에 즉시 완료권 수량, 아이템 목록에 즉시 완료권");
+			// The 1군 list in the info popup (app 1.0.46 turns the 즉시 완료권 on for those cards; 2026-11-12).
+			string sent = (pages2[0] as Ma9MPacket.PKS_SC_POPUP)?.Messages.array is PLongString[] m6 && m6.Length > 6 ? m6[6].str : null;
+			Check(sent == string.Join(",", Lineup(user).OrderBy(i => i)) && sent.Length > 0, $"정보 팝업 7번째 칸 = 1군 {Lineup(user).Count}장");
+			// A card holding this coach's +5 is not his player any more; with +4 he is listed again (2026-11-12).
+			void SetResult(int idx, Coach coach, sbyte main)
+			{
+				sbyte[] stat = new sbyte[6];
+				stat[coach.Main] = main;
+				stat[coach.Sub1] += 2;
+				stat[coach.Sub2] += 2;
+				byte[] blob = stat.Select(v => (byte)v).ToArray();
+				using SqliteConnection c = Open();
+				using (SqliteCommand card = Command(c, "UPDATE team_card SET educated = $e WHERE user_code = $u AND card_idx = $i", user, idx))
+				{
+					card.Parameters.Add("$e", SqliteType.Blob).Value = blob;
+					card.ExecuteNonQuery();
+				}
+				using SqliteCommand row = Command(c, "UPDATE card_lesson SET coach = $c, state = 2, result = $r WHERE user_code = $u AND card_idx = $i", user, idx);
+				row.Parameters.AddWithValue("$c", coach.Code);
+				row.Parameters.Add("$r", SqliteType.Blob).Value = blob;
+				row.ExecuteNonQuery();
+			}
+			bool Listed(int idx) => EnterReplies(user, now)[1] is Ma9MPacket.PKS_SC_ENTER_LESSON pg && pg.players.array.Any(x => x.index.n == idx);
+			SetResult(picks[1], batCoach, 5);
+			InventoryHandlers.AddItem(user, Reset, 1);
+			bool hiddenAt5 = !Listed(picks[1]);
+			byte refusedAt5 = TryEnroll(user, picks[1], false, true, now, out _);
+			SetResult(picks[1], batCoach, 4);
+			bool listedAt4 = Listed(picks[1]);
+			Coach otherBat = Batting.FirstOrDefault(b => b != batCoach && Eligible(b, catalog.Get(picks[1])));
+			bool otherCoachFine = otherBat == null || TopFromCoach(new Lesson { Idx = picks[1], Coach = batCoach.Code, State = 2, Result = new byte[] { 5, 5, 5, 5, 5, 5 } }, otherBat, db.GetCards(user).First(x => x.Idx == picks[1])) == false;
+			InventoryHandlers.AddItem(user, Reset, -InventoryHandlers.ItemAmount(user, Reset));
+			Check(hiddenAt5 && refusedAt5 == NotEligible && listedAt4 && otherCoachFine,
+				$"{batCoach.Name} +5를 받은 {catalog.Get(picks[1]).Name}: 그 코치 목록에서 빠짐·신청 거절({refusedAt5}), +4면 다시 나옴, 다른 코치({otherBat?.Name ?? "없음"})에게는 그대로");
 			ServerLog.Info($"[lessontest] {(problems == 0 ? "all ok" : problems + " problem(s)")}");
 			return problems == 0 ? 0 : 1;
 		}

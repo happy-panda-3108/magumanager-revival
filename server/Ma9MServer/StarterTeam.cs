@@ -88,14 +88,26 @@ namespace Ma9MServer
 
 		public static readonly int[] Clubs = { 7, 5, 0, 6, 13, 8, 9, 3, 19, 2, 4, 11 };  // 롯데 기아 두산 LG NC 삼성 SSG 키움 KT 한화 현대 쌍방울
 
-		// A new team's temporary club (user, 2026-10-18): the key players, then the chosen club's own
-		// cards at 1-4볼 (노멀) with two or three at 5볼; relievers stand in for the scarce low-ball
-		// set-up men and closers; another club's card only when the club has none left for a slot.
+		// A new team's temporary club (user, 2026-10-18): the key players, then cards at 1-4볼 (노멀) with two or three at 5볼;
+		// relievers stand in for the scarce low-ball set-up men and closers. Until 2026-11-12 they were the chosen club's own (another
+		// club's only when it had none left), so 현대·쌍방울 (one decade of cards) started with a 연대 팀컬러 S and beat the 비기너 AI
+		// with no pack opened. Now (user 11-10 결정 4 and 11-12 11:5x 8번: "시작덱은 키 플레이어 2명 외 무작위 팀이 만들어지게끔 해야함.
+		// 그래서 기본 선수팀으로는 이길 수 없으니 카드팩을 통한 기초적인 덱 보강을 하고 경기를 임해야함"): random cards of every club and
+		// season, drawn again (up to 30 times) while they reach any team colour.
 		public static List<CardInfo> DrawClub(Random rnd, CardCatalog catalog, int club, IEnumerable<CardInfo> keys)
 		{
-			HashSet<int> codes = new HashSet<int>(ClubCodes(club));
+			List<CardInfo> picks = null;
+			for (int attempt = 0; attempt < 30; attempt++)
+			{
+				picks = DrawRandomClub(rnd, catalog, keys);
+				if (!TeamColors.AnyAvailable(picks.Where(c => c.IsBatter).ToList(), picks.Where(c => !c.IsBatter).ToList())) break;
+			}
+			return picks;
+		}
+
+		private static List<CardInfo> DrawRandomClub(Random rnd, CardCatalog catalog, IEnumerable<CardInfo> keys)
+		{
 			List<CardInfo> all = catalog.Drawable.ToList();  // no 레전드 (CardCatalog.Drawable)
-			List<CardInfo> mine = all.Where(c => codes.Contains(c.TeamCode)).ToList();
 			List<CardInfo> keyList = keys.Where(c => c != null).ToList();
 			List<CardInfo> picks = new List<CardInfo>(keyList);
 			HashSet<int> players = new HashSet<int>(keyList.Select(c => c.Sidx));
@@ -115,7 +127,7 @@ namespace Ma9MServer
 				Func<CardInfo, bool> want = open[i];
 				Func<CardInfo, bool> ball = fiveSlots.Contains(i) ? c => c.Ball == 5 : c => c.Ball >= 1 && c.Ball <= 4;
 				CardInfo pick = null;
-				foreach (IEnumerable<CardInfo> pool in new[] { mine.Where(c => want(c) && ball(c)), all.Where(c => want(c) && ball(c)), all.Where(c => want(c) && c.Ball <= 5) })
+				foreach (IEnumerable<CardInfo> pool in new[] { all.Where(c => want(c) && ball(c)), all.Where(c => want(c) && c.Ball <= 5) })
 				{
 					List<CardInfo> free = pool.Where(c => !players.Contains(c.Sidx)).ToList();
 					if (free.Count > 0)

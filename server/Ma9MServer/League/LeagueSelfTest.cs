@@ -414,7 +414,7 @@ namespace Ma9MServer
 		private static int StarterCheck(CardCatalog catalog)
 		{
 			Random rnd = new Random(5);
-			int bad = 0;
+			int bad = 0, coloured = 0;
 			List<int> sums = new List<int>();
 			for (int t = 0; t < 200; t++)
 			{
@@ -434,13 +434,16 @@ namespace Ma9MServer
 				bool pitcherIn = Array.IndexOf(l.Pitchers, keys[1].Idx) >= 0;
 				HashSet<int> idx = roster.Select(c => c.Idx).ToHashSet();
 				bool valid = l.IsValid(idx) && roster.Count == 25 && roster.Select(c => c.Sidx).Distinct().Count() == 25;
-				if (sum > cap || !batterStarts || !pitcherIn || !valid || fives < 2 || fives > 3)
+				// 2026-11-12: random clubs and seasons, no team colour (StarterTeam.DrawClub).
+				bool colour = TeamColors.AnyAvailable(roster.Where(c => c.IsBatter).ToList(), roster.Where(c => !c.IsBatter).ToList());
+				if (colour) coloured++;
+				if (sum > cap || !batterStarts || !pitcherIn || !valid || fives < 2 || fives > 3 || colour)
 				{
 					bad++;
 					if (bad <= 3) ServerLog.Warn($"starter club: sum {sum}, batter starts {batterStarts}, pitcher in {pitcherIn}, valid {valid} ({keys[0].Name} {keys[0].MainPosition}, {keys[1].Name} {keys[1].MainPosition})");
 				}
 			}
-			ServerLog.Info($"starter clubs: 200 drawn, balls {sums.Min()}-{sums.Max()} (mean {sums.Average():F1}), {bad} bad");
+			ServerLog.Info($"starter clubs: 200 drawn, balls {sums.Min()}-{sums.Max()} (mean {sums.Average():F1}), {coloured} with a team colour, {bad} bad");
 			return bad;
 		}
 	}

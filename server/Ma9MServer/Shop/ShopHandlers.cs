@@ -180,7 +180,7 @@ namespace Ma9MServer
 			{
 				Func<int, string> odds = CoachCatalog.PackPercentText;  // per mille since 11-10, written as % (83 · 14.5 · 2 · 0.5)
 				list.Add(new Product { Index = 203, Tab = 2, Order = 3, Image = "shop_pack_coach", Type = "코칭스태프", Name = "코칭스태프 카드팩", Cost = CoachCatalog.PackPrice,
-					Kind = Kind.CoachPack, Item = CoachCatalog.Pack, Description = $"코치 카드 1장. 사면 바로 엽니다.\n노말 {odds(1)}% · 스페셜 {odds(2)}% · 레어 {odds(3)}% · 엘리트 {odds(4)}%" });
+					Kind = Kind.CoachPack, Item = CoachCatalog.Pack, Description = $"코치 카드 1장 (1군에 가장 많은 구단(계보) 코치 {CoachCatalog.OwnLinePercent}%).\n노말 {odds(1)}% · 스페셜 {odds(2)}% · 레어 {odds(3)}% · 엘리트 {odds(4)}%" });
 			}
 			list.Add(new Product { Index = 301, Tab = 3, Order = 1, Image = "shop_roster_plus", Type = "확장", Name = "로스터 확장 +20", Kind = Kind.Roster, Item = 301 });
 			// User, 2026-10-19: 스탯재분배권 at 100,000 MP (an inventory item, bought like the training pack).
@@ -833,7 +833,9 @@ namespace Ma9MServer
 				log = $"refused {p.Name} x{amount}: {why}";
 				return new List<Packet.PKS_PACKET> { reply };
 			}
-			List<int> cards = Enumerable.Range(0, amount).Select(_ => CoachCatalog.Roll(s_rnd)).ToList();
+			// 자팀 계보 at CoachCatalog.OwnLinePercent (user, 2026-11-13).
+			int ownLine = CoachHandlers.OwnLine(user);
+			List<int> cards = Enumerable.Range(0, amount).Select(_ => CoachCatalog.RollPack(s_rnd, ownLine)).ToList();
 			CoachHandlers.AddCoaches(user, cards);
 			int after = s_db.AddMp(user, -p.Cost * amount);
 			reply.error.SetNoError();

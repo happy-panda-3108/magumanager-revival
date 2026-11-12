@@ -234,6 +234,12 @@ namespace Ma9MServer
 			}
 			reply.my_point.n = Mp(session);
 			session.Send(reply);
+			// The record the games just confirmed made (2026-11-12, AI tester NC 23: after 모두 확인 the top bar showed the new
+			// record only when an 업적 popup came with it, whose payment sends the bar; with none it stayed until the lobby).
+			if (session.Team != null)
+			{
+				TopBar.Send(session);
+			}
 		}
 
 		// The client starts both sides of a league broadcast on pitcher slot (game - 1) % 5 (DataCenter: its own rotation
@@ -710,6 +716,28 @@ namespace Ma9MServer
 			return now < start.AddSeconds(seconds) ? g : null;
 		}
 
+		// 순위 변동 in the lobby (user, 2026-11-12: "로비의 순위 표시는 전날 마지막 순위와 비교합시다. 전 시즌이랑 비교하는건줄은 몰랐네"):
+		// the rank at the end of the previous day, from the season's games before today 0시 (and before the first
+		// unconfirmed one, so no result shows ahead of its screen). It used to be last season's final rank (LastRank). With
+		// no game before today in this season (its first day, a club that joined today) there is nothing to compare: no change.
+		public static int PreviousDayRank(LeagueState s, int now) => PreviousDayRank(Store, s, now, DateTime.Today);
+
+		// `today`: that day's 0시 (LobbyRankSelfTest asks for past days).
+		internal static int PreviousDayRank(LeagueStore store, LeagueState s, int now, DateTime today)
+		{
+			int from = Math.Max(1, s.FirstGame);
+			if (from > LeagueRules.Games || from >= s.NextGame || s.SlotTime(from) >= today) return now;
+			int first = s.NextGame;
+			for (int g = from; g < s.NextGame && g <= LeagueRules.Games; g++)
+			{
+				if (s.SlotTime(g) >= today) { first = g; break; }
+			}
+			List<LeagueGame> pending = store.Games(s.UserCode, s.Season, club: s.MyIndex, unconfirmedOnly: true);
+			if (pending.Count > 0) first = Math.Min(first, pending.Min(g => g.Game));
+			if (first <= from) return now;
+			return store.ViewBefore(s, first).RankOf(s.MyIndex);
+		}
+
 		// The lobby's next-match box, ball caps, ranking and time to the next league.
 		public static void FillMain(GameSession session, Ma9MPacket.PKS_SC_ENTER_MAIN reply)
 		{
@@ -720,7 +748,7 @@ namespace Ma9MServer
 			reply.tomorrow_max_cost.n = (byte)LeagueRules.BallCap[s.CapTier];
 			LeagueState view = Store.ConfirmedView(s);  // no results ahead of the unconfirmed-games screen
 			reply.team_ranking_now.n = view.RankOf(s.MyIndex);
-			reply.team_ranking_befor.n = s.Clubs[s.MyIndex].LastRank > 0 ? s.Clubs[s.MyIndex].LastRank : reply.team_ranking_now.n;
+			reply.team_ranking_befor.n = PreviousDayRank(s, reply.team_ranking_now.n);
 			// Hours to the next league's formation (LeagueCalendar: 59 h into the season).
 			DateTime form = s.Start + LeagueCalendar.FormAt;
 			reply.hours_to_next_league_organize.n = (byte)Math.Clamp(Math.Ceiling((form - DateTime.Now).TotalHours), 0, 255);

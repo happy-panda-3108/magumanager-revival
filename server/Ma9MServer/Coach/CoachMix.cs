@@ -49,7 +49,7 @@ namespace Ma9MServer
 		}
 
 		// Null = the cards are gone and `made` is held. `how`: "승급" (four copies), "같은 구단" (four of one line), "무작위",
-		// "같은 구단 엘리트" or "엘리트 다시 뽑기".
+		// "같은 코치 능력치 다시" (three 엘리트 타격·투수코치 of one line), "같은 구단 엘리트" or "엘리트 다시 뽑기".
 		internal static string TryCoachMix(uint user, int[] cards, Random rng, out int made, out string how)
 		{
 			made = 0;
@@ -81,7 +81,15 @@ namespace Ma9MServer
 			bool oneLine = cards.All(c => CoachCatalog.LineOf(c) == line);
 			bool same = oneLine && cards.All(c => CoachCatalog.Role(c) == role);
 			int club = CoachCatalog.Club(cards[rng.Next(cards.Length)]);
-			if (grade == CoachCatalog.Elite)
+			// Three 엘리트 타격코치 (or 투수코치) of one line (user, 2026-11-13 00:5x: "같은 계보·같은 역할 엘리트 3장을 넣으면 역할은 그대로
+			// 두고 능력치만 다시 뽑게" → 넣기): the same coach with its stat drawn again. Three of a role without a stat (수석·트레이닝·
+			// 치어리더) still give any 엘리트 of the line, as the same card again would only lose two.
+			if (grade == CoachCatalog.Elite && same && CoachCatalog.HasStat(role, CoachCatalog.Elite))
+			{
+				made = CoachCatalog.Roll(rng, CoachCatalog.Elite, club, role);
+				how = "같은 코치 능력치 다시";
+			}
+			else if (grade == CoachCatalog.Elite)
 			{
 				made = oneLine ? CoachCatalog.Roll(rng, CoachCatalog.Elite, club) : CoachCatalog.Roll(rng, CoachCatalog.Elite);
 				how = oneLine ? "같은 구단 엘리트" : "엘리트 다시 뽑기";

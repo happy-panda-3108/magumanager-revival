@@ -93,6 +93,18 @@ namespace Ma9MServer
 				case "advice":
 					Advice(catalog);
 					break;
+				case "othercard":
+					OtherCard(catalog);
+					break;
+				case "achievebundle":
+					AchieveBundle();
+					break;
+				case "consultroom":
+					ConsultRoom(catalog);
+					break;
+				case "lobbyrank":
+					LobbyRank();
+					break;
 				default:
 					Log($"unknown scenario {scenario}");
 					return 2;
@@ -215,6 +227,15 @@ namespace Ma9MServer
 			Check(ownedHere.All(seen.Contains) && ownedHere.OrderBy(i => i).SequenceEqual(mine.OrderBy(i => i)),
 				$"owned cards there are seen and marked owned: {string.Join(", ", ownedHere.Select(i => catalog.Get(i).Name))}");
 			Check(reply.total_count.n >= owned.Count, $"seen in all: {reply.total_count.n} (owned now {owned.Count})");
+		}
+
+		// 로비 순위 변동 (2026-11-12): the lobby's rank now and at the end of the previous day (LeagueHandlers.PreviousDayRank),
+		// for a check against the stored games (scratch lobbyrank_check.py).
+		private static void LobbyRank()
+		{
+			Send(new Ma9MPacket.PKS_CS_ENTER_MAIN());
+			Ma9MPacket.PKS_SC_ENTER_MAIN main = Await<Ma9MPacket.PKS_SC_ENTER_MAIN>();
+			Check(main.team_ranking_now.n > 0 && main.team_ranking_befor.n > 0, $"lobby rank: now {main.team_ranking_now.n}, end of yesterday {main.team_ranking_befor.n}");
 		}
 
 		// 미확인 경기 / 스코어보드 / 리그 중계 (2026-10-19 fixes): the top bar comes with the unconfirmed
@@ -801,6 +822,76 @@ namespace Ma9MServer
 				$"옛 앱처럼 1장: result {one.result.n}, arg {one.arg1.str}/{one.arg2.str}/{one.arg3.str}, 남은 확장권 {left2}");
 		}
 
+		// 면담실 second page (2026-11-12, user 11-10 결정 2): the 1군 cards whose 면담 effect from an earlier sitting still runs, with
+		// the time left (the copy's Prep adds such rows for the logged-in team).
+		private static void ConsultRoom(CardCatalog catalog)
+		{
+			Send(new Ma9MPacket.PKS_CS_ENTER_CONSULTING_ROOM());
+			Ma9MPacket.PKS_SC_ENTER_CONSULTING_ROOM room = Await<Ma9MPacket.PKS_SC_ENTER_CONSULTING_ROOM>();
+			PUICardInfo[] effects = room.EffectCard.array ?? Array.Empty<PUICardInfo>();
+			PLong[] ticks = room.EffectRemainTicks.array ?? Array.Empty<PLong>();
+			Log($"면담실: error {room.error.error_code.n}, visitors {room.PlayerCard.array?.Length ?? 0}, effects {string.Join(", ", effects.Select((c, i) => $"{catalog.Get(c.index.n)?.Name} {(i < ticks.Length ? TimeSpan.FromTicks(ticks[i].n).TotalHours : -1):F1}h left, 컨디션 {c.condition.n}"))}");
+			Check(room.error.error_code.n == 0 && effects.Length > 0 && effects.Length == ticks.Length && ticks.All(t => t.n > 0) && effects.Length <= 5,
+				$"second page: {effects.Length} card(s) with time left");
+		}
+
+		// 업적 at once (2026-11-12, user 11:5x 3번): the copy's Prep marks some cleared 업적 undelivered; once no league result waits,
+		// the next packet brings one "도전과제 n개 달성" list instead of a 도전과제완료 box each.
+		private static void AchieveBundle()
+		{
+			Send(new Ma9MPacket.PKS_CS_UNCONFIRMED_GAME_RESULT());
+			Ma9MPacket.PKS_SC_UNCONFIRMED_GAME_RESULT waiting = Await<Ma9MPacket.PKS_SC_UNCONFIRMED_GAME_RESULT>();
+			if ((waiting.game_result.array?.Length ?? 0) > 0)
+			{
+				Ma9MPacket.PKS_CS_CONFIRM_GAME_RESULT_SKIP skip = new Ma9MPacket.PKS_CS_CONFIRM_GAME_RESULT_SKIP();
+				skip.season.n = waiting.season.n;
+				skip.game_num_list.array = Array.Empty<PByte>();
+				Send(skip);
+				Await<Ma9MPacket.PKS_SC_CONFIRM_GAME_RESULT_SKIP>();
+				Log($"confirmed {waiting.game_result.array.Length} waiting game(s)");
+			}
+			int boxes = 0;
+			Ma9MPacket.PKS_SC_POPUP list = null;
+			Send(new Ma9MPacket.PKS_CS_ENTER_TEAM_MISSION());
+			System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
+			while (watch.ElapsedMilliseconds < 4000 && list == null)
+			{
+				Packet.PKS_PACKET p = s_connection.GetPacketFromQueue();
+				if (p == null) { System.Threading.Thread.Sleep(5); continue; }
+				if (p is Ma9MPacket.PKS_SC_GET_TEAM_MISSION_REWARD) boxes++;
+				if (p is Ma9MPacket.PKS_SC_POPUP pop && pop.Messages.array?.Length >= 2 && pop.Messages.array[0].str.StartsWith("도전과제")) list = pop;
+			}
+			string[] lines = list?.Messages.array[1].str.Split('\n') ?? Array.Empty<string>();
+			Log($"popup: {list?.Messages.array[0].str} | {string.Join(" | ", lines)}");
+			Check(list != null && boxes == 0 && lines.Length <= 5 && lines.All(l => PopupText.Px(l) <= PopupText.Limit),
+				$"one list popup, {boxes} 도전과제완료 box(es), {lines.Length} line(s), widest {(lines.Length == 0 ? 0 : lines.Max(PopupText.Px)):F0} px / {PopupText.Limit:F0}");
+		}
+
+		// Another club's card (2026-11-12, user: "타팀 선수의 wrc+와 war값이 보이지 않는다"): the 수훈선수 leaders that are not the
+		// team's own, opened as the scoreboard does (CARD_DETAIL_INFO_OF_OTHERS, every club searched) — WAR and wRC+ like an own card.
+		private static void OtherCard(CardCatalog catalog)
+		{
+			// 팀별 선수 순위 (every club's leaders, user_num = club) — the 수훈선수 board may hold only the team's own cards.
+			Send(new Ma9MPacket.PKS_CS_ENTER_TEAM_PLAYER_RANK());
+			Ma9MPacket.PKS_SC_ENTER_TEAM_PLAYER_RANK rank = Await<Ma9MPacket.PKS_SC_ENTER_TEAM_PLAYER_RANK>();
+			PUICardInfoMVP[] rows = rank.players.array ?? Array.Empty<PUICardInfoMVP>();
+			List<int> others = rows.Where(r => r.user_num.n != rank.my_user_num.n).Select(r => r.ui_info.index.n).Where(i => i != 0).Distinct().ToList();
+			Check(others.Count > 0, $"팀별 선수 순위: {rows.Length} rows, {others.Count} cards of other clubs");
+			int batters = 0, pitchers = 0;
+			foreach (int idx in others.Take(8))
+			{
+				Send(new Ma9MPacket.PKS_CS_CARD_DETAIL_INFO_OF_OTHERS { user_num = { n = 255 }, index = { n = idx } });
+				Ma9MPacket.PKS_SC_CARD_DETAIL_INFO_OF_OTHERS d = Await<Ma9MPacket.PKS_SC_CARD_DETAIL_INFO_OF_OTHERS>();
+				CardInfo c = catalog.Get(idx);
+				bool pitcher = c != null && !c.IsBatter;
+				int played = pitcher ? d.pitcher_record.innings_by3.n : d.batter_record.PA.n;
+				Log($"  {c?.Year} {c?.Name} ({(pitcher ? "투수" : "타자")}): {(pitcher ? "아웃 " : "타석 ")}{played}, WAR {d.war.f:F2}, wRC+ {d.wrc_plus.n}");
+				if (played > 0 && pitcher) pitchers += d.war.f != 0 ? 1 : 0;
+				if (played > 0 && !pitcher) batters += d.war.f != 0 && d.wrc_plus.n != 0 ? 1 : 0;
+			}
+			Check(batters > 0 && pitchers > 0, $"other clubs' cards with WAR (and wRC+ for batters): {batters} batter(s), {pitchers} pitcher(s)");
+		}
+
 		// LESSON2026 (2026-11-11; the user allowed it for the AI tester accounts): 1억 MP and ten of each 특강 item, once per account.
 		// On a copy of the data only, with an AI tester account (autotest3..6).
 		private static void LessonCoupon()
@@ -812,6 +903,10 @@ namespace Ma9MServer
 			int Gain(int item) => after.GetValueOrDefault(item) - before.GetValueOrDefault(item);
 			Check(first.result.n == 0 && Gain(LessonHandlers.Lucky) == 10 && Gain(LessonHandlers.Instant) == 10 && Gain(LessonHandlers.Reset) == 10,
 				$"LESSON2026: result {first.result.n}, 행운권 +{Gain(LessonHandlers.Lucky)}, 즉시 완료권 +{Gain(LessonHandlers.Instant)}, 초기화권 +{Gain(LessonHandlers.Reset)}");
+			// 11-12: what it gave, in the reply's message field (error code 0) for the 1.0.46 app.
+			string gift = first.error.error_msg.str ?? string.Empty;
+			Check(first.error.error_code.n == 0 && gift.StartsWith("받은 것: 1억 MP") && gift.Length <= 127 && gift.Split('\n').All(line => PopupText.Px(line) <= PopupText.Limit),
+				$"LESSON2026 받은 것 글: \"{gift.Replace("\n", " | ")}\"");
 			Send(new Ma9MPacket.PKS_CS_USE_COUPON { coupon_code = { str = "LESSON2026" } });
 			Ma9MPacket.PKS_SC_USE_COUPON again = Await<Ma9MPacket.PKS_SC_USE_COUPON>();
 			Check(again.result.n == 2, $"LESSON2026 두 번째: result {again.result.n} (2 = 이미 씀)");
@@ -819,6 +914,8 @@ namespace Ma9MServer
 
 		// 특성 추천 배분 · 자동 편성 (AdviceHandlers, 2026-11-11) on a data copy: each asked with REQ_SCENE_TUTORIAL "ma9m:…" comes
 		// back as POPUP type 10; a plain OK (ACK 0, as types 1/2 send) changes nothing; 적용 (ACK 10) saves it and answers type 11.
+		private static bool s_lessonSeen;
+
 		private static void Advice(CardCatalog catalog)
 		{
 			Ma9MPacket.PKS_SC_POPUP Ask(string what)
@@ -861,13 +958,39 @@ namespace Ma9MServer
 				Check(t.Type.n == 1, "no advice: a plain message");
 			}
 
-			foreach (string mode in new[] { "free", "keep" })
+			// 11-12: "keep" the 1.0.45 way, first through the 특강 screen in between (its info popup is type 10 too: the old app's
+			// 적용 there must apply nothing), then cancelled; "free" the 1.0.46 way (ma9m:v2:, types 20/21), applied.
+			foreach (string mode in new[] { "keep", "keep", "free" })
 			{
+				bool v2 = mode == "free";
 				string before = Lineup();
-				Ma9MPacket.PKS_SC_POPUP l = Ask("ma9m:autolineup:" + mode);
-				Log($"auto lineup {mode}: type {l.Type.n}: {Text(l)}");
-				if (l.Type.n != AdviceHandlers.AskType)
+				Ma9MPacket.PKS_SC_POPUP l = Ask((v2 ? "ma9m:v2:" : "ma9m:") + "autolineup:" + mode);
+				Log($"auto lineup {mode}{(v2 ? " (v2)" : string.Empty)}: type {l.Type.n}: {Text(l)}");
+				if (v2 && l.Type.n == AdviceHandlers.AskType2)
 				{
+					// 11-12 morning: [title, summary, ok, page…], every page short enough for the window.
+					string[] msgs = l.Messages.array.Select(m => m.str).ToArray();
+					List<string> pages = new[] { msgs[1] }.Concat(msgs.Skip(3)).ToList();
+					int longest = pages.Max(p => p.Split('\n').Length);
+					Check(msgs.Length >= 4 && longest <= 14 && pages.All(p => p.Split('\n').All(line => PopupText.Px(line) <= PopupText.Limit)),
+						$"v2 window: {pages.Count} page(s), longest {longest} lines, widest {pages.SelectMany(p => p.Split('\n')).Max(PopupText.Px):F0} px");
+					for (int i = 0; i < pages.Count; i++)
+					{
+						Log($"  page {i + 1}:\n    " + pages[i].Replace("\n", "\n    "));
+					}
+				}
+				if (l.Type.n != (v2 ? AdviceHandlers.AskType2 : AdviceHandlers.AskType))
+				{
+					Check(l.Type.n == 1, $"no lineup advice: a plain message (type {l.Type.n})");
+					continue;
+				}
+				if (mode == "keep" && !s_lessonSeen)
+				{
+					s_lessonSeen = true;
+					Send(new Ma9MPacket.PKS_CS_ENTER_LESSON());
+					Ma9MPacket.PKS_SC_POPUP info = Await<Ma9MPacket.PKS_SC_POPUP>(10000);
+					Ack(AdviceHandlers.AckApply);
+					Check(info.Type.n == LessonHandlers.InfoPopupType && Lineup() == before, $"특강 info (type {info.Type.n}) then ACK 10: the 1군 stays");
 					continue;
 				}
 				if (mode == "keep")
@@ -879,7 +1002,7 @@ namespace Ma9MServer
 				Ack(AdviceHandlers.AckApply);
 				Ma9MPacket.PKS_SC_POPUP done = Await<Ma9MPacket.PKS_SC_POPUP>(10000);
 				string after = Lineup();
-				Check(done.Type.n == AdviceHandlers.DoneType && after != before, $"적용: type {done.Type.n}: {Text(done)}; 1군 changed");
+				Check(done.Type.n == AdviceHandlers.DoneType2 && after != before, $"적용 (v2): type {done.Type.n}: {Text(done)}; 1군 changed");
 				Log($"  1군 now: {string.Join(", ", after.Split('|')[0].Split(',').Take(9).Select(s => catalog.Get(int.Parse(s))?.Name ?? s))} | {string.Join(", ", after.Split('|')[2].Split(',').Select(s => catalog.Get(int.Parse(s))?.Name ?? s))}");
 			}
 		}

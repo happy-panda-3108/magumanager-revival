@@ -41,7 +41,7 @@ namespace Ma9MServer
 			(Kind.SingleYearTeam, "단일 년도 팀", "같은 년도·같은 팀", 6, 6, 15),
 			(Kind.SingleYearDualTeam, "단일 년도 듀얼 팀", "같은 년도의 두 팀", 4, 4, 15),
 			(Kind.DualYearTeam, "듀얼 년도 단일 팀", "같은 팀의 두 년도", 4, 4, 14),
-			(Kind.DecadeTeam, "연대 단일 팀", "같은 팀·같은 연대", 3, 3, 8),
+			(Kind.DecadeTeam, "연대 단일 팀", "같은 팀·같은 연대", 3, 3, 7),   // C 8 → 7 on 2026-11-12 (DecadeNeeded below)
 			(Kind.YearAllStar, "단일 년도 올스타", "같은 년도", 2, 2, 3),
 			(Kind.TeamAllStar, "단일 팀 올스타", "같은 팀", 1, 1, 2),
 			(Kind.DualTeamAllStar, "듀얼 팀 올스타", "두 팀", 1, 1, 1),
@@ -53,6 +53,28 @@ namespace Ma9MServer
 
 		// Members needed per slot (C, H, P) and grade (S, A, B, C).
 		private static readonly int[][] Needed = { new[] { 25, 19, 14, 11 }, new[] { 14, 11, 8, 6 }, new[] { 11, 8, 6, 5 } };
+
+		// 연대 단일 팀's own steps (user, 2026-11-12 11:5x: "연대 팀컬러 중간 단계를 두고 효과를 조금 낮춰봅시다. 난이도를 살짝 완화시켜
+		// 봅시다"; 11-10 결정 4; AI tester 쌍방울 11-11 B2: a 1990s 쌍방울 25 lost S → A, +8 → +4 on 24 cards, for one card changed):
+		// A one or two short of all (22 / 12 / 10) at 0.7, B at the old A count at 0.5, C at the old B at 0.3; the S of the C slot
+		// 8 → 7. The 11-13 of 25 that made the old C (+1) make none now.
+		private static readonly int[][] DecadeNeeded = { new[] { 25, 22, 19, 14 }, new[] { 14, 12, 11, 8 }, new[] { 11, 10, 8, 6 } };
+
+		private static readonly double[] DecadeShare = { 1.0, 0.7, 0.5, 0.3 };
+
+		// 듀얼 팀 kinds (user, 2026-11-10 결정 8: "듀얼 팀 팀컬러의 경우 각 팀별로 최소 10명씩 있게끔"): each of the two teams has at
+		// least 40% of the grade's members (10 of 25, 8 of 19 …; 6 of 14 batters, 5 of 11 pitchers), so a near single team is no
+		// dual one. 단일 년도 듀얼 팀 and 듀얼 팀 올스타; 듀얼 년도 단일 팀 (two seasons of one team) as before.
+		private const double DualEachShare = 0.4;
+
+		private static bool IsDual(Kind kind) => kind == Kind.SingleYearDualTeam || kind == Kind.DualTeamAllStar;
+
+		private static int Need(int k, int slot, int grade) => Kinds[k].kind == Kind.DecadeTeam ? DecadeNeeded[slot][grade] : Needed[slot][grade];
+
+		private static double Share(int k, int grade) => Kinds[k].kind == Kind.DecadeTeam ? DecadeShare[grade] : GradeShare[grade];
+
+		// Each of a dual kind's two teams at a count (10 of 25).
+		private static int DualEach(int need) => (int)Math.Ceiling(need * DualEachShare - 1e-9);
 
 		private static readonly string[] SlotNames = { "C", "H", "P" };
 
@@ -204,7 +226,7 @@ namespace Ma9MServer
 			var k = Kinds[kindIndex];
 			int s = slot == 0 ? k.c : slot == 1 ? k.h : k.p;
 			// Rounded; an entry worth 0 is left out of the table (small kinds have no low grades in a slot).
-			return s <= 0 ? 0 : (int)Math.Floor(s * GradeShare[grade] + 0.5);
+			return s <= 0 ? 0 : (int)Math.Floor(s * Share(kindIndex, grade) + 0.5);
 		}
 
 		public static void Register(GameLoop loop, Database db, CardCatalog catalog, string dataDir)
@@ -275,7 +297,8 @@ namespace Ma9MServer
 						int v = Value(k, slot, g);
 						if (v <= 0) continue;
 						string effect = $"해당 선수 전 능력치 +{v}";
-						string cond = g == 0 ? $"{ScopeNames[slot]} 전원이 {Kinds[k].group} 선수" : $"{Kinds[k].group} 선수가 {ScopeNames[slot]} 중 {Needed[slot][g]}명 이상";
+						string cond = (g == 0 ? $"{ScopeNames[slot]} 전원이 {Kinds[k].group} 선수" : $"{Kinds[k].group} 선수가 {ScopeNames[slot]} 중 {Need(k, slot, g)}명 이상")
+							+ (IsDual(Kinds[k].kind) ? $"(팀마다 {DualEach(Need(k, slot, g))}명 이상)" : string.Empty);
 						lines.Add(string.Join("\t", Index(Kinds[k].kind, slot, g), SlotNames[slot], (int)Kinds[k].kind, GradeNames[g], Kinds[k].name, cond,
 							slot == 0 ? effect : "NONE", slot == 1 ? effect : "NONE", slot == 2 ? effect : "NONE"));
 					}
@@ -287,9 +310,6 @@ namespace Ma9MServer
 				File.WriteAllText(path, text);
 			}
 		}
-
-		// Cards of a scope that belong to the kind's best group.
-		private static int Members(Kind kind, List<CardInfo> cards) => BestGroup(kind, cards).count;
 
 		// The kind's best group in a scope and its card count. Group numbers: team·100 + yy (단일 년도 팀),
 		// yy·10000 + team·100 + team (단일 년도 듀얼 팀), team·10000 + yy·100 + yy (듀얼 년도 단일 팀),
@@ -445,6 +465,82 @@ namespace Ma9MServer
 			return new[] { bats.Concat(pits).ToList(), bats, pits };
 		}
 
+		// The best grade (0 S … 3 C, -1 none) a scope reaches in a kind and slot, with the group and its members (2026-11-12: the
+		// kind's own steps, Need; a dual kind's pair with each team at DualEach, DualReach).
+		private static (int group, int grade, int members) Reach(int k, int slot, List<CardInfo> cards)
+		{
+			if (IsDual(Kinds[k].kind))
+			{
+				return DualReach(k, slot, cards);
+			}
+			(int group, int members) = BestGroup(Kinds[k].kind, cards);
+			int grade = members == 0 ? -1 : Enumerable.Range(0, 4).Where(g => members >= Need(k, slot, g) && Value(k, slot, g) > 0).DefaultIfEmpty(-1).First();
+			return (group, grade, members);
+		}
+
+		// A dual kind's best pair: in each season the four clubs with most cards (단일 년도 듀얼 팀), or the five lineages with most
+		// (듀얼 팀 올스타); the best grade where both together have the members and each has DualEach of them, then the most members.
+		// Members of each team as the single kinds count them (a 레전드 with its lineage). Group numbers as BestGroup's.
+		private static (int group, int grade, int members) DualReach(int k, int slot, List<CardInfo> cards)
+		{
+			Kind kind = Kinds[k].kind;
+			List<CardInfo> normal = cards.Where(c => !c.IsLegend).ToList();
+			if (normal.Count == 0) return (0, -1, 0);
+			List<(int group, int a, int b)> pairs = new List<(int, int, int)>();
+			// Seasons too small even for a hint (half the lowest grade) are skipped: 자동 편성 asks this thousands of times.
+			int floor = (Need(k, slot, 3) + 1) / 2 - (cards.Count - normal.Count);
+			if (kind == Kind.SingleYearDualTeam)
+			{
+				foreach (IGrouping<int, CardInfo> season in normal.GroupBy(c => c.Year).Where(s => s.Count() >= floor))
+				{
+					int yy = season.Key % 100;
+					List<int> teams = season.GroupBy(c => c.TeamCode).OrderByDescending(t => t.Count()).ThenBy(t => t.Key).Take(4).Select(t => t.Key).ToList();
+					Dictionary<int, int> n = teams.ToDictionary(t => t, t => cards.Count(c => IsMember(Kind.SingleYearTeam, t * 100 + yy, c)));
+					for (int i = 0; i < teams.Count; i++)
+					{
+						for (int j = i + 1; j < teams.Count; j++)
+						{
+							int lo = Math.Min(teams[i], teams[j]), hi = Math.Max(teams[i], teams[j]);
+							pairs.Add((yy * 10000 + lo * 100 + hi, n[lo], n[hi]));
+						}
+					}
+				}
+			}
+			else
+			{
+				List<int> lines = cards.GroupBy(c => Lineage(c.TeamCode)).OrderByDescending(t => t.Count()).ThenBy(t => t.Key).Take(5).Select(t => t.Key).ToList();
+				Dictionary<int, int> n = lines.ToDictionary(t => t, t => cards.Count(c => IsMember(Kind.TeamAllStar, t, c)));
+				for (int i = 0; i < lines.Count; i++)
+				{
+					for (int j = i + 1; j < lines.Count; j++)
+					{
+						int lo = Math.Min(lines[i], lines[j]), hi = Math.Max(lines[i], lines[j]);
+						pairs.Add((lo * 100 + hi, n[lo], n[hi]));
+					}
+				}
+			}
+			if (pairs.Count == 0) return (0, -1, 0);
+			int GradeOf((int group, int a, int b) p) => Enumerable.Range(0, 4)
+				.Where(g => p.a + p.b >= Need(k, slot, g) && Math.Min(p.a, p.b) >= DualEach(Need(k, slot, g)) && Value(k, slot, g) > 0).DefaultIfEmpty(-1).First();
+			var best = pairs.Select(p => (p.group, grade: GradeOf(p), members: p.a + p.b))
+				.OrderBy(p => p.grade < 0 ? 9 : p.grade).ThenByDescending(p => p.members).ThenByDescending(p => p.group).First();
+			return best;
+		}
+
+		// Whether batters and pitchers (a 1군's 14 + 11) reach any team colour; no catalog needed (StarterTeam.DrawClub, 2026-11-12).
+		public static bool AnyAvailable(List<CardInfo> batters, List<CardInfo> pitchers)
+		{
+			List<CardInfo>[] scopes = { batters.Concat(pitchers).ToList(), batters, pitchers };
+			for (int k = 0; k < Kinds.Length; k++)
+			{
+				for (int slot = 0; slot < 3; slot++)
+				{
+					if (Reach(k, slot, scopes[slot]).grade >= 0) return true;
+				}
+			}
+			return false;
+		}
+
 		// Entries the lineup qualifies for: per kind and slot, its best group at the best grade it reaches.
 		public static HashSet<int> Available(Lineup l)
 		{
@@ -454,14 +550,10 @@ namespace Ma9MServer
 			{
 				for (int slot = 0; slot < 3; slot++)
 				{
-					(int group, int members) = BestGroup(Kinds[k].kind, scopes[slot]);
-					for (int g = 0; g < 4; g++)
+					(int group, int grade, int members) = Reach(k, slot, scopes[slot]);
+					if (members > 0 && grade >= 0)
 					{
-						if (members > 0 && members >= Needed[slot][g] && Value(k, slot, g) > 0)
-						{
-							ok.Add(Instance(Kinds[k].kind, slot, g, group));
-							break;
-						}
+						ok.Add(Instance(Kinds[k].kind, slot, grade, group));
 					}
 				}
 			}
@@ -469,7 +561,8 @@ namespace Ma9MServer
 		}
 
 		// Greyed hints for the list: per kind and slot, the best group's next grade up (or its lowest grade
-		// when it reaches none), so the screen shows what a few more players would give.
+		// when it reaches none), so the screen shows what a few more players would give. Since 2026-11-12 (user 11-10 결정 8:
+		// "팀컬러의 경우 조건의 반이상 인원이 갖춰지면 보이게끔") only once the group has half that grade's members.
 		private static List<int> Hints(Lineup l)
 		{
 			List<CardInfo>[] scopes = Scopes(l);
@@ -478,11 +571,11 @@ namespace Ma9MServer
 			{
 				for (int slot = 0; slot < 3; slot++)
 				{
-					(int group, int members) = BestGroup(Kinds[k].kind, scopes[slot]);
+					(int group, int grade, int members) = Reach(k, slot, scopes[slot]);
 					if (members == 0) continue;
-					int reached = Enumerable.Range(0, 4).Where(g => members >= Needed[slot][g] && Value(k, slot, g) > 0).DefaultIfEmpty(4).First();
+					int reached = grade < 0 ? 4 : grade;
 					int target = Enumerable.Range(0, reached).Where(g => Value(k, slot, g) > 0).DefaultIfEmpty(-1).Last();
-					if (target >= 0) hints.Add(Instance(Kinds[k].kind, slot, target, group));
+					if (target >= 0 && members * 2 >= Need(k, slot, target)) hints.Add(Instance(Kinds[k].kind, slot, target, group));
 				}
 			}
 			return hints;
@@ -560,6 +653,21 @@ namespace Ma9MServer
 			int[] choice = Enumerable.Range(0, 3).Select(slot => Strongest(l, slot, available)).ToArray();
 			return (Bonuses(l, choice), choice);
 		}
+
+		// For 자동 편성's team colour plans (engine session, 2026-11-12): kinds, members needed, entry numbers and membership.
+		// kindIndex 0-6 in the Kinds order; slot 0 C, 1 H, 2 P; grade 0 S … 3 C; group as BestGroup numbers it.
+		public static int KindCount => Kinds.Length;
+
+		public static int NeededFor(int slot, int grade) => Needed[slot][grade];
+
+		// By kind (systems session 2026-11-12: 연대 단일 팀's own steps). A dual kind also wants DualEachFor of each team.
+		public static int NeededFor(int kindIndex, int slot, int grade) => Need(kindIndex, slot, grade);
+
+		public static int DualEachFor(int kindIndex, int slot, int grade) => IsDual(Kinds[kindIndex].kind) ? DualEach(Need(kindIndex, slot, grade)) : 0;
+
+		public static int InstanceOf(int kindIndex, int slot, int grade, int group) => Instance(Kinds[kindIndex].kind, slot, grade, group);
+
+		public static bool IsMemberOf(int instance, CardInfo c) => instance >= InstanceBase && Parse(instance) is { } e && IsMember(e.kind, instance % 1_000_000, c);
 
 		// Writes the bonuses into team_card.team_color (every card; 0 off the 1군). Call after the lineup or
 		// the choice changes.
@@ -700,11 +808,8 @@ namespace Ma9MServer
 			{
 				for (int slot = 0; slot < 3; slot++)
 				{
-					int members = Members(Kinds[k].kind, scopes[slot]);
-					for (int g = 0; g < 4; g++)
-					{
-						if (members >= Needed[slot][g]) best[slot] = Math.Max(best[slot], Value(k, slot, g));
-					}
+					(_, int grade, _) = Reach(k, slot, scopes[slot]);
+					if (grade >= 0) best[slot] = Math.Max(best[slot], Value(k, slot, grade));
 				}
 			}
 			return (best[0] + best[1], best[0] + best[2]);
@@ -842,6 +947,9 @@ namespace Ma9MServer
 
 		// "LG 올스타 타자진 A"
 		private static string Short(int i) => Parse(i) is { } e ? $"{Label(i).name} {GradeNames[e.grade]}" : "-";
+
+		// The same for AdviceHandlers' 자동 편성 window (systems session, 2026-11-12).
+		public static string ShortName(int i) => Short(i);
 
 		// 빨간 점 (user, 2026-11-09 D-2: "팀컬러 역시 사용가능한데 등록을 안 한 상태면 빨간 점을 표시"): a slot left empty although
 		// the 1군 reaches an entry for it, or entries new since the team colour screen was last opened (fresh).
@@ -1097,6 +1205,37 @@ namespace Ma9MServer
 				SetState(user, "fresh", 0);
 				Check(same == null && gainedSame.Length > 0 && !gainedSame.Intersect(Registered(user)).Any(),
 					$"등록 그대로인 저장: 서버 팝업 없음, 앱의 새 팀컬러 팝업에 {gainedSame.Length}개(예: {Short(gainedSame.FirstOrDefault())})");
+
+				// 7. (2026-11-12) 연대 단일 팀's own steps (25 S +7, 22 A +5, 19 B +4, 14 C +2, 13 none) and the dual kinds' each-team share
+				// (25 = 15 + 10 S; 16 + 9 not S but A; 24 + 1 none), on made-up whole-1군 lists (slot C).
+				{
+					int dk = Array.FindIndex(Kinds, x => x.kind == Kind.DecadeTeam), sk = Array.FindIndex(Kinds, x => x.kind == Kind.SingleYearDualTeam);
+					var decade = real.GroupBy(c => (line: Lineage(c.TeamCode), dec: c.Year / 10)).Where(g => g.Count() >= 25).OrderByDescending(g => g.Key.dec).First();
+					// One card per club-year of other lines and decades, batters and pitchers both (no group of theirs reaches anything).
+					List<CardInfo> outsiders = real.Where(c => Lineage(c.TeamCode) != decade.Key.line && c.Year / 10 != decade.Key.dec)
+						.GroupBy(c => (c.TeamCode, c.Year, c.IsBatter)).Select(g => g.First()).Take(80).ToList();
+					List<CardInfo> Mix(int members) => decade.Take(members).Concat(outsiders.Take(25 - members)).ToList();
+					string Step(int members) { var r = Reach(dk, 0, Mix(members)); return r.grade < 0 ? "-" : $"{GradeNames[r.grade]} +{Value(dk, 0, r.grade)}"; }
+					string steps = string.Join(" · ", new[] { 25, 24, 22, 21, 19, 18, 14, 13 }.Select(m => $"{m}명 {Step(m)}"));
+					Check(steps == "25명 S +7 · 24명 A +5 · 22명 A +5 · 21명 B +4 · 19명 B +4 · 18명 C +2 · 14명 C +2 · 13명 -", $"연대 단일 팀 단계: {steps}");
+					var season = real.GroupBy(c => c.Year).Select(y => (y.Key, teams: y.GroupBy(c => c.TeamCode).Where(t => t.Count() >= 24).Select(t => t.ToList()).Take(2).ToList()))
+						.Where(x => x.teams.Count == 2).OrderByDescending(x => x.Key).FirstOrDefault();
+					if (season.teams == null)
+					{
+						Check(false, "듀얼 팀 시험: 24장 넘는 두 구단이 있는 시즌이 없음");
+					}
+					else
+					{
+						List<CardInfo> Pair(int a) => season.teams[0].Take(a).Concat(season.teams[1].Take(25 - a)).ToList();
+						string Dual(int a) { var r = Reach(sk, 0, Pair(a)); return r.grade < 0 ? "-" : GradeNames[r.grade]; }
+						string duals = string.Join(" · ", new[] { 15, 16, 20, 24 }.Select(a => $"{a}+{25 - a} {Dual(a)}"));
+						Check(duals == "15+10 S · 16+9 A · 20+5 C · 24+1 -", $"듀얼 팀 팀마다 40%: '{season.Key % 100:00} {duals}");
+					}
+					// Hints: half the members of the shown grade (14 of 25 for 연대 S's next step … 7 of the lowest C 14).
+					Lineup few = Make(decade.Where(c => c.IsBatter).Take(3).Concat(outsiders.Where(c => c.IsBatter)).Take(14).ToList(), outsiders.Where(c => !c.IsBatter).Take(11).ToList());
+					bool hinted = Hints(few).Any(i => Parse(i)?.kind == Kind.DecadeTeam && i / 10_000_000 % 10 == 0);
+					Check(!hinted, $"연대 3명뿐인 1군: 전체 칸 연대 힌트 {(hinted ? "보임 FAIL" : "안 보임")}");
+				}
 
 				// 6. 특성 CP: the dot when CP is left that a trait can take.
 				int used = TeamPropertyHandlers.Points(user).Values.Sum(v => v), cp = TeamPropertyHandlers.AvailableCp(user);

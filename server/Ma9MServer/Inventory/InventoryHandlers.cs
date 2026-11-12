@@ -351,6 +351,9 @@ namespace Ma9MServer
 						s_store.Add(user, item, count);
 					}
 					reply.result.n = 0;
+					// What it gave (AI testers 11-11·11-12: "쿠폰별로 무엇을 받았는지 알 수 없다"): in the reply's message field (127 letters, error
+					// code 0), which the app from 1.0.46 shows under its success line; older apps ignore it.
+					reply.error.error_msg.str = CouponText(coupon);
 					ServerLog.Info($"[{session.Id}] coupon {code}: +{coupon.Mp} MP, {string.Join(", ", coupon.Items.Select(i => $"{i.item} x{i.count}"))}");
 				}
 			}
@@ -359,6 +362,25 @@ namespace Ma9MServer
 			{
 				TopBar.Send(session);
 			}
+		}
+
+		// "받은 것: 1억 MP · 특별강좌 행운권 10개 · …", wrapped for the popup, at most 127 letters (the field's one-byte length).
+		public static string CouponText(CouponDef coupon)
+		{
+			static string Mp(long mp) => mp % 100_000_000 == 0 ? $"{mp / 100_000_000}억" : mp >= 10_000 ? $"{mp / 10_000:#,0}만" : $"{mp:#,0}";
+			List<string> parts = new List<string>();
+			if (coupon.Mp != 0)
+			{
+				parts.Add($"{Mp(coupon.Mp)} MP");
+			}
+			parts.AddRange(coupon.Items.Select(i => $"{ItemCatalog.Get(i.item)?.Name ?? "아이템"} {i.count}개"));
+			if (parts.Count == 0)
+			{
+				return null;
+			}
+			parts[0] = "받은 것: " + parts[0];
+			string text = string.Join("\n", PopupText.Wrap(parts, " · "));
+			return text.Length <= 127 ? text : text.Substring(0, 126) + "…";
 		}
 	}
 }

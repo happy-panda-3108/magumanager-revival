@@ -17,6 +17,14 @@ if ($owner) {
     Stop-Process -Id $owner -Force
     Start-Sleep -Seconds 2
 }
+# Test clients share one data folder: two started within seconds fought over data.hhj and the loser stayed on
+# "Checking..." for good (11-12 00:54, four of five; DataManager.Load fixed in the client from the build after tester_l).
+# So wait until the youngest running client is 20 s old.
+while ($true) {
+    $young = Get-Process Ma9M -ErrorAction SilentlyContinue | Where-Object { $_.StartTime -gt (Get-Date).AddSeconds(-20) }
+    if (-not $young) { break }
+    Start-Sleep -Seconds 2
+}
 $log = Join-Path $dir 'game.log'
 if (Test-Path $log) { Move-Item -Force $log (Join-Path $dir ("game_" + (Get-Date -Format 'MMdd_HHmmss') + ".log")) }
 $argList = @('-batchmode', '-ma9mremote', "$port", '-ma9mserver', '127.0.0.1:18080', '-ma9mlogin', $account, 'autotest',

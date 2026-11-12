@@ -175,6 +175,10 @@ namespace Ma9MServer
 					RecordHandlers.FillBestWorst(user, line, reply.batter_record, reply.pitcher_record);
 					reply.batter_record.BB.n = (byte)Math.Clamp(line.BB + line.HBP, 0, 255);
 					RecordHandlers.FillRecent(user, idx, reply.recent_batter_record, reply.recent_pitcher_record, line.Club);
+					// WAR / wRC+ as for the team's own cards (2026-11-12: another club's card showed none; app 1.0.47 reads them).
+					(double war, int wrc) = SeasonStats.Value(line, s_catalog.Get(idx)?.MainPosition ?? CardPos.DH, SeasonStats.Context(user));
+					reply.war.f = double.IsNaN(war) ? 0f : (float)Math.Round(war, 2);
+					reply.wrc_plus.n = (short)Math.Clamp(wrc, short.MinValue, short.MaxValue);
 				}
 			}
 			session.Send(reply);

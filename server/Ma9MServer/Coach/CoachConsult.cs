@@ -233,6 +233,21 @@ namespace Ma9MServer
 			return 0;
 		}
 
+		// 면담 effects running now from earlier sittings (card, until), the one ending last first; a card's latest only.
+		private static List<(int card, DateTime until)> RunningEffects(uint user, DateTime now)
+		{
+			List<(int, DateTime)> list = new List<(int, DateTime)>();
+			using SqliteConnection c = Open();
+			using SqliteCommand cmd = c.CreateCommand();
+			cmd.CommandText = "SELECT card_idx, MAX(until) FROM coach_consult WHERE user_code = $u AND status = 2 AND sitting <> $s AND until > $now GROUP BY card_idx ORDER BY MAX(until) DESC";
+			cmd.Parameters.AddWithValue("$u", (long)user);
+			cmd.Parameters.AddWithValue("$s", Sitting(now));
+			cmd.Parameters.AddWithValue("$now", now.ToString("yyyy-MM-dd HH:mm:ss"));
+			using SqliteDataReader r = cmd.ExecuteReader();
+			while (r.Read()) list.Add((r.GetInt32(0), DateTime.Parse(r.GetString(1))));
+			return list;
+		}
+
 		// Another 수석코치 was registered: visitors not seen yet leave.
 		private static void ForgetWaiting(uint user)
 		{
@@ -255,6 +270,8 @@ namespace Ma9MServer
 				reply.error.SetErrorMessage("수석코치를 등록하지 않으면 면담실을 이용하실 수 없습니다.");
 				reply.PlayerCard.array = Array.Empty<PUICardInfo>();
 				reply.PlayerCardLabels.array = Array.Empty<PByte>();
+				reply.EffectCard.array = Array.Empty<PUICardInfo>();
+				reply.EffectRemainTicks.array = Array.Empty<PLong>();
 				session.Send(reply);
 				return;
 			}
@@ -271,6 +288,14 @@ namespace Ma9MServer
 			reply.HDCoachIndex.n = hd;
 			reply.HDCoachString.n = visitors.Any(v => v.Status != Done) ? CoachCatalog.RoomVisitors : visitors.Count > 0 ? CoachCatalog.RoomDone : CoachCatalog.RoomNobody;
 			reply.RemainTicks.n = (SittingStart(now).AddHours(12) - now).Ticks;
+			// The second page (app 1.0.47, user 11-10 결정 2): 면담 effects of earlier sittings still running, the newest first.
+			List<(int card, DateTime until)> running = RunningEffects(user, now).Where(e => owned.ContainsKey(e.card) && visitors.All(v => v.Card != e.card)).Take(5).ToList();
+			reply.EffectCard.array = running.Select(e =>
+			{
+				TeamCard c = owned[e.card];
+				return new PUICardInfo(e.card, Condition.For(user, e.card, now), c.RemainContract, c.PositionTrainingInfo, (byte)(c.IsLock ? 2 : 1));
+			}).ToArray();
+			reply.EffectRemainTicks.array = running.Select(e => new PLong { n = (e.until - now).Ticks }).ToArray();
 			session.Send(reply);
 			ServerLog.Info($"[{session.Id}] 면담실 ({Label(hd)}): {string.Join(", ", visitors.Select(v => $"{s_catalog.Get(v.Card)?.Name}({v.Status}{(v.Slump ? ",부진" : string.Empty)})"))}");
 		}

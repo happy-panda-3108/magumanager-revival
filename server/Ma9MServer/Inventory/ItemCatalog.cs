@@ -96,7 +96,8 @@ namespace Ma9MServer
 			yield return new ItemDef
 			{
 				Index = TrainingHandlers.TpCharge, Name = "트레이닝 횟수 충전권", Type = ItemType.TrainingBooster, TypeText = "트레이닝 아이템", File = "tp_charge",
-				Desc = "선수 한 명의 TRAINING POINT 6칸을 다시 채웁니다. 선수 정보 > 트레이닝의 아이템 버튼으로 씁니다."
+				// 2026-11-12 (AI tester 두산: "TP가 11-10 뒤로 3/6에서 안 찬다"): TP never comes back by itself; said here.
+				Desc = "선수 한 명의 TRAINING POINT 6칸을 다시 채웁니다(TP는 시간이 지나도 차지 않습니다). 선수 정보 > 트레이닝의 아이템 버튼으로 씁니다."
 			};
 			// 스탯재분배권 (user, 2026-10-19: 10만 MP): used in 계약관리 (ContractHandlers.RedistItem).
 			yield return new ItemDef

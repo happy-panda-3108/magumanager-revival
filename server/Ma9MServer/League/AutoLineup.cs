@@ -31,7 +31,30 @@ namespace Ma9MServer
 			public List<int> StartersOut = new List<int>();                   // starters of now left out (선발 5경기 제한 follows)
 			public TeamValue.Parts Parts, CurrentParts;
 			public string Start = "";                                          // which start won
+			public List<int> Locked = new List<int>();                         // 선수보호 cards of the 1군 kept where they were
+			// 2026-11-12 (engine): without keep, the best 1군 that keeps today's registered team colours too (null when none is
+			// registered or the 1군 of now breaks it), and whether the advice keeps them; Plans = team colour plans built.
+			public Lineup Kept;
+			public double KeptRuns;
+			public double KeptGain => Kept == null ? 0 : (KeptRuns - CurrentRuns) * TeamValue.WinPerRun;
+			public TeamValue.Parts KeptParts;
+			public bool KeepsColour;
+			public int Plans;
+			// Win shares in full games against the league (LineupSimCheck, SimGames home games a club, the same seeds for each
+			// 1군): TeamValue's linear runs run well past the games far from the league mean (rookie decks: +29%p for a real
+			// +10), so the screen should tell these. NaN when not played (no change, or simGames 0).
+			public double SimNow = double.NaN, SimAdvice = double.NaN, SimKept = double.NaN;
+			public double SimSe, SimKeptSe;   // standard error of SimAdvice − SimNow and SimKept − SimNow (paired games)
+			public int SimGames;
+			// Whether the games tell the advice from the 1군 of now (its gain beyond twice its standard error).
+			public bool SimClear => SimGames > 0 && SimAdvice - SimNow > 2 * SimSe;
 		}
+
+		// Full games a club for AutoLineupResult.Sim* (2026-11-12: 100 → about 1.5 s for three 1군s in a league of eight on 3 threads).
+		public const int AutoLineupSimGames = 100;
+
+		// 자동 편성's team colour plans: how many are built under the cap and valued whole, and how many of the best improved.
+		private const int PlanBuild = 16, PlanImprove = 4;
 
 		private sealed class LineupContext
 		{
@@ -48,6 +71,15 @@ namespace Ma9MServer
 			public HashSet<int> Blocked;   // may not start (선발 5경기 제한)
 			public Lineup Current;
 			public int Evaluations;
+			// 선수 고정 (systems session, user 11-12 10:4x: "선수 고정을 시켜 놓으면 그 선수는 자동 편성에 해당되지 않는걸로 …
+			// 선수보호 카드를 기준으로"): the 1군's 선수보호 (IsLock) cards stay — a pitcher in his slot, a batter at his field position
+			// (the batting order may change) or on the bench. pos: 0-7 field, 8 DH, -1 bench / a pitcher.
+			public List<(int idx, bool pit, int slot, int pos)> Locked = new List<(int, bool, int, int)>();
+			public HashSet<int> LockedIdx = new HashSet<int>();
+			// Cards' own values by team colour points (ValueOf).
+			public Dictionary<(int idx, int colour), CardValue> ValueCache = new Dictionary<(int, int), CardValue>();
+			public double BaseBat = double.NaN, BasePit;
+			public double LastLambda;   // the ball price of the last Greedy under the cap
 		}
 
 		private static LineupContext Context(uint userCode)
@@ -77,6 +109,18 @@ namespace Ma9MServer
 			x.Blocked = SpBlock.ForRoster(userCode, x.Info.Values.Where(c => !c.IsBatter).Select(c => c.Idx), x.Current).Select(b => b.idx).ToHashSet();
 			x.Cap = RosterHandlers.MaxCostOf(userCode);
 			x.PenaltyCap = LeagueRules.BallCap[s.Tier];
+			// Dev (engine, 2026-11-12): AUTOLINEUP_NOLOCK=1 leaves the locks out (the user's own clubs lock the whole 1군; to time
+			// and check the search on big collections in a data copy).
+			bool noLock = Environment.GetEnvironmentVariable("AUTOLINEUP_NOLOCK") == "1";
+			bool Locks(int idx) => !noLock && idx != 0 && x.Owned.TryGetValue(idx, out TeamCard tc) && tc.IsLock && x.Info.ContainsKey(idx) && x.LockedIdx.Add(idx);
+			for (int k = 0; x.Current != null && k < x.Current.Batters.Length; k++)
+			{
+				if (Locks(x.Current.Batters[k])) x.Locked.Add((x.Current.Batters[k], false, k, PositionOf(x.Current, k)));
+			}
+			for (int k = 0; x.Current != null && k < x.Current.Pitchers.Length; k++)
+			{
+				if (Locks(x.Current.Pitchers[k])) x.Locked.Add((x.Current.Pitchers[k], true, k, -1));
+			}
 			return x;
 		}
 
@@ -181,18 +225,40 @@ namespace Ma9MServer
 		private static Dictionary<int, CardValue> CardValues(LineupContext x)
 		{
 			Dictionary<int, CardValue> v = new Dictionary<int, CardValue>();
-			League lg = s_data.Env.League;
-			BatterTalent lgB = new BatterTalent { K = lg.K, BB = lg.BB, HBP = lg.HBP, HR = lg.HR, Babip = lg.Babip, Double = lg.Double, Triple = lg.Triple };
-			PitcherTalent lgP = new PitcherTalent { K = lg.K, BB = lg.BB, HBP = lg.HBP, HR = lg.HR, Babip = lg.Babip };
-			double baseBat = TeamValue.MatchupRuns(lgB, x.OppPit, lg), basePit = TeamValue.MatchupRuns(x.OppBat, lgP, lg);
-			double pa = TeamValue.PaBySlot.Average();
 			foreach (CardInfo info in x.Info.Values)
 			{
+				CardValue cv = ValueOf(x, info, 0);
+				if (cv != null) v[info.Idx] = cv;
+			}
+			return v;
+		}
+
+		// A card's own value with `colour` team colour points on every stat (0: none; 2026-11-12, the colour plans value their
+		// members with the bonus they would get). Cached in the context; null for a card with no game row.
+		private static CardValue ValueOf(LineupContext x, CardInfo info, int colour)
+		{
+			if (x.ValueCache.TryGetValue((info.Idx, colour), out CardValue hit)) return hit;
+			League lg = s_data.Env.League;
+			if (double.IsNaN(x.BaseBat))
+			{
+				BatterTalent lgB = new BatterTalent { K = lg.K, BB = lg.BB, HBP = lg.HBP, HR = lg.HR, Babip = lg.Babip, Double = lg.Double, Triple = lg.Triple };
+				PitcherTalent lgP = new PitcherTalent { K = lg.K, BB = lg.BB, HBP = lg.HBP, HR = lg.HR, Babip = lg.Babip };
+				x.BaseBat = TeamValue.MatchupRuns(lgB, x.OppPit, lg);
+				x.BasePit = TeamValue.MatchupRuns(x.OppBat, lgP, lg);
+			}
+			double baseBat = x.BaseBat, basePit = x.BasePit;
+			double pa = TeamValue.PaBySlot.Average();
+			{
 				GameCard g = s_data.Card(info.Idx, x.Cond.TryGetValue(info.Idx, out byte cd) ? cd : (byte)2);
-				if (g?.Row == null) continue;
+				if (g?.Row == null)
+				{
+					x.ValueCache[(info.Idx, colour)] = null;
+					return null;
+				}
 				if (x.Owned.TryGetValue(info.Idx, out TeamCard tc))
 				{
-					TeamCard noColour = new TeamCard { Idx = tc.Idx, PositionTrainingInfo = tc.PositionTrainingInfo, Educated = tc.Educated, Contract = tc.Contract, Training = tc.Training, Coach = tc.Coach };
+					sbyte v = (sbyte)Math.Clamp(colour, 0, 100);
+					TeamCard noColour = new TeamCard { Idx = tc.Idx, PositionTrainingInfo = tc.PositionTrainingInfo, Educated = tc.Educated, Contract = tc.Contract, Training = tc.Training, Coach = tc.Coach, TeamColor = Enumerable.Repeat(v, 6).ToArray() };
 					TeamStrength.AddBonuses(g, noColour);
 				}
 				GameTeam one = new GameTeam();
@@ -219,9 +285,9 @@ namespace Ma9MServer
 					cv.PerBf = basePit - TeamValue.MatchupRuns(x.OppBat, pt, lg) + TeamValue.PitClutchWeight * TeamValue.PitMentalPerBf * (r.R[5] - 65);
 					cv.Stamina = TeamValue.LimitRuns / 5 * (Math.Min(TeamValue.LimitUseful, CardGame.Rules.Limit(r.R[0])) - 110);
 				}
-				v[info.Idx] = cv;
+				x.ValueCache[(info.Idx, colour)] = cv;
+				return cv;
 			}
-			return v;
 		}
 
 		// Batting slot k's field position (0-7, 8 = DH), or -1 for the bench.
@@ -255,6 +321,17 @@ namespace Ma9MServer
 			if (l.Pitchers.Take(5).Any(i => i == 0) || l.Pitchers.Any(i => i != 0 && x.Info[i].IsBatter)) return false;
 			if (l.Pitchers.Take(5).Any(i => x.Blocked.Contains(i))) return false;
 			if (RosterHandlers.LineupBalls(l) > x.Cap) return false;
+			// 선수 고정: each locked card where it was (a batter's batting slot may change, not his position or the bench).
+			foreach ((int idx, bool pit, int slot, int pos) in x.Locked)
+			{
+				if (pit)
+				{
+					if (l.Pitchers[slot] != idx) return false;
+					continue;
+				}
+				int at = Array.IndexOf(l.Batters, idx);
+				if (at < 0 || (pos >= 0 ? PositionOf(l, at) != pos : at < 9)) return false;
+			}
 			if (keep != null && keep.Any(e => e != 0))
 			{
 				HashSet<int> available = TeamColors.Available(l);
@@ -272,11 +349,19 @@ namespace Ma9MServer
 
 		// The best 1군 by each card's own value under the cap (λ·balls slot by slot, then the rest spent on value per ball),
 		// members of `group` (if any) worth `groupBonus` more a slot. The positions of the 1군 of now (its Fielders) are kept.
-		private static Lineup Greedy(LineupContext x, Dictionary<int, CardValue> values, Lineup shape, Func<CardInfo, bool> group, double groupBonus)
+		// With a team colour plan (2026-11-12): its members valued with its bonus, and at least its counts of members among the
+		// batters and the pitchers (the cheapest change in value less λ·balls brings each one in). With `fixedLambda` one
+		// greedy at that ball price, over the cap or not (to screen the plans).
+		private static Lineup Greedy(LineupContext x, Dictionary<int, CardValue> values, Lineup shape, Func<CardInfo, bool> group, double groupBonus,
+			ColourPlan plan = null, double fixedLambda = double.NaN)
 		{
 			int[] fillBat = Enumerable.Range(0, 9).OrderBy(k => Array.IndexOf(new[] { 0, 4, 2, 6, 3, 7, 5, 1, 8 }, Math.Max(0, PositionOf(shape, k)))).Concat(Enumerable.Range(9, 5)).ToArray();
 			int[] fillPit = { 0, 1, 2, 3, 4, 10, 9, 5, 6, 7, 8 };
-			double V(CardValue c, Lineup l, int k, bool pit) => SlotValue(c, l, k, pit) + (group != null && group(c.Info) ? groupBonus : 0);
+			CardValue Eff(CardValue c) => plan != null && plan.Valued.TryGetValue(c.Info.Idx, out CardValue m) ? m : c;
+			double V(CardValue c, Lineup l, int k, bool pit) => SlotValue(Eff(c), l, k, pit) + (group != null && group(c.Info) ? groupBonus : 0);
+			List<CardValue> batters = values.Values.Where(c => c.Info.IsBatter).ToList(), pitchers = values.Values.Where(c => !c.Info.IsBatter).ToList();
+			List<CardValue> memberBat = plan?.MemberBat == null ? new List<CardValue>() : batters.Where(c => plan.MemberBat(c.Info)).ToList();
+			List<CardValue> memberPit = plan?.MemberPit == null ? new List<CardValue>() : pitchers.Where(c => plan.MemberPit(c.Info)).ToList();
 			Lineup Assign(double lambda)
 			{
 				Lineup l = Clone(shape);
@@ -290,16 +375,73 @@ namespace Ma9MServer
 					if (c.Info.IsLegend && (pit ? legendPit : legendBat) >= 1) return false;
 					return true;
 				}
-				void Took(CardValue c, bool pit)
+				void Took(CardValue c, bool pit) => TookInfo(c.Info, pit);
+				void TookInfo(CardInfo info, bool pit)
 				{
-					people.Add(PersonOf(c.Info));
-					if (c.Info.IsLegend) { if (pit) legendPit++; else legendBat++; }
+					people.Add(PersonOf(info));
+					if (info.IsLegend) { if (pit) legendPit++; else legendBat++; }
+				}
+				void Untook(CardInfo info, bool pit)
+				{
+					people.Remove(PersonOf(info));
+					if (info.IsLegend) { if (pit) legendPit--; else legendBat--; }
+				}
+				// The plan's count on one side: while short, the change of a non-member (or an empty bench slot) for a member that
+				// loses the least value less λ·balls.
+				bool Force(bool pit)
+				{
+					Func<CardInfo, bool> m = pit ? plan?.MemberPit : plan?.MemberBat;
+					int need = m == null ? 0 : pit ? plan.NeedPit : plan.NeedBat;
+					int[] row = pit ? l.Pitchers : l.Batters;
+					int have = row.Count(i => i != 0 && m != null && m(x.Info[i]));
+					List<CardValue> pool = pit ? memberPit : memberBat;
+					while (have < need)
+					{
+						int bk = -1;
+						CardValue bc = null;
+						double bd = double.NegativeInfinity;
+						for (int k = 0; k < row.Length; k++)
+						{
+							int cur = row[k];
+							if (cur != 0 && (x.LockedIdx.Contains(cur) || m(x.Info[cur]))) continue;
+							CardValue now = cur != 0 && values.TryGetValue(cur, out CardValue nv) ? nv : null;
+							if (cur != 0 && now == null) continue;
+							double was = now == null ? 0 : V(now, l, k, pit) - lambda * now.Info.Ball;
+							int curPerson = now == null ? int.MinValue : PersonOf(now.Info);
+							foreach (CardValue c in pool)
+							{
+								int person = PersonOf(c.Info);
+								if (person != curPerson && people.Contains(person)) continue;
+								if (c.Info.IsLegend && (pit ? legendPit : legendBat) - (now != null && now.Info.IsLegend ? 1 : 0) >= 1) continue;
+								if (pit && k < 5 && x.Blocked.Contains(c.Info.Idx)) continue;
+								if (Array.IndexOf(row, c.Info.Idx) >= 0) continue;
+								double d = V(c, l, k, pit) - lambda * c.Info.Ball - was;
+								if (d > bd) { bd = d; bk = k; bc = c; }
+							}
+						}
+						if (bc == null) return false;
+						if (row[bk] != 0) Untook(x.Info[row[bk]], pit);
+						row[bk] = bc.Info.Idx;
+						TookInfo(bc.Info, pit);
+						have++;
+					}
+					return true;
+				}
+				// 선수 고정: the locked cards first, where they are (a batter at the slot of his position in `shape`).
+				foreach ((int idx, bool pit, int slot, int pos) in x.Locked)
+				{
+					int k = pit || pos < 0 ? slot : Enumerable.Range(0, 9).FirstOrDefault(j => PositionOf(shape, j) == pos, -1);
+					int[] row = pit ? l.Pitchers : l.Batters;
+					if (k < 0 || row[k] != 0) return null;
+					row[k] = idx;
+					TookInfo(x.Info[idx], pit);
 				}
 				foreach (int k in fillBat)
 				{
+					if (l.Batters[k] != 0) continue;
 					CardValue best = null;
 					double bs = double.NegativeInfinity;
-					foreach (CardValue c in values.Values.Where(c => c.Info.IsBatter))
+					foreach (CardValue c in batters)
 					{
 						if (!Take(c, false)) continue;
 						double sc = V(c, l, k, false) - lambda * c.Info.Ball;
@@ -309,11 +451,13 @@ namespace Ma9MServer
 					l.Batters[k] = best.Info.Idx;
 					Took(best, false);
 				}
+				if (!Force(false)) return null;
 				foreach (int k in fillPit)
 				{
+					if (l.Pitchers[k] != 0) continue;
 					CardValue best = null;
 					double bs = double.NegativeInfinity;
-					foreach (CardValue c in values.Values.Where(c => !c.Info.IsBatter))
+					foreach (CardValue c in pitchers)
 					{
 						if (!Take(c, true) || (k < 5 && x.Blocked.Contains(c.Info.Idx))) continue;
 						double sc = V(c, l, k, true) - lambda * c.Info.Ball;
@@ -323,8 +467,10 @@ namespace Ma9MServer
 					l.Pitchers[k] = best.Info.Idx;
 					Took(best, true);
 				}
+				if (!Force(true)) return null;
 				return l;
 			}
+			if (!double.IsNaN(fixedLambda)) return Assign(fixedLambda);
 			double lo = 0, hi = 5;
 			Lineup fit = Assign(hi);
 			if (fit == null || RosterHandlers.LineupBalls(fit) > x.Cap) return null;
@@ -334,6 +480,7 @@ namespace Ma9MServer
 				Lineup d = Assign(mid);
 				if (d != null && RosterHandlers.LineupBalls(d) <= x.Cap) { fit = d; hi = mid; } else lo = mid;
 			}
+			x.LastLambda = hi;
 			return fit;
 		}
 
@@ -350,25 +497,33 @@ namespace Ma9MServer
 				List<Lineup> tries = new List<Lineup>();
 				HashSet<int> inside = best.Batters.Concat(best.Pitchers).Where(i => i != 0).ToHashSet();
 				(Dictionary<int, int> colourBonus, _) = TeamColors.AutoBonuses(best);
+				CheapTable cheap = Cheap(x, values, best, inside, colourBonus);
 				for (int side = 0; side < 2; side++)
 				{
 					bool pit = side == 1;
 					int[] slots = pit ? best.Pitchers : best.Batters;
 					for (int k = 0; k < slots.Length; k++)
 					{
+						if (x.LockedIdx.Contains(slots[k])) continue;   // 선수 고정
 						values.TryGetValue(slots[k], out CardValue now);
 						double cur = now == null ? double.NegativeInfinity : SlotValue(now, best, k, pit);
 						IEnumerable<CardValue> outside = values.Values.Where(c => c.Info.IsBatter != pit && !inside.Contains(c.Info.Idx));
 						List<CardValue> byValue = outside.OrderByDescending(c => SlotValue(c, best, k, pit)).Take(5).ToList();
 						List<CardValue> byBall = outside.Where(c => SlotValue(c, best, k, pit) > cur).OrderBy(c => c.Info.Ball).Take(3).ToList();
 						// Cards of the groups the 1군's team colours count (a member in for a non-member keeps or lifts a grade).
-						List<CardValue> members = colourBonus.Count == 0 ? new List<CardValue>() : outside
-							.Where(c => values.ContainsKey(c.Info.Idx) && SameGroupAsColoured(c.Info, best, colourBonus)).OrderByDescending(c => SlotValue(c, best, k, pit)).Take(3).ToList();
+						// (2026-11-12: six by value and three by fewest balls among those better than now, where keeping a team
+						// colour leaves only members to choose from.)
+						List<CardValue> groupOut = colourBonus.Count == 0 ? new List<CardValue>() : outside
+							.Where(c => values.ContainsKey(c.Info.Idx) && SameGroupAsColoured(c.Info, best, colourBonus)).ToList();
+						List<CardValue> members = groupOut.OrderByDescending(c => SlotValue(c, best, k, pit)).Take(6)
+							.Concat(groupOut.Where(c => SlotValue(c, best, k, pit) > cur).OrderBy(c => c.Info.Ball).Take(3)).ToList();
 						foreach (CardValue c in byValue.Concat(byBall).Concat(members).Distinct())
 						{
 							Lineup t = Clone(best);
 							if (pit) t.Pitchers[k] = c.Info.Idx; else t.Batters[k] = c.Info.Idx;
-							tries.Add(t);
+							// Over the cap (2026-11-12): paid for by one other slot taking a cheaper card (PayBalls).
+							if (RosterHandlers.LineupBalls(t) > x.Cap) t = PayBalls(x, values, cheap, t, pit, k, c, colourBonus);
+							if (t != null) tries.Add(t);
 						}
 					}
 					for (int i = 0; i < slots.Length; i++)
@@ -377,6 +532,7 @@ namespace Ma9MServer
 						{
 							if (!pit && i >= 9 && j >= 9) continue;   // two bench slots: the same
 							if (slots[i] == 0 && slots[j] == 0) continue;
+							if (x.LockedIdx.Contains(slots[i]) || x.LockedIdx.Contains(slots[j])) continue;   // 선수 고정
 							Lineup t = Clone(best);
 							int[] s = pit ? t.Pitchers : t.Batters;
 							(s[i], s[j]) = (s[j], s[i]);
@@ -384,7 +540,9 @@ namespace Ma9MServer
 						}
 					}
 				}
-				foreach (Lineup t in tries)
+				// The likely ones first (2026-11-12): by the change in the cards' own values (the first that helps is taken).
+				double before = OwnScore(values, best);
+				foreach (Lineup t in tries.Select(t => (t, d: OwnScore(values, t) - before)).OrderByDescending(p => p.d).Select(p => p.t))
 				{
 					if (x.Evaluations >= maxEvals) break;
 					if (!Allowed(x, t, keep)) continue;
@@ -414,36 +572,45 @@ namespace Ma9MServer
 			return false;
 		}
 
-		public static AutoLineupResult AutoLineup(uint userCode, bool keepColour, int maxEvals = 4000)
+		public static AutoLineupResult AutoLineup(uint userCode, bool keepColour, int maxEvals = 4000, int simGames = AutoLineupSimGames)
+		{
+			AutoLineupResult r = Search(userCode, keepColour, maxEvals);
+			if (r == null || simGames <= 0 || SameLineup(r.Lineup, r.Current)) return r;
+			List<Lineup> set = new List<Lineup> { r.Current, r.Lineup };
+			bool kept = r.Kept != null && !r.KeepsColour && !SameLineup(r.Kept, r.Current);
+			if (kept) set.Add(r.Kept);
+			double[] w = LineupSimCheck(userCode, set, simGames, out double[] se, threads: 3);
+			r.SimGames = simGames;
+			r.SimNow = w[0];
+			r.SimAdvice = w[1];
+			r.SimSe = se[1];
+			if (kept) { r.SimKept = w[2]; r.SimKeptSe = se[2]; }
+			return r;
+		}
+
+		private static bool SameLineup(Lineup a, Lineup b) => a != null && b != null && a.Batters.SequenceEqual(b.Batters) && a.Pitchers.SequenceEqual(b.Pitchers) && a.Fielders.SequenceEqual(b.Fielders);
+
+		private static AutoLineupResult Search(uint userCode, bool keepColour, int maxEvals)
 		{
 			LineupContext x = Context(userCode);
 			if (x == null || x.Current == null) return null;
 			Dictionary<int, CardValue> values = CardValues(x);
-			AutoLineupResult r = new AutoLineupResult { Current = x.Current, Cap = x.Cap, CurrentBalls = RosterHandlers.LineupBalls(x.Current) };
+			AutoLineupResult r = new AutoLineupResult { Current = x.Current, Cap = x.Cap, CurrentBalls = RosterHandlers.LineupBalls(x.Current), Locked = x.Locked.Select(k => k.idx).ToList() };
 			r.CurrentParts = Evaluate(x, x.Current, out r.CurrentColours);
 			r.CurrentRuns = r.CurrentParts.Runs;
 			int[] keep = keepColour ? TeamColors.Registered(userCode) : null;
 
-			// Starts: the 1군 of now (when it keeps the rules), the best by own values, and round the biggest groups.
+			// Starts: the 1군 of now (when it keeps the rules), the best by own values, and the best team colour plans (2026-11-12:
+			// every team colour the cards can make, its members' count filled by the cheapest good members, the balls left to the
+			// strongest cards; AutoLineupPlans.cs). With keep only the plans that keep today's team colours.
 			List<(string name, Lineup l)> starts = new List<(string, Lineup)>();
 			if (Allowed(x, x.Current, keep)) starts.Add(("지금 1군", x.Current));
 			Lineup free = Greedy(x, values, x.Current, null, 0);
+			double lambda = free != null ? x.LastLambda : 0.05;
 			if (free != null && Allowed(x, free, keep)) starts.Add(("능력 순", free));
-			if (!keepColour)
-			{
-				var seasons = values.Values.GroupBy(c => (c.Info.TeamCode, c.Info.Year)).Where(g => g.Count() >= 11).OrderByDescending(g => g.Count()).Take(3);
-				foreach (var g in seasons)
-				{
-					Lineup l = Greedy(x, values, x.Current, c => c.TeamCode == g.Key.TeamCode && c.Year == g.Key.Year, 0.6);
-					if (l != null && Allowed(x, l, null)) starts.Add(($"'{g.Key.Year % 100:00} {TeamColors.TeamName(g.Key.TeamCode, g.Key.Year)}", l));
-				}
-				var decades = values.Values.GroupBy(c => (line: TeamColors.Lineage(c.Info.TeamCode), dec: c.Info.Year / 10)).Where(g => g.Count() >= 11).OrderByDescending(g => g.Count()).Take(2);
-				foreach (var g in decades)
-				{
-					Lineup l = Greedy(x, values, x.Current, c => TeamColors.Lineage(c.TeamCode) == g.Key.line && c.Year / 10 == g.Key.dec, 0.4);
-					if (l != null && Allowed(x, l, null)) starts.Add(($"{TeamColors.LineageName(g.Key.line)} {g.Key.dec % 10 * 10}년대", l));
-				}
-			}
+			List<(string name, Lineup l, double runs)> plans = PlanStarts(x, values, lambda, PlanBuild, keep);
+			r.Plans = plans.Count;
+			foreach ((string name, Lineup l, double runs) in plans.Where(p => Allowed(x, p.l, keep)).Take(PlanImprove)) starts.Add((name, l));
 			if (starts.Count == 0)
 			{
 				r.Lineup = x.Current;
@@ -452,13 +619,39 @@ namespace Ma9MServer
 				r.Colours = r.CurrentColours;
 				return r;
 			}
-			int perStart = Math.Max(200, maxEvals / starts.Count);
-			(Lineup l, TeamValue.Parts v, string name) win = (null, null, null);
+			// Without keep, also the best 1군 that keeps today's team colours, so both can be told (팀컬러를 지키면 / 바꾸면).
+			int[] registered = TeamColors.Registered(userCode);
+			bool compare = !keepColour && registered.Any(e => e != 0) && Allowed(x, x.Current, registered);
+			// Budget (2026-11-12): a third shared by the starts, then the two best go on with the rest (the 1군 keeping today's
+			// team colours with a sixth of its own when compared).
+			int end = x.Evaluations + maxEvals;
+			int keptBudget = compare ? maxEvals / 6 : 0;
+			int firstRound = Math.Max(150, (maxEvals - keptBudget) / 3 / starts.Count);
+			List<(Lineup l, TeamValue.Parts v, string name)> round = new List<(Lineup, TeamValue.Parts, string)>();
 			foreach ((string name, Lineup l) in starts)
 			{
-				int budget = x.Evaluations + perStart;
-				(Lineup best, TeamValue.Parts bv) = Improve(x, values, l, keep, budget);
-				if (win.l == null || bv.Runs > win.v.Runs) win = (best, bv, name);
+				(Lineup best, TeamValue.Parts bv) = Improve(x, values, l, keep, x.Evaluations + firstRound);
+				round.Add((best, bv, name));
+			}
+			round = round.OrderByDescending(t => t.v.Runs).ToList();
+			for (int i = 0; i < Math.Min(2, round.Count); i++)
+			{
+				int left = end - keptBudget - x.Evaluations;
+				if (left <= 0) break;
+				(Lineup best, TeamValue.Parts bv) = Improve(x, values, round[i].l, keep, x.Evaluations + left / (2 - i));
+				if (bv.Runs > round[i].v.Runs) round[i] = (best, bv, round[i].name);
+			}
+			(Lineup l, TeamValue.Parts v, string name) win = round.OrderByDescending(t => t.v.Runs).First();
+			(Lineup l, TeamValue.Parts v) kept = (null, null);
+			if (compare)
+			{
+				foreach ((Lineup l, TeamValue.Parts v, string name) t in round.Where(t => Allowed(x, t.l, registered)))
+				{
+					if (kept.l == null || t.v.Runs > kept.v.Runs) kept = (t.l, t.v);
+				}
+				(Lineup best, TeamValue.Parts bv) = Improve(x, values, kept.l ?? x.Current, registered, Math.Max(x.Evaluations + 100, end));
+				if (kept.l == null || bv.Runs > kept.v.Runs) kept = (best, bv);
+				if (bv.Runs > win.v.Runs) win = (best, bv, "지금 1군 (팀컬러 유지)");
 			}
 			// The batting order of the nine by the 선수분석 graph, the positions going with the players.
 			Lineup ordered = Reorder(win.l);
@@ -472,6 +665,24 @@ namespace Ma9MServer
 			r.Runs = win.v.Runs;
 			r.Start = win.name;
 			Evaluate(x, win.l, out r.Colours);
+			if (compare)
+			{
+				r.KeepsColour = Allowed(x, win.l, registered);
+				if (r.KeepsColour) kept = (win.l, win.v);
+				else
+				{
+					Lineup ko = Reorder(kept.l);
+					if (ko != null && Allowed(x, ko, registered))
+					{
+						TeamValue.Parts kv = Evaluate(x, ko, out _);
+						if (kv.Runs >= kept.v.Runs - 1e-4) kept = (ko, kv);
+					}
+				}
+				r.Kept = kept.l;
+				r.KeptParts = kept.v;
+				r.KeptRuns = kept.v.Runs;
+			}
+			else r.KeepsColour = keepColour || registered.All(e => e == 0) || Allowed(x, win.l, registered);
 			r.Balls = RosterHandlers.LineupBalls(win.l);
 			r.StartersOut = x.Current.Pitchers.Take(5).Where(i => i != 0 && !win.l.Pitchers.Take(5).Contains(i)).ToList();
 			r.Evaluations = x.Evaluations;
@@ -518,11 +729,16 @@ namespace Ma9MServer
 			}
 			string Colour(int[] e) => string.Join(", ", e.Where(i => i != 0).Select(i => $"{TeamColors.Label(i).name} {"SABC"[i / 1_000_000 % 10]}"));
 			ServerLog.Info($"[autolineup] {teamName} (user {user}), keep colour {keep}, {a.Evaluations} lineups valued in {watch.ElapsedMilliseconds} ms, best from {a.Start}");
+			if (a.Locked.Count > 0) ServerLog.Info($"[autolineup] 선수 고정 (선수보호): {string.Join(", ", a.Locked.Select(i => s_data.Catalog.Get(i)?.Name ?? i.ToString()))}");
 			ServerLog.Info($"[autolineup] now    {a.CurrentBalls}/{a.Cap}볼, {a.CurrentRuns:+0.000;-0.000} runs a game | {Colour(a.CurrentColours)} | {LineupEffects.Describe(a.Current, s_data.Catalog)}");
 			ServerLog.Info($"[autolineup] advice {a.Balls}/{a.Cap}볼, {a.Runs:+0.000;-0.000} runs a game ({100 * a.Gain:+0.00;-0.00}%p) | {Colour(a.Colours)} | {LineupEffects.Describe(a.Lineup, s_data.Catalog)}");
 			ServerLog.Info($"[autolineup]   now    {a.CurrentParts}");
 			ServerLog.Info($"[autolineup]   advice {a.Parts}");
 			if (a.StartersOut.Count > 0) ServerLog.Info($"[autolineup]   starters out (선발 5경기 제한): {string.Join(", ", a.StartersOut.Select(i => s_data.Catalog.Get(i)?.Name ?? i.ToString()))}");
+			ServerLog.Info($"[autolineup]   team colour plans built {a.Plans}, advice keeps today's colours {a.KeepsColour}" +
+				(a.Kept != null ? $", best keeping them {RosterHandlers.LineupBalls(a.Kept)}볼 {a.KeptRuns:+0.000;-0.000} runs ({100 * a.KeptGain:+0.00;-0.00}%p)" : ""));
+			if (a.SimGames > 0) ServerLog.Info($"[autolineup]   games ({a.SimGames} a club): now {100 * a.SimNow:F1}%, advice {100 * a.SimAdvice:F1}% (±{100 * a.SimSe:F1}, clear {a.SimClear})" +
+				(double.IsNaN(a.SimKept) ? "" : $", kept {100 * a.SimKept:F1}% (±{100 * a.SimKeptSe:F1})") + $" ({watch.ElapsedMilliseconds} ms with the search)");
 			string[] roles = { "SP1", "SP2", "SP3", "SP4", "SP5", "RP1", "RP2", "RP3", "RP4", "SU", "CP" };
 			string Pitchers(Lineup l) => string.Join("  ", Enumerable.Range(0, 11).Select(k =>
 			{
@@ -540,6 +756,11 @@ namespace Ma9MServer
 			ServerLog.Info($"[autolineup]   advice 투수 {Pitchers(a.Lineup)}");
 			ServerLog.Info($"[autolineup]   now    타자 {Batters(a.Current)}");
 			ServerLog.Info($"[autolineup]   advice 타자 {Batters(a.Lineup)}");
+			if (a.Kept != null && !a.KeepsColour)
+			{
+				ServerLog.Info($"[autolineup]   kept   투수 {Pitchers(a.Kept)}");
+				ServerLog.Info($"[autolineup]   kept   타자 {Batters(a.Kept)}");
+			}
 			if (int.TryParse(Environment.GetEnvironmentVariable("AUTOLINEUP_SIM"), out int games) && games > 0)
 			{
 				watch.Restart();
@@ -549,9 +770,10 @@ namespace Ma9MServer
 				bats.Fielders = (byte[])a.Lineup.Fielders.Clone();
 				pits.Pitchers = (int[])a.Lineup.Pitchers.Clone();
 				List<Lineup> set = new List<Lineup> { a.Current, a.Lineup, bats, pits };
+				List<string> names = new List<string> { "now", "advice", "batters", "pitchers" };
+				if (a.Kept != null && !a.KeepsColour) { set.Add(a.Kept); names.Add("kept"); }
 				double[] w = LineupSimCheck(user, set, games);
 				LineupContext x = Context(user);
-				string[] names = { "now", "advice", "batters", "pitchers" };
 				for (int k = 0; k < set.Count; k++)
 				{
 					double tv = Evaluate(x, set[k], out _).Runs;
@@ -564,7 +786,10 @@ namespace Ma9MServer
 
 		// Dev check: the club with each 1군 (as AutoLineup values it: team colour, development, condition) against every other
 		// club, `games` home games each, the same seeds for every 1군.
-		public static double[] LineupSimCheck(uint userCode, List<Lineup> lineups, int games, int threads = 4)
+		public static double[] LineupSimCheck(uint userCode, List<Lineup> lineups, int games, int threads = 4) => LineupSimCheck(userCode, lineups, games, out _, threads);
+
+		// The same with each 1군's standard error of its difference from the first (the same games, paired).
+		public static double[] LineupSimCheck(uint userCode, List<Lineup> lineups, int games, out double[] seVsFirst, int threads = 4)
 		{
 			LineupContext x = Context(userCode);
 			int[] opps = Enumerable.Range(0, x.Teams.Length).Where(j => j != x.Me).ToArray();
@@ -572,6 +797,7 @@ namespace Ma9MServer
 			LeagueState s = x.S;
 			TraitEffects.Effect[] traits = s.Clubs.Select(c => c.IsHuman ? TraitEffects.Of(c.Owner) : TraitEffects.FromPoints(AiTeamOf(s, c)?.Traits ?? new Dictionary<byte, byte>())).ToArray();
 			double[] wins = new double[lineups.Count];
+			double[][] each = new double[lineups.Count][];
 			for (int k = 0; k < lineups.Count; k++)
 			{
 				GameTeam mine = BuildTeam(x, lineups[k], out _);
@@ -579,6 +805,7 @@ namespace Ma9MServer
 				mine.Tactics = GameTactics.From(off, def);
 				double w = 0;
 				object gate = new object();
+				double[] one = each[k] = new double[opps.Length * games];
 				System.Threading.Tasks.Parallel.For(0, opps.Length * games, new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = threads }, n =>
 				{
 					int j = opps[n / games];
@@ -593,9 +820,17 @@ namespace Ma9MServer
 					SimStats st = sim.PlayOne(0, 1, null);
 					long r0 = m.TeamBatters[0].Sum(i => st.Bat(i, BS.R)), r1 = m.TeamBatters[1].Sum(i => st.Bat(i, BS.R));
 					double v = r0 > r1 ? 1 : r0 == r1 ? 0.5 : 0;
+					one[n] = v;
 					lock (gate) w += v;
 				});
 				wins[k] = w / (opps.Length * games);
+			}
+			seVsFirst = new double[lineups.Count];
+			for (int k = 1; k < lineups.Count; k++)
+			{
+				double[] d = each[k].Zip(each[0], (a, b) => a - b).ToArray();
+				double mean = d.Average();
+				seVsFirst[k] = d.Length > 1 ? Math.Sqrt(d.Sum(v => (v - mean) * (v - mean)) / (d.Length - 1) / d.Length) : 0;
 			}
 			return wins;
 		}

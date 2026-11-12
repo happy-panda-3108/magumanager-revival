@@ -553,6 +553,23 @@ namespace Ma9MServer
 
 		public static bool IsPack(int item) => CoachCatalog.Enabled && (item == CoachCatalog.Pack || CoachCatalog.TestMode && item == CoachCatalog.SetPack);
 
+		// 자팀 (user, 2026-11-13 00:5x: "1군 최다 계보"): the lineage most of the 1군's 25 cards belong to, more balls first on a
+		// tie, then the lower line; -1 without a lineup. CoachCatalog.RollPack gives it OwnLinePercent of the packs.
+		public static int OwnLine(uint user)
+		{
+			Lineup lineup = s_db?.GetLineup(user);
+			if (lineup == null || s_catalog == null) return -1;
+			var lines = lineup.Batters.Concat(lineup.Pitchers).Where(i => i != 0).Distinct()
+				.Select(i => s_catalog.Get(i)).Where(c => c != null)
+				.GroupBy(c => CoachCatalog.Line(c.TeamCode))
+				.Select(g => (line: g.Key, cards: g.Count(), balls: g.Sum(c => c.Ball)))
+				.OrderByDescending(x => x.cards).ThenByDescending(x => x.balls).ThenBy(x => x.line).ToList();
+			return lines.Count == 0 ? -1 : lines[0].line;
+		}
+
+		// A pack's card for this team (자팀 계보 at OwnLinePercent).
+		public static int RollPack(uint user, Random rng) => CoachCatalog.RollPack(rng, OwnLine(user));
+
 		public static IEnumerable<ItemDef> Items()
 		{
 			if (!CoachCatalog.Enabled) yield break;
@@ -560,7 +577,7 @@ namespace Ma9MServer
 			yield return new ItemDef
 			{
 				Index = CoachCatalog.Pack, Name = "코칭스태프 카드팩", Type = ItemType.CoachCardPack, TypeText = "코치 카드팩", File = "pack_coach",
-				Desc = $"코치 카드 1장을 얻습니다(노말 {odds(1)}%, 스페셜 {odds(2)}%, 레어 {odds(3)}%, 엘리트 {odds(4)}%). 같은 카드가 또 나올 수 있습니다."
+				Desc = $"코치 카드 1장을 얻습니다(노말 {odds(1)}%, 스페셜 {odds(2)}%, 레어 {odds(3)}%, 엘리트 {odds(4)}%). 1군에 가장 많은 구단(계보)의 코치가 {CoachCatalog.OwnLinePercent}%. 같은 카드가 또 나올 수 있습니다."
 			};
 			if (!CoachCatalog.TestMode) yield break;
 			yield return new ItemDef
@@ -586,11 +603,12 @@ namespace Ma9MServer
 			else
 			{
 				List<int> cards = new List<int>();
+				int ownLine = OwnLine(user);
 				for (int n = 0; n < amount; n++)
 				{
 					if (item == CoachCatalog.Pack)
 					{
-						cards.Add(CoachCatalog.Roll(s_rng));
+						cards.Add(CoachCatalog.RollPack(s_rng, ownLine));
 						continue;
 					}
 					// 세트팩 (test): the five roles of one club and grade.

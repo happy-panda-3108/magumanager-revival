@@ -379,6 +379,7 @@ namespace Ma9MServer
 			Claim(user, category, mp);
 			int balance = s_db.AddMp(user, mp);
 			string bonusText = string.Empty;
+			int allClear = 0;
 			if (Today.All(x => x.Category == category || claims.ContainsKey(x.Category)))
 			{
 				// All six: what they paid, once more.
@@ -387,11 +388,25 @@ namespace Ma9MServer
 				balance = s_db.AddMp(user, bonus);
 				bonusText = $", all clear +{bonus:N0}";
 				Add(user, AllClears);
+				allClear = bonus;
 			}
 			session.Team.Mp = balance;
 			reply.result.n = 0;
 			reply.cur_point.n = balance;
 			session.Send(reply);
+			if (allClear > 0)
+			{
+				// The bonus said in words (AI tester kt 47, 11-12: "올클리어 보너스 +○○ MP 한 줄이 있으면"); the app only plays its effect.
+				// A type-1 popup: its OK (POPUP_ACK 0) is ignored by AdviceHandlers.Ack.
+				Ma9MPacket.PKS_SC_POPUP popup = new Ma9MPacket.PKS_SC_POPUP();
+				popup.Type.n = 1;
+				popup.Messages.array = new[]
+				{
+					new PLongString { str = "오늘의 미션 모두 달성" },
+					new PLongString { str = $"미션 {Today.Length}개를 모두 달성해\n오늘 받은 미션 MP만큼 한 번 더 드렸습니다.\n보너스 +{allClear:N0} MP" }
+				};
+				session.Send(popup);
+			}
 			ServerLog.Info($"[{session.Id}] 오늘의 미션 {d.Title}: +{mp:N0} MP{bonusText}");
 		}
 

@@ -66,12 +66,15 @@ namespace Ma9MServer
 			}
 			Ma9MPacket.PKS_SC_PROC_TCARD_MIX reply = new Ma9MPacket.PKS_SC_PROC_TCARD_MIX();
 			reply.error.SetNoError();
-			// A combine of III books (트레이닝코치, CoachHandlers.TopMixBooks) ends in a 0 from the client, so two of them are not
-			// taken for an exchange.
+			// A combine of III books (트레이닝코치, CoachHandlers.TopMixBooks) ends in a 0 from the client, so two or three of them
+			// are not taken for an exchange.
 			bool exchange = books.Length == ExchangeEntries && books.All(b => b != 0);
+			bool oldExchange = books.Length == OldExchangeEntries && books.All(b => b != 0);
 			books = books.Where(b => b != 0).ToArray();
-			int made;
-			string refuse = exchange ? TryExchange(session.Team.UserCode, books[0], books[1], out made) : TryMix(session.Team.UserCode, books, out made);
+			int made = 0;
+			string refuse = oldExchange ? OldExchangeText
+				: exchange ? TryExchange(session.Team.UserCode, books.Take(ExchangeCost).ToArray(), books[ExchangeCost], out made)
+				: TryMix(session.Team.UserCode, books, out made);
 			string what = exchange ? "트레이닝북 교환" : "트레이닝북 조합";
 			if (refuse != null)
 			{
@@ -82,7 +85,7 @@ namespace Ma9MServer
 			}
 			reply.NewCard.n = made;
 			session.Send(reply);
-			ServerLog.Info($"[{session.Id}] {what}: {string.Join(", ", books.Take(exchange ? 1 : books.Length).Select(TrainingBooks.Name))} → {TrainingBooks.Name(made)}");
+			ServerLog.Info($"[{session.Id}] {what}: {string.Join(", ", books.Take(exchange ? ExchangeCost : books.Length).Select(TrainingBooks.Name))} → {TrainingBooks.Name(made)}");
 		}
 
 		// 트레이닝북 교환소 (user, 2026-10-25: "3단계 트레이닝 북 교환소를 하나 만들어서, 내가 가지고 있는 트레이닝 북 하나로 원하는
@@ -90,7 +93,12 @@ namespace Ma9MServer
 		// of another stat, no fee. The client's exchange mode (전력강화 menu slot 24, the unused 코치 조합 one) sends PROC_TCARD_MIX
 		// with two entries, the book given up and the book wanted; a combine always sends four.
 		// IV books too since 2026-11-10 (user 02:2x: "4단계북 끼리도 교환소를 사용할 수 있도록"): a book for one of its own grade.
-		public const int ExchangeEntries = 2, ExchangeGrade = 3, ExchangeTopGrade = 4;
+		// 2 → 1 since 2026-11-12 (user 10:4x: "사실 교환 자체는 2대1 교환으로 하려고 했고 지금은 트레이닝 육성 테스트를 위해서 1대1로
+		// 해놓은 것임 … 원하는 책 1권을 받으려면 안 쓰는 책 2권을 사용"): two books of one grade (any stats) for one book of that
+		// grade, sent as [given, given, wanted] (app 1.0.46). The old app's [given, wanted] is refused with OldExchangeText.
+		public const int ExchangeCost = 2, ExchangeEntries = ExchangeCost + 1, OldExchangeEntries = 2, ExchangeGrade = 3, ExchangeTopGrade = 4;
+
+		public const string OldExchangeText = "교환은 이제 책 2권 → 1권입니다.\n새 앱(1.0.46)에서 같은 등급 책 2권을 올려 주세요.";
 
 		// The menu slot, shown only to builds that add this mark to their login's bundle_version: an older app would open
 		// the 코치 조합 scene there.
@@ -100,20 +108,25 @@ namespace Ma9MServer
 
 		public static bool ClientSupportsExchange(GameSession session) => session?.ClientVersion?.Contains(ExchangeMark) == true;
 
-		internal static string TryExchange(uint user, int given, int wanted, out int made)
+		internal static string TryExchange(uint user, int[] given, int wanted, out int made)
 		{
 			made = 0;
+			int grade = given.Length > 0 && TrainingBooks.IsBook(given[0]) ? TrainingBooks.Grade(given[0]) : 0;
 			string refuse =
-				!TrainingBooks.IsBook(given) || !TrainingBooks.IsBook(wanted) ? "트레이닝북만 교환할 수 있습니다." :
-				TrainingBooks.Grade(given) < ExchangeGrade || TrainingBooks.Grade(given) > ExchangeTopGrade ? "III·IV 등급 트레이닝북만 교환할 수 있습니다." :
-				TrainingBooks.Grade(wanted) != TrainingBooks.Grade(given) ? "같은 등급의 트레이닝북으로만 교환할 수 있습니다." :
-				given == wanted ? "같은 트레이닝북으로는 바꿀 수 없습니다." :
-				InventoryHandlers.ItemAmount(user, given) < 1 ? "트레이닝북이 없습니다." : null;
+				given.Length != ExchangeCost ? $"바꿀 책 {ExchangeCost}권을 올려 주세요. ({ExchangeCost}권 → 1권)" :
+				given.Any(b => !TrainingBooks.IsBook(b)) || !TrainingBooks.IsBook(wanted) ? "트레이닝북만 교환할 수 있습니다." :
+				grade < ExchangeGrade || grade > ExchangeTopGrade ? "III·IV 등급 트레이닝북만 교환할 수 있습니다." :
+				given.Any(b => TrainingBooks.Grade(b) != grade) || TrainingBooks.Grade(wanted) != grade ? "같은 등급의 트레이닝북으로만 교환할 수 있습니다." :
+				given.Contains(wanted) ? "올린 책과 같은 트레이닝북으로는 바꿀 수 없습니다." :
+				given.GroupBy(b => b).Any(g => InventoryHandlers.ItemAmount(user, g.Key) < g.Count()) ? "트레이닝북이 모자랍니다." : null;
 			if (refuse != null)
 			{
 				return refuse;
 			}
-			InventoryHandlers.AddItem(user, given, -1);
+			foreach (IGrouping<int, int> g in given.GroupBy(b => b))
+			{
+				InventoryHandlers.AddItem(user, g.Key, -g.Count());
+			}
 			InventoryHandlers.AddItem(user, wanted, 1);
 			made = wanted;
 			return null;

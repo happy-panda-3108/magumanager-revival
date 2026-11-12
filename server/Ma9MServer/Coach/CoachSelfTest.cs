@@ -118,6 +118,20 @@ namespace Ma9MServer
 				+ $"타격코치 stats {string.Join(" ", stats.OrderBy(k => k.Key).Select(k => $"{CoachCatalog.StatName(CoachCatalog.HC, k.Key)} {k.Value * 100.0 / stats.Values.Sum():F0}%"))}");
 			Check(lines.Count == 12 && lines.Values.All(v => Math.Abs(v / 100_000.0 - 1 / 12.0) < 0.006),
 				$"pack lineages alike: {string.Join(" ", lines.OrderBy(k => k.Key).Select(k => $"{TeamColors.LineageName(k.Key)} {k.Value / 1000.0:F1}%"))}");
+			// 자팀 계보 (user, 2026-11-13): OwnLinePercent of the packs for the team's line (LG here), the other 11 alike; none → all alike.
+			Dictionary<int, int> ownLines = new Dictionary<int, int>();
+			int lgLine = CoachCatalog.Line(6), ownGrades = 0;
+			for (int n = 0; n < 100_000; n++)
+			{
+				int idx = CoachCatalog.RollPack(rng, lgLine);
+				ownLines[CoachCatalog.LineOf(idx)] = ownLines.GetValueOrDefault(CoachCatalog.LineOf(idx)) + 1;
+				if (CoachCatalog.Grade(idx) == CoachCatalog.Elite) ownGrades++;
+			}
+			double ownShare = ownLines.GetValueOrDefault(lgLine) / 100_000.0, otherEach = (1 - CoachCatalog.OwnLinePercent / 100.0) / 11;
+			Check(ownLines.Count == 12 && Math.Abs(ownShare - CoachCatalog.OwnLinePercent / 100.0) < 0.006
+				&& ownLines.Where(k => k.Key != lgLine).All(k => Math.Abs(k.Value / 100_000.0 - otherEach) < 0.005) && Math.Abs(ownGrades / 1000.0 - CoachCatalog.PackPercent(CoachCatalog.Elite)) < 0.15
+				&& CoachCatalog.LineOf(CoachCatalog.RollPack(rng, -1)) >= 0,
+				$"pack for an LG 1군: LG {ownShare * 100:F1}%, others {string.Join(" ", ownLines.Where(k => k.Key != lgLine).OrderBy(k => k.Key).Select(k => $"{TeamColors.LineageName(k.Key)} {k.Value / 1000.0:F1}%"))}, 엘리트 {ownGrades / 1000.0:F2}%");
 			// MBC·청보·삼미 (no player cards) never come out: not from a pack, nor when a 조합 names one of them.
 			Dictionary<int, int> hyundai = new Dictionary<int, int>();
 			int oldOut = 0;
@@ -254,22 +268,26 @@ namespace Ma9MServer
 				if (RollResult(user, batter, rng) == 3) tops[0]++;
 				if (RollResult(user, strangerBatter, rng) == 3) tops[1]++;
 			}
-			Check(Math.Abs(tops[0] / 1000.0 - 34) < 1 && Math.Abs(tops[1] / 1000.0 - 25) < 1, $"best square: own club {tops[0] / 1000.0:F1}%, other {tops[1] / 1000.0:F1}%");
+			// Elite 20/21/23/36 since 2026-11-12 (each square of 22/22/22/34 −2/−1/+1/+2).
+			Check(Math.Abs(tops[0] / 1000.0 - 36) < 1 && Math.Abs(tops[1] / 1000.0 - 25) < 1, $"best square: own club {tops[0] / 1000.0:F1}%, other {tops[1] / 1000.0:F1}%");
 
-			// 타격코치: comes 50% (엘리트), on the best result too, not to another club's card, not without SP; takes the slot up for 50 SP.
+			// 타격코치: comes 50% (엘리트), on the best result too, not to another club's card, not without SP, not on the lowest square
+			// (2026-11-12); takes the slot up for 50 SP.
 			int came = 0;
 			for (int n = 0; n < 20_000; n++)
 			{
 				Ma9MPacket.PKS_SC_TRY_CARD_TRAINING t = new Ma9MPacket.PKS_SC_TRY_CARD_TRAINING();
-				OfferTraining(user, batter, batter.Idx, 0, TrainingBooks.Book(1, 1), n % 3, t, rng);
+				OfferTraining(user, batter, batter.Idx, 0, TrainingBooks.Book(1, 1), 1 + n % 3, t, rng);
 				came += t.encounter_coach.n;
 			}
 			s_offers.Clear();
-			Ma9MPacket.PKS_SC_TRY_CARD_TRAINING top = new Ma9MPacket.PKS_SC_TRY_CARD_TRAINING(), strange = new Ma9MPacket.PKS_SC_TRY_CARD_TRAINING();
+			Ma9MPacket.PKS_SC_TRY_CARD_TRAINING top = new Ma9MPacket.PKS_SC_TRY_CARD_TRAINING(), strange = new Ma9MPacket.PKS_SC_TRY_CARD_TRAINING(), lowest = new Ma9MPacket.PKS_SC_TRY_CARD_TRAINING();
 			OfferTraining(user, batter, batter.Idx, 0, TrainingBooks.Book(1, 3), 3, top, new Always());
-			OfferTraining(user, strangerBatter, strangerBatter.Idx, 0, TrainingBooks.Book(1, 3), 0, strange, new Always());
-			Check(Math.Abs(came / 200.0 - 50) < 1.5 && top.encounter_coach.n == 1 && strange.encounter_coach.n == 0,
-				$"타격코치 came {came / 200.0:F1}%, on the best result {top.encounter_coach.n}, to another club's card {strange.encounter_coach.n}");
+			OfferTraining(user, strangerBatter, strangerBatter.Idx, 0, TrainingBooks.Book(1, 3), 1, strange, new Always());
+			OfferTraining(user, batter, batter.Idx, 0, TrainingBooks.Book(1, 3), 0, lowest, new Always());
+			s_offers.Clear();
+			Check(Math.Abs(came / 200.0 - CoachCatalog.TrainingChance[CoachCatalog.Elite]) < 1.5 && top.encounter_coach.n == 1 && strange.encounter_coach.n == 0 && lowest.encounter_coach.n == 0,
+				$"타격코치 came {came / 200.0:F1}%, on the best result {top.encounter_coach.n}, to another club's card {strange.encounter_coach.n}, on the lowest square {lowest.encounter_coach.n}");
 			int book = TrainingBooks.Book(2, 3);
 			TrainingHandlers.SetSlot(user, batter.Idx, 2, book, 1);
 			Ma9MPacket.PKS_SC_TRY_CARD_TRAINING offer = new Ma9MPacket.PKS_SC_TRY_CARD_TRAINING();
@@ -398,8 +416,10 @@ namespace Ma9MServer
 			{
 				int[] trio = Enumerable.Range(0, 3).Select(_ => CoachCatalog.Roll(rng, CoachCatalog.Elite, other)).ToArray();
 				AddCoaches(user, trio);
+				// Three of one 타격·투수코치 go the 11-13 way (below).
+				bool trioSame = trio.All(c => CoachCatalog.Role(c) == CoachCatalog.Role(trio[0])) && CoachCatalog.HasStat(CoachCatalog.Role(trio[0]), CoachCatalog.Elite);
 				string e3 = TryCoachMix(user, trio, rng, out int e3Made, out string e3How);
-				if (e3 != null || e3How != "같은 구단 엘리트" || CoachCatalog.LineOf(e3Made) != CoachCatalog.Line(other) || CoachCatalog.Grade(e3Made) != CoachCatalog.Elite) eliteLineOut++;
+				if (e3 != null || e3How != (trioSame ? "같은 코치 능력치 다시" : "같은 구단 엘리트") || CoachCatalog.LineOf(e3Made) != CoachCatalog.Line(other) || CoachCatalog.Grade(e3Made) != CoachCatalog.Elite) eliteLineOut++;
 				eliteLineRoles[CoachCatalog.Role(e3Made)]++;
 				RemoveCoaches(user, new[] { e3Made });
 				AddCoaches(user, new[] { mbcE, lgE, lgE });
@@ -409,6 +429,36 @@ namespace Ma9MServer
 			}
 			Check(eliteLineOut == 0 && eliteLineRoles.All(v => v > 0) && lgOut == 0 && reHow == "엘리트 다시 뽑기",
 				$"조합 3 엘리트 of one club ×60 → its line every time, roles {string.Join("/", eliteLineRoles)}; MBC 1 + LG 2 → LG ({60 - lgOut}/60); two clubs → {reHow}");
+			// Three 엘리트 타격코치 (투수코치) of one line (user, 2026-11-13: "역할은 그대로 두고 능력치만 다시 뽑게"): the same coach, the stat
+			// drawn again; three 엘리트 수석코치 still give any 엘리트 of the line.
+			Dictionary<int, int> rerollStats = new Dictionary<int, int>();
+			int rerollOut = 0, hdRoles = 0;
+			for (int n = 0; n < 60; n++)
+			{
+				int role = n % 2 == 0 ? CoachCatalog.HC : CoachCatalog.PC;
+				int[] trio = Enumerable.Range(0, 3).Select(_ => CoachCatalog.Roll(rng, CoachCatalog.Elite, other, role)).ToArray();
+				AddCoaches(user, trio);
+				string r3 = TryCoachMix(user, trio, rng, out int r3Made, out string r3How);
+				if (r3 != null || r3How != "같은 코치 능력치 다시" || CoachCatalog.Role(r3Made) != role || CoachCatalog.LineOf(r3Made) != CoachCatalog.Line(other) || CoachCatalog.Grade(r3Made) != CoachCatalog.Elite) rerollOut++;
+				if (role == CoachCatalog.HC) rerollStats[CoachCatalog.Stat(r3Made)] = rerollStats.GetValueOrDefault(CoachCatalog.Stat(r3Made)) + 1;
+				RemoveCoaches(user, new[] { r3Made });
+				int[] hds = Enumerable.Range(0, 3).Select(_ => CoachCatalog.Card(other, CoachCatalog.HD, CoachCatalog.Elite)).ToArray();
+				AddCoaches(user, hds);
+				TryCoachMix(user, hds, rng, out int hdMade, out string hdHow);
+				if (hdHow != "같은 구단 엘리트") rerollOut++;
+				if (CoachCatalog.Role(hdMade) != CoachCatalog.HD) hdRoles++;
+				RemoveCoaches(user, new[] { hdMade });
+			}
+			Check(rerollOut == 0 && rerollStats.Count >= 4 && hdRoles > 0,
+				$"조합 3 엘리트 타격·투수코치 of one line ×60 → the same coach, 타격코치 stats {string.Join(" ", rerollStats.OrderBy(k => k.Key).Select(k => $"{CoachCatalog.StatName(CoachCatalog.HC, k.Key)} {k.Value}"))}; 3 수석코치 → any role ({hdRoles}/60 not 수석)");
+			// 자팀 (OwnLine): the 1군's most common line.
+			int ownLine = OwnLine(user);
+			Lineup ownLineup = s_db.GetLineup(user);
+			int ownCount = ownLineup == null ? 0 : ownLineup.Batters.Concat(ownLineup.Pitchers).Where(i => i != 0).Distinct().Count(i => s_catalog.Get(i) is CardInfo ci && CoachCatalog.Line(ci.TeamCode) == ownLine);
+			int bestOther = ownLineup == null ? 0 : ownLineup.Batters.Concat(ownLineup.Pitchers).Where(i => i != 0).Distinct().Select(i => s_catalog.Get(i)).Where(ci => ci != null && CoachCatalog.Line(ci.TeamCode) != ownLine)
+				.GroupBy(ci => CoachCatalog.Line(ci.TeamCode)).Select(g => g.Count()).DefaultIfEmpty(0).Max();
+			Check(ownLineup == null ? ownLine == -1 : ownLine >= 0 && ownCount >= bestOther,
+				$"자팀 계보 of autotest's 1군: {(ownLine >= 0 ? TeamColors.LineageName(ownLine) : "none")} {ownCount}장 (next line {bestOther}장)");
 			// The shop writes the odds as % (per mille since 11-10).
 			Check(Enumerable.Range(1, 4).Select(CoachCatalog.PackPercentText).SequenceEqual(new[] { "83", "14.5", "2", "0.5" }),
 				$"pack odds text {string.Join(" · ", Enumerable.Range(1, 4).Select(CoachCatalog.PackPercentText))}%");

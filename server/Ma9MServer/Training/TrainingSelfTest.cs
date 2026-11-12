@@ -134,33 +134,37 @@ namespace Ma9MServer
 			string shortOf = TrainingHandlers.TryMix(user, new[] { c1, c1, c1, c1 }, out _);
 			string okII = TrainingHandlers.TryMix(user, new[] { e2, e2, e2, e2 }, out int madeII);
 			Check(shortOf != null && okII == null && TrainingBooks.Grade(madeII) == 3, $"II 4권 → {TrainingBooks.Name(madeII)}; 모자랄 때 '{shortOf}'");
-			// 트레이닝북 교환소 (2026-10-25): one III book for the III book of another stat; II books, the same book and books
-			// the team lacks are refused and change nothing.
-			int k3 = TrainingBooks.Book(1, 3), want = TrainingBooks.Book(10, 3);
+			// 트레이닝북 교환소 (2026-10-25; 2 → 1 since 11-12): two III books (any stats) for one III book of another stat; one
+			// book, II books, the wanted book among the given and books the team lacks are refused and change nothing.
+			int k3 = TrainingBooks.Book(1, 3), want = TrainingBooks.Book(10, 3), q3 = TrainingBooks.Book(5, 3);
 			InventoryHandlers.AddItem(user, s3, 1 - InventoryHandlers.ItemAmount(user, s3));
+			InventoryHandlers.AddItem(user, q3, 1 - InventoryHandlers.ItemAmount(user, q3));
 			InventoryHandlers.AddItem(user, k3, -InventoryHandlers.ItemAmount(user, k3));
 			int wantBefore = InventoryHandlers.ItemAmount(user, want);
-			string fromII = TrainingHandlers.TryExchange(user, e2, want, out _);
-			string same = TrainingHandlers.TryExchange(user, s3, s3, out _);
-			string lacking = TrainingHandlers.TryExchange(user, k3, want, out _);
-			string okSwap = TrainingHandlers.TryExchange(user, s3, want, out int swapped);
-			Check(fromII != null && same != null && lacking != null && okSwap == null && swapped == want
-				&& InventoryHandlers.ItemAmount(user, s3) == 0 && InventoryHandlers.ItemAmount(user, want) == wantBefore + 1,
-				$"트레이닝북 교환: {TrainingBooks.Name(s3)} → {TrainingBooks.Name(swapped)}; II '{fromII}', 같은 책 '{same}', 없는 책 '{lacking}'");
-			// IV books (코칭스태프 on, user 11-10 02:2x: "4단계북 끼리도 교환소를 사용할 수 있도록"): a IV for the IV of another stat;
-			// a IV for a III and a III for a IV are refused.
+			string oneBook = TrainingHandlers.TryExchange(user, new[] { s3 }, want, out _);
+			string fromII = TrainingHandlers.TryExchange(user, new[] { e2, e2 }, want, out _);
+			string same = TrainingHandlers.TryExchange(user, new[] { s3, q3 }, s3, out _);
+			string lacking = TrainingHandlers.TryExchange(user, new[] { s3, s3 }, want, out _);
+			string okSwap = TrainingHandlers.TryExchange(user, new[] { s3, q3 }, want, out int swapped);
+			Check(oneBook != null && fromII != null && same != null && lacking != null && okSwap == null && swapped == want
+				&& InventoryHandlers.ItemAmount(user, s3) == 0 && InventoryHandlers.ItemAmount(user, q3) == 0 && InventoryHandlers.ItemAmount(user, want) == wantBefore + 1,
+				$"트레이닝북 교환 2 → 1: {TrainingBooks.Name(s3)} + {TrainingBooks.Name(q3)} → {TrainingBooks.Name(swapped)}; 1권 '{oneBook}', II '{fromII}', 같은 책 '{same}', 모자람 '{lacking}'");
+			// IV books (코칭스태프 on, user 11-10 02:2x: "4단계북 끼리도 교환소를 사용할 수 있도록"): two IV (here of one stat) for
+			// the IV of another stat; IV for a III and III for a IV are refused.
 			if (TrainingBooks.TopGrade == 4)
 			{
 				int c4 = TrainingBooks.Book(1, 4), p4 = TrainingBooks.Book(7, 4), c3 = TrainingBooks.Book(1, 3);
-				InventoryHandlers.AddItem(user, c4, 1 - InventoryHandlers.ItemAmount(user, c4));
-				InventoryHandlers.AddItem(user, c3, 1 - InventoryHandlers.ItemAmount(user, c3));
+				InventoryHandlers.AddItem(user, c4, 2 - InventoryHandlers.ItemAmount(user, c4));
+				InventoryHandlers.AddItem(user, c3, 2 - InventoryHandlers.ItemAmount(user, c3));
 				int p4Before = InventoryHandlers.ItemAmount(user, p4), c3Before = InventoryHandlers.ItemAmount(user, c3);
-				string ivToIii = TrainingHandlers.TryExchange(user, c4, want, out _);
-				string iiiToIv = TrainingHandlers.TryExchange(user, c3, p4, out _);
-				string okIv = TrainingHandlers.TryExchange(user, c4, p4, out int swappedIv);
-				Check(ivToIii != null && iiiToIv != null && okIv == null && swappedIv == p4 && InventoryHandlers.ItemAmount(user, c4) == 0
+				string ivToIii = TrainingHandlers.TryExchange(user, new[] { c4, c4 }, want, out _);
+				string iiiToIv = TrainingHandlers.TryExchange(user, new[] { c3, c3 }, p4, out _);
+				string mixedGrades = TrainingHandlers.TryExchange(user, new[] { c4, c3 }, p4, out _);
+				string okIv = TrainingHandlers.TryExchange(user, new[] { c4, c4 }, p4, out int swappedIv);
+				Check(ivToIii != null && iiiToIv != null && mixedGrades != null && okIv == null && swappedIv == p4 && InventoryHandlers.ItemAmount(user, c4) == 0
 					&& InventoryHandlers.ItemAmount(user, p4) == p4Before + 1 && InventoryHandlers.ItemAmount(user, c3) == c3Before,
-					$"트레이닝북 교환 IV: {TrainingBooks.Name(c4)} → {TrainingBooks.Name(swappedIv)}; IV → III '{ivToIii}', III → IV '{iiiToIv}'");
+					$"트레이닝북 교환 IV 2 → 1: {TrainingBooks.Name(c4)} 2권 → {TrainingBooks.Name(swappedIv)}; IV → III '{ivToIii}', III → IV '{iiiToIv}', 등급 섞임 '{mixedGrades}'");
+				InventoryHandlers.AddItem(user, c3, -InventoryHandlers.ItemAmount(user, c3));
 			}
 			// 빠른 조합 (2026-11-11, TrainingQuick.cs): 13 I and 3 II, up to III → I 12 → II 3, II 6 → III 1 (I 1, II 2 left).
 			void Clear(int grade)
@@ -187,8 +191,8 @@ namespace Ma9MServer
 			// IV: refused without a 트레이닝코치, and with one too (III 1 left, a IV takes at least 2).
 			string toIv = TrainingHandlers.TryQuickMix(user, 4, out _, out _);
 			Check(nothing != null && toIv != null, $"책이 모자랄 때 '{nothing}'; IV까지 ({(TrainingHandlers.QuickTop(user) == 4 ? "트레이닝코치 있음" : "트레이닝코치 없음")}) '{toIv}'");
-			// 목표 교환: III 컨택 5 · 선구 2 · 구위 3, targets 컨택 2 · 파워 3 · 선구 2 → the 구위 (target 0) books go to 파워 first;
-			// 컨택's surplus stays.
+			// 목표 교환 (2 → 1 since 11-12): III 컨택 5 · 선구 2 · 구위 3, targets 컨택 2 · 파워 3 · 선구 2 → surplus 6 (구위 3 at
+			// target 0 first, then 컨택 3) makes 파워 +3: 컨택 2 · 파워 3 · 선구 2 · 구위 0, seven books.
 			Clear(3);
 			InventoryHandlers.AddItem(user, TrainingBooks.Book(1, 3), 5);
 			InventoryHandlers.AddItem(user, TrainingBooks.Book(4, 3), 2);
@@ -202,14 +206,17 @@ namespace Ma9MServer
 			string gradeII = TrainingHandlers.TryTargetExchange(user, 2, targets, out _, out _);
 			string swap = TrainingHandlers.TryTargetExchange(user, 3, targets, out int moved, out string swapLog);
 			int[] now = Enumerable.Range(1, 12).Select(s => InventoryHandlers.ItemAmount(user, TrainingBooks.Book(s, 3))).ToArray();
-			Check(zero != null && shortList != null && gradeII != null && swap == null && moved == 3 && now[0] == 5 && now[1] == 3 && now[3] == 2 && now[10] == 0 && now.Sum() == 10,
-				$"목표 교환 III: {moved}권 ({swapLog}); 목표 0 '{zero}', 11칸 '{shortList}', II '{gradeII}'");
+			Check(zero != null && shortList != null && gradeII != null && swap == null && moved == 3 && now[0] == 2 && now[1] == 3 && now[3] == 2 && now[10] == 0 && now.Sum() == 7,
+				$"목표 교환 III 2 → 1: {moved}권 ({swapLog}); 목표 0 '{zero}', 11칸 '{shortList}', II '{gradeII}'");
+			// Short: 구위 7 more (target 0) and 스피드 4 wanted → three pairs make 스피드 3, one 구위 left, one 스피드 short.
+			InventoryHandlers.AddItem(user, TrainingBooks.Book(11, 3), 7);
 			targets[2] = 4;
 			string more = TrainingHandlers.TryTargetExchange(user, 3, targets, out int moved2, out string moreLog);
 			now = Enumerable.Range(1, 12).Select(s => InventoryHandlers.ItemAmount(user, TrainingBooks.Book(s, 3))).ToArray();
-			string met = TrainingHandlers.TryTargetExchange(user, 3, new[] { 2, 3, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0 }, out _, out _);
-			Check(more == null && moved2 == 3 && now[0] == 2 && now[2] == 3 && met != null,
-				$"목표 교환 모자랄 때: {moved2}권 ({moreLog}); 다 채웠을 때 '{met}'");
+			string odd = TrainingHandlers.TryTargetExchange(user, 3, targets, out _, out _);
+			string met = TrainingHandlers.TryTargetExchange(user, 3, new[] { 2, 3, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0 }, out _, out _);
+			Check(more == null && moved2 == 3 && now[0] == 2 && now[2] == 3 && now[10] == 1 && odd != null && met != null,
+				$"목표 교환 모자랄 때: {moved2}권 ({moreLog}); 남은 1권 '{odd}'; 다 채웠을 때 '{met}'");
 			Clear(3);
 			Clear(1);
 			Clear(2);

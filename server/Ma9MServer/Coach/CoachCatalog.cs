@@ -71,7 +71,8 @@ namespace Ma9MServer
 		public static readonly int[] BatterStats = { 1, 2, 3, 4, 6 }, PitcherStats = { 2, 3, 4, 5, 6 };
 
 		// By grade (index 1-4), the user's numbers unless marked as a default of mine.
-		public static readonly int[] TrainingChance = { 0, 20, 30, 40, 50 };  // 타격·투수코치 in a training, %
+		// 타격·투수코치 in a training, %: 20/30/40/50 until 2026-11-12 (user: "투수, 타자코치가 트레이닝에 개입할 확률을 전체적으로 10% 증가").
+		public static readonly int[] TrainingChance = { 0, 30, 40, 50, 60 };
 
 		public static readonly int[] Visitors = { 0, 2, 3, 4, 5 };  // 수석코치: visitors a sitting (default: the original's 2-5, which the client's room shows)
 
@@ -79,9 +80,12 @@ namespace Ma9MServer
 
 		public static readonly int[] TopMixBooks = { 0, 5, 4, 3, 2 };  // 트레이닝코치: III books for one IV
 
-		public static readonly int[][] ResultOdds =  // 트레이닝코치: the four result squares, %, for its club's cards
+		// 트레이닝코치: the four result squares, %, for its club's cards. 2026-11-12 (user: "트레이닝 코치가 있을 때 지금 확률의 각각
+		// -2%/-1%/+1%/+2%로 수정해서 반영합시다"): each grade's odds of 11-04 (25/25/25/25, 24/24/24/28, 23/23/23/31, 22/22/22/34)
+		// moved −2/−1/+1/+2 points, so the 노말 one counts too.
+		public static readonly int[][] ResultOdds =
 		{
-			null, new[] { 25, 25, 25, 25 }, new[] { 24, 24, 24, 28 }, new[] { 23, 23, 23, 31 }, new[] { 22, 22, 22, 34 }
+			null, new[] { 23, 24, 26, 27 }, new[] { 22, 23, 25, 30 }, new[] { 21, 22, 24, 33 }, new[] { 20, 21, 23, 36 }
 		};
 
 		public static readonly int[] SetBonus = { 0, 0, 1, 2, 3 };  // all five of one club: by the lowest grade, every 육성스탯 of its cards
@@ -211,6 +215,30 @@ namespace Ma9MServer
 					}
 				}
 			}
+		}
+
+		// 자팀 코치 (user, 2026-11-13 00:5x: "타자코치랑 투수코치까지 원하는 스탯으로 뽑으려니까 빡세네? 자팀 코치가 뜰 확률을 조금
+		// 높일까?" → 20%, 자팀 = 1군에 가장 많은 계보): a pack's card is of the team's own lineage this often, else of one of the
+		// other 11 alike (until then all 12 alike, 8.3% each). A line's five 엘리트 with the wanted 타격·투수 stats: 7.8억 → 5.1억
+		// MP on average, any stats 2.9억 → 2.0억 (scratch coachpack_sim.py, 400 runs each). 조합 keep every line alike.
+		public const int OwnLinePercent = 20;
+
+		// A pack's card for a team whose own lineage is `ownLine` (CoachHandlers.OwnLine; -1 or a line without coaches: all alike).
+		public static int RollPack(Random rng, int ownLine)
+		{
+			int[] own = ownLine < 0 ? null : Lines.FirstOrDefault(l => Line(l[0]) == ownLine);
+			if (own == null) return Roll(rng);
+			int[] line;
+			if (rng.Next(100) < OwnLinePercent)
+			{
+				line = own;
+			}
+			else
+			{
+				int[][] others = Lines.Where(l => l != own).ToArray();
+				line = others[rng.Next(others.Length)];
+			}
+			return Roll(rng, 0, line[rng.Next(line.Length)]);
 		}
 
 		// One card: grade by the pack's odds (or the given one), then any of the grade's coaches (5, or 13 from 레어) of any

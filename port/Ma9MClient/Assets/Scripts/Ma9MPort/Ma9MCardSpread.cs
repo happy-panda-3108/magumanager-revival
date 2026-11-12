@@ -162,8 +162,31 @@ public class Ma9MCardSpread : MonoBehaviour
 		return true;
 	}
 
+	// The server's 도전과제 묶음 창 ("도전과제 n개 달성", a type 1 POPUP since 11-12, Achievements.Deliver) held the same way
+	// (2026-11-12, tester_o: it came over the face-down cards; a "레어 10장" in it would name them before they turn).
+	private static readonly List<KeyValuePair<string[], Action>> s_heldPopups = new List<KeyValuePair<string[], Action>>();
+
+	public static bool HoldPopup(string title, string message, Action confirm)
+	{
+		if (s_current == null || s_current.root == null || s_current.AllTurned() || title == null || !title.StartsWith("도전과제"))
+		{
+			return false;
+		}
+		s_heldPopups.Add(new KeyValuePair<string[], Action>(new string[2] { title, message }, confirm));
+		return true;
+	}
+
 	private static void ReleaseMissions()
 	{
+		if (s_heldPopups.Count > 0)
+		{
+			List<KeyValuePair<string[], Action>> popups = new List<KeyValuePair<string[], Action>>(s_heldPopups);
+			s_heldPopups.Clear();
+			foreach (KeyValuePair<string[], Action> p in popups)
+			{
+				PopupManager.ViewPopup1(p.Key[0], p.Key[1], Localization.instance.Get("OK"), p.Value);
+			}
+		}
 		if (s_heldMissions.Count == 0)
 		{
 			return;
@@ -851,6 +874,9 @@ public class Ma9MCardSpread : MonoBehaviour
 	}
 
 	// AndroidManager runs the top action without popping it and turns the key off until someone turns it back on.
+	// The back key turns this page's cards, then closes the spread with the later pages too (2026-11-12, AI tester LG:
+	// "뒤로 가기로 남은 연출 다 건너뛰기"가 펼치기에서 "다음 20장"이 되어 100장이면 9번 눌러야 했다; the cards are in the
+	// inventory already, and the "다음" button still goes page by page).
 	private void OnEscape()
 	{
 		if (root == null)
@@ -860,10 +886,6 @@ public class Ma9MCardSpread : MonoBehaviour
 		if (!AllTurned())
 		{
 			TurnAll(true);
-		}
-		else if (pending.Count > 0)
-		{
-			NextPage();
 		}
 		else
 		{

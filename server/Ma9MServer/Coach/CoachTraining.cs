@@ -9,7 +9,8 @@ namespace Ma9MServer
 	//   단계 올려주는 느낌", 노말/스페셜/레어/엘리트 20/30/40/50%. The client's training result shows him (encounter_coach), asks
 	//   to spend the SP and sends TRY_COACH_TRAINING; the slot's result goes one square up. He does not come when the team
 	//   has under 50 SP. On the book's best result he takes it one past it (user 11-04: "+4 … SP소모하고 나면 +5").
-	// - 트레이닝코치: the result odds of his club's cards (24/24/24/28 … 22/22/22/34), and in 트레이닝북 조합 III books into a
+	//   Not on the lowest square (2026-11-12).
+	// - 트레이닝코치: the result odds of his club's cards (23/24/26/27 … 20/21/23/36 since 2026-11-12), and in 트레이닝북 조합 III books into a
 	//   IV (노말 5 … 엘리트 2 books, any club: books have none).
 	public static partial class CoachHandlers
 	{
@@ -54,7 +55,9 @@ namespace Ma9MServer
 			rng ??= s_rng;
 			int coach = Staff(user)[info.IsBatter ? CoachCatalog.HC : CoachCatalog.PC];
 			if (coach == 0 || !CoachCatalog.Serves(coach, info.TeamCode)) return;
-			if (result > 3) return;
+			// Not on the lowest square (user 2026-11-12: "트레이닝하다가 젤 낮은 단계에서 코치가 등장하는거 살짝 역겨운데 그 때는 코치가 등장하지
+			// 않는걸로 합시다").
+			if (result == 0 || result > 3) return;
 			if (Sp(user) < CoachCatalog.TrainingSp) return;
 			if (!CoachCatalog.AlwaysTraining && rng.Next(100) >= CoachCatalog.TrainingChance[CoachCatalog.Grade(coach)]) return;
 			int id = ++s_nextOffer;

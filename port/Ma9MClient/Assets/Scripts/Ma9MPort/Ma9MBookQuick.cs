@@ -173,7 +173,9 @@ public static class Ma9MBookQuick
 			}
 		}
 		lines.Add("능력치는 무작위 · 남는 책은 그대로");
-		Ma9MBookPopup p = Ma9MBookPopup.Create(46f);
+		// 2026-11-12 (AI tester LG 66: "IV권의 효과(+2~+5)가 미리 나오지 않는다"): each grade's result on one training square.
+		lines.Add("한 칸 효과: I -1~+2 · II 0~+3 · III +1~+4" + ((maxGrade >= 4) ? " · IV +2~+5" : string.Empty));
+		Ma9MBookPopup p = Ma9MBookPopup.Create(63f);
 		p.Title.text = "빠른 조합";
 		p.Content.text = string.Join("\n", lines.ToArray());
 		p.Content.transform.localScale = new Vector3(13f, 13f, 1f);
@@ -252,7 +254,7 @@ public static class Ma9MBookQuick
 				short_.Add(StatNames[s] + " " + (targets[s] - b));
 			}
 		}
-		string result = G(grade) + " 책 " + moved + "권을 바꿨습니다.\n" + Rows(changes, 4) + ((short_.Count > 0) ? ("\n모자람: " + string.Join(" · ", short_.ToArray())) : string.Empty);
+		string result = G(grade) + " 책 " + moved + "권을 받았습니다. (" + (moved * CombineTraining_DataCenter.Ma9MExchangeCost) + "권 사용)\n" + Rows(changes, 4) + ((short_.Count > 0) ? ("\n모자람: " + string.Join(" · ", short_.ToArray())) : string.Empty);
 		PopupManager.ViewPopup1("목표 교환 결과", result, Localization.instance.Get("OK"), null);
 	}
 
@@ -354,7 +356,8 @@ public static class Ma9MBookQuick
 					Step(1);
 				}, down);
 			});
-			m_p.AddButton("0으로", 135f, row1, 0.85f, delegate
+			// "이 줄 0" (2026-11-12, AI tester LG: "0으로" read as all the targets; it clears the picked row only).
+			m_p.AddButton("이 줄 0", 135f, row1, 0.85f, delegate
 			{
 				m_targets[m_pick] = 0;
 				Refresh();
@@ -402,7 +405,8 @@ public static class Ma9MBookQuick
 			Refresh();
 		}
 
-		// The server's rule (TryTargetExchange): books above a stat's target go to the stats below theirs.
+		// The server's rule (TryTargetExchange): books above a stat's target go to the stats below theirs, two for one since
+		// 2026-11-12 (CombineTraining_DataCenter.Ma9MExchangeCost). moves = books received.
 		private void Plan(out int moves, out int lacking, out int extra)
 		{
 			int surplus = 0;
@@ -412,9 +416,10 @@ public static class Ma9MBookQuick
 				surplus += Mathf.Max(0, m_held[s] - m_targets[s]);
 				deficit += Mathf.Max(0, m_targets[s] - m_held[s]);
 			}
-			moves = Mathf.Min(surplus, deficit);
+			int cost = CombineTraining_DataCenter.Ma9MExchangeCost;
+			moves = Mathf.Min(surplus / cost, deficit);
 			lacking = deficit - moves;
-			extra = surplus - moves;
+			extra = surplus - moves * cost;
 		}
 
 		private void Refresh()
@@ -432,7 +437,7 @@ public static class Ma9MBookQuick
 			int lacking;
 			int extra;
 			Plan(out moves, out lacking, out extra);
-			string first = (moves > 0) ? ("교환하면 " + moves + "권을 바꿉니다") : "바꿀 책이 없습니다";
+			string first = (moves > 0) ? ("교환하면 책 " + (moves * CombineTraining_DataCenter.Ma9MExchangeCost) + "권 → " + moves + "권") : "바꿀 책이 없습니다 (2권 → 1권)";
 			first += ((lacking > 0) ? (" · 모자람 " + lacking) : string.Empty) + ((extra > 0) ? (" · 그대로 " + extra) : string.Empty);
 			m_p.Content.text = first + "\n줄을 눌러 고르고 -1 / +1 (꾹 누르면 빠르게)";
 		}
@@ -450,7 +455,7 @@ public static class Ma9MBookQuick
 			}
 			if (none || moves == 0)
 			{
-				PopupManager.ViewPopup1(Localization.instance.Get("Message"), none ? "능력치별 목표 권수를 먼저 정해 주세요." : ((lacking == 0) ? (G(m_grade) + " 책이 이미 목표 권수만큼 있습니다.") : ("목표보다 많은 " + G(m_grade) + " 책이 없어\n바꿀 책이 없습니다.")), Localization.instance.Get("OK"), null);
+				PopupManager.ViewPopup1(Localization.instance.Get("Message"), none ? "능력치별 목표 권수를 먼저 정해 주세요." : ((lacking == 0) ? (G(m_grade) + " 책이 이미 목표 권수만큼 있습니다.") : ((extra > 0) ? ("목표보다 많은 " + G(m_grade) + " 책이 " + extra + "권뿐입니다.\n(2권을 내야 1권을 받습니다)") : ("목표보다 많은 " + G(m_grade) + " 책이 없어\n바꿀 책이 없습니다."))), Localization.instance.Get("OK"), null);
 				return;
 			}
 			int[] entries = new int[2 + Stats];

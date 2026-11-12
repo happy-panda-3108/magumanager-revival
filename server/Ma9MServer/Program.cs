@@ -51,6 +51,11 @@ namespace Ma9MServer
 				if (refMode >= 0 && refMode + 1 < args.Length) TeamStrength.Mode = Enum.Parse<TeamStrength.RefMode>(args[refMode + 1], true);
 				Environment.Exit(LeagueSelfTest.Run(db, gameData, Path.Combine(dataDir, "ma9m.db"), hours));
 			}
+			if (Array.IndexOf(args, "--lobbyranktest") >= 0)
+			{
+				// Dev (systems session, 2026-11-12): the lobby's 순위 변동 at 0시 of each day of every running league; use a copy.
+				Environment.Exit(LobbyRankSelfTest.Run(Path.Combine(dataDir, "ma9m.db")));
+			}
 			if (Array.IndexOf(args, "--posttest") >= 0)
 			{
 				// Dev: the common league calendar through one whole cycle (postseason, close, next league); use a copy.

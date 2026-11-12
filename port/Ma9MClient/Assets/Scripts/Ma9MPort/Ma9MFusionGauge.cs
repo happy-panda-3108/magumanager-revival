@@ -235,6 +235,42 @@ public static class Ma9MFusionGauge
 		s_oddsLine.text = (odds.Count == 0) ? string.Empty : string.Join(" · ", odds.Select(o => Ma9MFusionOdds.OutcomeName(mainRung, o.Key) + " " + Pct(o.Value)).ToArray());
 	}
 
+	// The chance (0..1) that the main card of the slots goes down (a 레전드: comes out a 10엘), as the odds line shows; 0 with
+	// fewer than two cards or without the odds table. 2026-11-12 (user 10:4x: "선수카드가 강등당할 가능성이 있는 경우에만 확인
+	// 팝업을 한 번 더"): Combine_Main asks before such a combine.
+	public static double DownChance()
+	{
+		List<PlayerData> cards = new List<PlayerData>();
+		for (int i = 0; i < Combine_DataCenter.GetCombineCardCount(); i++)
+		{
+			PlayerData card = Combine_DataCenter.GetCombineCardData(i);
+			if (card != null && card.card_info != null)
+			{
+				cards.Add(card);
+			}
+		}
+		if (cards.Count < 2)
+		{
+			return 0.0;
+		}
+		PlayerData main = cards.OrderByDescending(Ma9MCombineRecipes.RungOf).ThenByDescending(c => c.card_info.ball).First();
+		int mainRung = Ma9MCombineRecipes.RungOf(main);
+		int balls = cards.Where(c => c != main).Sum(c => (int)c.card_info.ball);
+		bool legend = mainRung == Ma9MCombineRecipes.LegendRung;
+		double full = legend ? Ma9MFusionOdds.LegendBalls : Ma9MFusionOdds.FullPerBall * main.card_info.ball;
+		double fill = (full > 0.0) ? Mathf.Clamp01((float)(balls / full)) : 0.0;
+		if (legend)
+		{
+			return 1.0 - fill;
+		}
+		return Ma9MFusionOdds.Odds(mainRung, fill).Where(o => o.Key < mainRung).Sum(o => o.Value);
+	}
+
+	public static string DownText(double p)
+	{
+		return Pct(p);
+	}
+
 	private static string Pct(double p)
 	{
 		double v = p * 100.0;

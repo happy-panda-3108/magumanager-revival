@@ -1378,6 +1378,32 @@ namespace Ma9MServer
 			return v;
 		}
 
+		// The standings without the season's regular-season games numbered `first` and above (as ConfirmedView does from
+		// the first unconfirmed game): the lobby's 순위 변동 compares with the standings at the end of the previous day
+		// (LeagueHandlers.PreviousDayRank; systems session, user 2026-11-12).
+		public LeagueState ViewBefore(LeagueState s, int first)
+		{
+			LeagueState v = new LeagueState
+			{
+				UserCode = s.UserCode, Tier = s.Tier, Season = s.Season, Start = s.Start, NextGame = s.NextGame, MyIndex = s.MyIndex,
+				FirstGame = s.FirstGame, PostSlot = s.PostSlot, LastGame = s.LastGame, NextTier = s.NextTier, Share = s.Share,
+				Clubs = s.Clubs.Select(c => c.Copy()).ToList(),
+				HeadToHead = s.Start >= LeagueState.KboPctFrom ? HeadToHeadOf(s.UserCode, s.Season, s.NextGame + s.LastGame, first) : null
+			};
+			foreach (LeagueGame g in Games(s.UserCode, s.Season).Where(g => g.Game >= first && g.Game <= LeagueRules.Games))
+			{
+				LeagueClub h = v.Clubs[g.Home], a = v.Clubs[g.Away];
+				h.RunsFor -= g.HomeScore;
+				h.RunsAgainst -= g.AwayScore;
+				a.RunsFor -= g.AwayScore;
+				a.RunsAgainst -= g.HomeScore;
+				if (g.HomeScore > g.AwayScore) { h.W--; a.L--; }
+				else if (g.HomeScore < g.AwayScore) { h.L--; a.W--; }
+				else { h.D--; a.D--; }
+			}
+			return v;
+		}
+
 		// A finished season: history row; old games are dropped except the user's unconfirmed ones.
 		public void CloseSeason(LeagueState s, int rank, LeagueClub mine, int nextTier)
 		{

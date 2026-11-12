@@ -442,17 +442,33 @@ namespace Ma9MServer
 			}
 			s_pending.Remove(user);
 			int mp = 0;
-			List<Def> named = new List<Def>();
+			List<Def> named = new List<Def>(), boxes = new List<Def>();
 			foreach (int idx in due)
 			{
 				Def d = Find(idx);
 				if (d == null) continue;
 				mp += Mp(d.Grade);
-				if (s_dynamic.ContainsKey(idx))
-				{
-					named.Add(d);
-					continue;
-				}
+				(s_dynamic.ContainsKey(idx) ? named : boxes).Add(d);
+			}
+			// 2026-11-12 (user 11:5x 3번, AI tester kt B6: 21시간 비운 뒤 첫 로그인에 도전과제 완료 창 5개를 하나씩 눌러 닫음): two or more at
+			// once come as one list ("도전과제 5개 달성"); one alone keeps the original 도전과제완료 box. "보고 별로면 그대로 두겠음": the
+			// list goes away with BundleAt = int.MaxValue.
+			if (boxes.Count + named.Count >= BundleAt)
+			{
+				List<Def> all = boxes.Concat(named).OrderByDescending(d => AchievementOrder(d.Grade)).ThenBy(d => d.Index).ToList();
+				int shown = all.Count <= 4 ? all.Count : 3;
+				List<string> lines = all.Take(shown).Select(d => $"{d.Name} ({d.Grade}) +{Mp(d.Grade):N0} MP").ToList();
+				if (all.Count > shown) lines.Add($"외 {all.Count - shown}개");
+				lines.Add($"합계 {mp:N0} MP" + (named.Count > 0 ? " · 팀컬러 업적은 다음 접속부터 목록에" : string.Empty));
+				Ma9MPacket.PKS_SC_POPUP list = new Ma9MPacket.PKS_SC_POPUP();
+				list.Type.n = 1;
+				list.Messages.array = new[] { new PLongString { str = $"도전과제 {all.Count}개 달성" }, new PLongString { str = string.Join("\n", lines) } };
+				session.Send(list);
+				named.Clear();
+				boxes.Clear();
+			}
+			foreach (Def d in boxes)
+			{
 				Ma9MPacket.PKS_SC_GET_TEAM_MISSION_REWARD box = new Ma9MPacket.PKS_SC_GET_TEAM_MISSION_REWARD();
 				box.mission_index.n = d.Index;
 				session.Send(box);
@@ -480,6 +496,9 @@ namespace Ma9MServer
 		}
 
 		private static int AchievementOrder(char grade) => "EDCBAS".IndexOf(grade);
+
+		// 업적 at once from which Deliver sends one list popup instead of a 도전과제완료 box each (2026-11-12).
+		public const int BundleAt = 2;
 
 		// 팀컬러 이름별 업적 (TeamColors.RecordForAchievements): the applied named entries and their lower grades. Rows
 		// new to every team are made and the table rewritten; the user's new ones wait for Deliver. Then the 팀컬러 n종

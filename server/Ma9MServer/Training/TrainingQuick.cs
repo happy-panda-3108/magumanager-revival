@@ -110,7 +110,8 @@ namespace Ma9MServer
 		}
 
 		// targets: the wanted count of each stat's book of that grade (stats 1-12 in order). Books above a stat's target
-		// (all of a stat at 0 first, then the largest surplus) go to the stat furthest below its target, one at a time.
+		// (all of a stat at 0 first, then the largest surplus) go to the stat furthest below its target, two for one since
+		// 2026-11-12 (ExchangeCost, user 10:4x "교환은 2대1 교환으로"); `moved` is the books received.
 		internal static string TryTargetExchange(uint user, int grade, int[] targets, out int moved, out string log)
 		{
 			moved = 0;
@@ -135,24 +136,29 @@ namespace Ma9MServer
 				surplus[s] = Math.Max(0, held[s] - targets[s - 1]);
 				deficit[s] = Math.Max(0, targets[s - 1] - held[s]);
 			}
-			moved = Math.Min(surplus.Sum(), deficit.Sum());
+			moved = Math.Min(surplus.Sum() / ExchangeCost, deficit.Sum());
 			if (moved == 0)
 			{
-				return deficit.Sum() == 0 ? $"{Numeral(grade)} 책이 이미 목표 권수만큼 있습니다." : $"목표보다 많은 {Numeral(grade)} 책이 없어 바꿀 책이 없습니다.";
+				return deficit.Sum() == 0 ? $"{Numeral(grade)} 책이 이미 목표 권수만큼 있습니다."
+					: surplus.Sum() > 0 ? $"목표보다 많은 {Numeral(grade)} 책이 {surplus.Sum()}권뿐입니다.\n({ExchangeCost}권을 내야 1권을 받습니다)"
+					: $"목표보다 많은 {Numeral(grade)} 책이 없어 바꿀 책이 없습니다.";
 			}
 			int[] after = (int[])held.Clone();
 			for (int n = 0; n < moved; n++)
 			{
-				int from = Enumerable.Range(1, stats).Where(s => surplus[s] > 0).OrderByDescending(s => targets[s - 1] == 0 ? 1 : 0).ThenByDescending(s => surplus[s]).ThenBy(s => s).First();
+				for (int k = 0; k < ExchangeCost; k++)
+				{
+					int from = Enumerable.Range(1, stats).Where(s => surplus[s] > 0).OrderByDescending(s => targets[s - 1] == 0 ? 1 : 0).ThenByDescending(s => surplus[s]).ThenBy(s => s).First();
+					surplus[from]--;
+					after[from]--;
+				}
 				int to = Enumerable.Range(1, stats).Where(s => deficit[s] > 0).OrderByDescending(s => deficit[s]).ThenBy(s => s).First();
-				surplus[from]--;
 				deficit[to]--;
-				after[from]--;
 				after[to]++;
 			}
 			Dictionary<int, int> delta = Enumerable.Range(1, stats).ToDictionary(s => TrainingBooks.Book(s, grade), s => after[s] - held[s]);
 			Apply(user, delta);
-			log = $"{Numeral(grade)} {moved}권: " + string.Join(", ", Enumerable.Range(1, stats).Where(s => after[s] != held[s]).Select(s => $"{TrainingBooks.StatNames[s]} {held[s]}→{after[s]}"))
+			log = $"{Numeral(grade)} {moved}권 받음(책 {moved * ExchangeCost}권 사용): " + string.Join(", ", Enumerable.Range(1, stats).Where(s => after[s] != held[s]).Select(s => $"{TrainingBooks.StatNames[s]} {held[s]}→{after[s]}"))
 				+ (deficit.Sum() > 0 ? $"; 모자람 {deficit.Sum()}" : string.Empty) + (surplus.Sum() > 0 ? $"; 목표 넘는 책 {surplus.Sum()}권 그대로" : string.Empty);
 			return null;
 		}
