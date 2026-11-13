@@ -777,11 +777,13 @@ namespace Ma9MServer
 
 		// aiDev: an AI deck's per-card development, for its 포지션 변경 (six tiers, 2026-11-08; real teams use owned).
 		// aiCoach: the AI deck's coaching set grade (AiTeams.DeckRule.Coach), for its 수석코치's 면담 (AiConsult).
-		private static GameTeam Team(LeagueClub c, Lineup l, DateTime day, int game, List<TeamCard> owned, IEnumerable<TeamCard> aiDev = null, int aiCoach = 0)
+		// neutral (자동 편성, user 11-13 16:5x: "자동 편성에서는 컨디션 반영 없이 순수 스탯 싸움으로 … 그 날 그 날 선수가 달라지면 좀 이상할 것
+		// 같음"): every card at 보통 (2), no 면담 — the same 1군 and the same 예상 승률 whatever the day's condition.
+		private static GameTeam Team(LeagueClub c, Lineup l, DateTime day, int game, List<TeamCard> owned, IEnumerable<TeamCard> aiDev = null, int aiCoach = 0, bool neutral = false)
 		{
 			GameTeam t = new GameTeam { Name = c.Name };
-			Dictionary<int, int> consult = owned == null ? AiConsult(c, l, day, aiCoach) : null;
-			byte Cond(int idx) => consult != null && consult.TryGetValue(idx, out int up) ? (byte)Math.Max(0, Condition.For(c.Owner, idx, day) - up) : Condition.For(c.Owner, idx, day);
+			Dictionary<int, int> consult = owned == null && !neutral ? AiConsult(c, l, day, aiCoach) : null;
+			byte Cond(int idx) => neutral ? (byte)2 : consult != null && consult.TryGetValue(idx, out int up) ? (byte)Math.Max(0, Condition.For(c.Owner, idx, day) - up) : Condition.For(c.Owner, idx, day);
 			for (int pos = 0; pos < Lineup.FielderSlots; pos++) t.Position[l.Fielders[pos] - 1] = pos;
 			for (int slot = 0; slot < 9; slot++) t.Order[slot] = s_data.Card(l.Batters[slot], Cond(l.Batters[slot]));
 			for (int s = 0; s < Lineup.PitcherSlots; s++)
@@ -853,7 +855,8 @@ namespace Ma9MServer
 		// Every club's team for a slot (the league reference is over the whole league, also in the
 		// postseason); rotation(club) = the game number the club's starter follows (RotationOf).
 		// bareClub (engine session, 2026-11-11, 특성 자동 배분): that club's 팀 특성 are left off its team (still in traits).
-		// raw (자동 편성): the teams before the league reference and the traits (TeamStrength.LeagueShift of them).
+		// raw (자동 편성): the teams before the league reference and the traits (TeamStrength.LeagueShift of them), every card at
+		// 보통 condition (Team's neutral, 11-13).
 		private static (GameTeam[] teams, Lineup[] lineups, TraitEffects.Effect[] traits) Teams(LeagueState s, int game, Func<int, int> rotation, int bareClub = -1, bool raw = false)
 		{
 			DateTime day = s.SlotTime(game);  // the slot's time: a 컨디션 회복제 counts by the hour (Condition.For)
@@ -866,7 +869,7 @@ namespace Ma9MServer
 				lineups[i] = LineupOf(s, c, out List<TeamCard> owned);
 				AiTeam ai = owned == null ? AiTeamOf(s, c) : null;
 				int aiCoach = ai != null && c.AiKey >= 0 && LeagueRules.NewStructure && AiTeams.HasDecks(s.Tier) ? AiTeams.RuleOf(s.Tier).Coach : 0;
-				teams[i] = Team(c, lineups[i], day, rotation(i), owned, ai?.Development.Values, aiCoach);
+				teams[i] = Team(c, lineups[i], day, rotation(i), owned, ai?.Development.Values, aiCoach, neutral: raw);
 				if (owned != null) TeamStrength.AddBonuses(teams[i], lineups[i], owned);
 				else if (ai != null && ai.Development.Count > 0)
 				{

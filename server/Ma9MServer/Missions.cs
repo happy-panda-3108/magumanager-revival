@@ -69,7 +69,7 @@ namespace Ma9MServer
 			new Daily { Category = 1, Index = 2, Level = 4, Goal = 250, Key = LeagueHits, Title = "타격", GoalText = "리그 경기에서 안타 250개를 치세요. (결과를 확인한 경기)", RecordText = "리그 안타 {0}개" },
 			new Daily { Category = 2, Index = 3, Level = 4, Goal = 200, Key = LeagueStrikeouts, Title = "투구", GoalText = "리그 경기에서 탈삼진 200개를 잡으세요. (결과를 확인한 경기)", RecordText = "리그 탈삼진 {0}개" },
 			new Daily { Category = 3, Index = 4, Level = 3, Goal = 2, Key = Exhibitions, Title = "시범경기", GoalText = "시범경기를 2번 치르세요.", RecordText = "시범경기 {0}회" },
-			new Daily { Category = 4, Index = 5, Level = 2, Goal = 1, Key = CardPacksBought, Title = "카드팩", GoalText = "상점에서 선수 카드팩을 1개 이상 사세요.", RecordText = "카드팩 구매 {0}개" },
+			new Daily { Category = 4, Index = 5, Level = 2, Goal = 1, Key = CardPacksBought, Title = "카드팩", GoalText = "상점에서 카드팩(선수·코칭스태프)을 1개 이상 사세요.", RecordText = "카드팩 구매 {0}개" },
 			new Daily { Category = 5, Index = 6, Level = 2, Goal = 1, Key = TrainingPacksBought, Title = "트레이닝", GoalText = "상점에서 트레이닝 카드팩을 1개 이상 사세요.", RecordText = "트레이닝팩 구매 {0}개" },
 		};
 

@@ -10,7 +10,7 @@ namespace Ma9MServer
 	// by slot, 팀 정비 (close, promotion), 편성 (the next league) and the next season's first games.
 	public static class PostseasonSelfTest
 	{
-		private static int s_problems;
+		private static int s_problems, s_barSlots, s_barOthers, s_barWaiting;
 
 		private static void Check(bool ok, string what)
 		{
@@ -143,6 +143,7 @@ namespace Ma9MServer
 			}
 
 			// 4. The postseason slot by slot (the 한국시리즈's extra slots only while some league's is undecided).
+			Dictionary<(uint code, int slot), (DateTime at, int game)> barNext = new Dictionary<(uint code, int slot), (DateTime at, int game)>();
 			for (int slot = 1; slot <= LeagueCalendar.LastPostSlot; slot++)
 			{
 				if (slot > LeagueCalendar.PostSlots && teams.Select(t => store.Load(t.code)).All(x => x.Start != start || !LeagueRules.HasPostseason(x.Tier) || Postseason.Of(x).Champion >= 0)) break;
@@ -177,6 +178,22 @@ namespace Ma9MServer
 					{
 						Check(playedOk, $"[{s.Clubs[s.MyIndex].Name}] slot {slot} {sr.Kind}: {(inSlot.Count == 0 ? "no game (decided)" : $"{s.Clubs[inSlot[0].Away].Name} {inSlot[0].AwayScore}-{inSlot[0].HomeScore} {s.Clubs[inSlot[0].Home].Name}")}");
 					}
+					// The top bar (2026-11-13): 경기중 a second after a slot with a game, none after a rest slot; cur_game_type 2
+					// (no results screen) when the user's club is not in it.
+					{
+						DateTime t1 = LeagueCalendar.PostSlotTime(start, slot).AddSeconds(1);
+						var air = LeagueHandlers.BroadcastWindow(s, t1);
+						bool mineIn = inSlot.Count == 1 && (inSlot[0].Home == s.MyIndex || inSlot[0].Away == s.MyIndex);
+						bool barOk = inSlot.Count == 1 ? air?.game == Postseason.GameNumber(slot) && TopBar.OthersGame(s, air.Value.game) == !mineIn : air == null;
+						s_barSlots++;
+						if (!mineIn && inSlot.Count == 1) s_barOthers++;
+						barNext[(code, slot)] = TopBar.Next(s);
+						if (LeagueService.NextGameOf(s) == null && Postseason.WaitingSlot(s) != null) s_barWaiting++;
+						if (!barOk || slot == 1 || slot == sr.FirstSlot && inSlot.Count == 1)
+						{
+							Check(barOk, $"[{s.Clubs[s.MyIndex].Name}] slot {slot} top bar: {(air == null ? "no 경기중" : $"경기중 game {air.Value.game}, {(TopBar.OthersGame(s, air.Value.game) ? "type 2 (not mine)" : "type 1 (mine)")}")}, my club {(mineIn ? "in it" : "not in it")}");
+						}
+					}
 				}
 			}
 			foreach ((uint code, string name, _, _) in teams)
@@ -192,6 +209,24 @@ namespace Ma9MServer
 				}
 				Bracket b = Postseason.Of(s);
 				Check(rec.SequenceEqual(records[code]), $"[{name}] standings unchanged by the postseason");
+				// The top bar's countdown after each slot (2026-11-13): to the club's next postseason game as it was played (a 1위
+				// waiting for the 한국시리즈 too), the next season's game 1 once the club has none left.
+				{
+					List<int> mineSlots = post.Where(g => g.Home == s.MyIndex || g.Away == s.MyIndex).Select(g => Postseason.SlotOf(g.Game)).OrderBy(x => x).ToList();
+					int wrong = 0;
+					string first = null;
+					foreach (var e in barNext.Where(e => e.Key.code == code).OrderBy(e => e.Key.slot))
+					{
+						int nextSlot = mineSlots.FirstOrDefault(x => x > e.Key.slot);
+						DateTime want = nextSlot > 0 ? LeagueCalendar.PostSlotTime(start, nextSlot) : s.Start + LeagueCalendar.Cycle;
+						if (e.Value.at != want)
+						{
+							wrong++;
+							first ??= $"after slot {e.Key.slot}: {e.Value.at:HH:mm} (game {e.Value.game}), played next {(nextSlot > 0 ? $"slot {nextSlot} {want:HH:mm}" : "none")}";
+						}
+					}
+					Check(wrong == 0, $"[{name}] top bar countdown after each slot: {(wrong == 0 ? "all to the club's next game" : $"{wrong} wrong, first {first}")} (games in slots {string.Join(",", mineSlots)})");
+				}
 				int[] places = b.Seeds.Select(b.PlaceOf).OrderBy(x => x).ToArray();
 				Check(s.PostSlot == LeagueCalendar.LastPostSlot + 1 && b.Champion >= 0 && places.SequenceEqual(new[] { 1, 2, 3, 4, 5 }),
 					$"[{name}] champion {s.Clubs[b.Champion].Name}, places of seeds 1-5: {string.Join(" ", b.Seeds.Select(b.PlaceOf))}, my club {b.PlaceOf(s.MyIndex)}");
@@ -283,6 +318,7 @@ namespace Ma9MServer
 				LeagueState s = store.Load(code);
 				Check(s.NextGame == 3 && store.Games(code, s.Season).Count == LeagueRules.Clubs && s.LastGame == 2, $"[{name}] next season: games 1-2 at {s.SlotTime(1):HH:mm} and {s.SlotTime(2):HH:mm}");
 			}
+			ServerLog.Info($"     top bar checked on {s_barSlots} league slot(s), {s_barOthers} of them another clubs' game, {s_barWaiting} with the club waiting for its series");
 			ServerLog.Info($"postseason test: {s_problems} problem(s)");
 			return s_problems == 0 ? 0 : 1;
 		}

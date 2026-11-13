@@ -586,6 +586,28 @@ namespace Ma9MServer
 			reply.prize_card_condition.n = prizeCondition;
 			reply.CheerAddMP.n = 0;
 			session.Send(reply);
+			if (prize != 0 && StorageFullPopup(code) is Ma9MPacket.PKS_SC_POPUP full)
+			{
+				session.Send(full);
+			}
+		}
+
+		// 보관함이 찼을 때 (user, 2026-11-13 16:5x 결정 3: "보관함이 넘쳐도 카드는 줄 것이고, 보관함이 찼다는 팝업을 띄워주는걸로 합시다"):
+		// a prize card always goes in (Settle never checked the storage); once the cards reach the storage size this type-1
+		// popup says so, since the shop's player packs refuse a full storage (ShopHandlers.BuyPack). Null while there is room.
+		internal static Ma9MPacket.PKS_SC_POPUP StorageFullPopup(uint code)
+		{
+			int owned = s_db.GetCards(code).Count, cap = RosterHandlers.MaxPossessOf(code);
+			if (owned < cap) return null;
+			Ma9MPacket.PKS_SC_POPUP popup = new Ma9MPacket.PKS_SC_POPUP();
+			popup.Type.n = 1;
+			popup.Messages.array = new[]
+			{
+				new PLongString { str = "선수 보관함" },
+				new PLongString { str = $"선수 보관함이 가득 찼습니다 ({owned}/{cap}).\n받은 카드는 보관함에 들어갔습니다.\n자리가 생길 때까지 상점 선수팩은 살 수 없으니\n로스터 확장이나 방출로 자리를 만들어 주세요." }
+			};
+			ServerLog.Info($"exhibition prize into a full storage: user {code} {owned}/{cap}");
+			return popup;
 		}
 
 		// The result of a played match: its MP (the caller adds it), the missions, and on a win maybe one of the

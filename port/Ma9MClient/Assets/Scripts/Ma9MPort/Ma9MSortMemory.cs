@@ -11,6 +11,16 @@ using UnityEngine;
 // Since the second request the same evening ("계속 적용되게"; the phone app restarts often) they are
 // also saved in PlayerPrefs, so they survive a restart. Each list also keeps 제외 sets: balls and
 // teams picked from the extra "… 제외" entries of the 볼/팀 popups (SortPopupPanel), shown in no list.
+// A list the filter bar's multi picks work on (2026-11-13): LazyLoading_CardList, and the roster lists (Ma9MRosterPicks).
+public interface IMa9MPickList
+{
+	bool Ma9MIsPicked(SortPopup.eSortType type, int v);
+
+	bool Ma9MIsExcluded(SortPopup.eSortType type, int v);
+
+	string Ma9MSummary(SortPopup.eSortType type);
+}
+
 public static class Ma9MSortMemory
 {
 	// Values the 볼/팀 popups send for their 제외 entries (SortPopupPanel): 100 + ball, 1000 + team; the
@@ -232,7 +242,10 @@ public static class Ma9MSortMemory
 		}
 	}
 
-	// 보유선수 / 선수교체 lists: filter on/off and value per sort type, the sort and its direction.
+	// 보유선수 / 선수교체 lists: filter on/off and value per sort type, the sort and its direction. Since 2026-11-13 (user 16:5x
+	// 결정 11: "로스터에서 구단과 볼을 함께 거르는 방법으로는 카드 목록 방식으로 통일"; AI tester 45: "LG이면서 1~2볼인 타자"를 못 찾음)
+	// also the card lists' multi picks per button and the positions out (Ma9MRosterPicks), and the sort before the current one,
+	// which orders the cards inside each group of the current sort.
 	public sealed class RosterList : Memory
 	{
 		public readonly bool[] IsFilters = new bool[6];
@@ -243,9 +256,26 @@ public static class Ma9MSortMemory
 
 		public bool Toggle;
 
+		public readonly HashSet<int> Balls = new HashSet<int>();
+
+		public readonly HashSet<int> Teams = new HashSet<int>();
+
+		public readonly HashSet<int> Years = new HashSet<int>();
+
+		public readonly HashSet<int> Positions = new HashSet<int>();
+
+		public readonly HashSet<int> ExPositions = new HashSet<int>();
+
+		// The sort before SortType (eROSTER_POSSESSVIEW_TYPE; -1 none) and its direction.
+		public int PrevSortType = -1;
+
+		public bool PrevToggle;
+
 		protected override string Body()
 		{
-			return Join(IsFilters.Select(b => b ? 1 : 0)) + "|" + Join(FilterValues) + "|" + SortType + "|" + (Toggle ? 1 : 0);
+			return Join(IsFilters.Select(b => b ? 1 : 0)) + "|" + Join(FilterValues) + "|" + SortType + "|" + (Toggle ? 1 : 0)
+				+ "|" + Join(Balls) + "|" + Join(Teams) + "|" + Join(Years) + "|" + Join(Positions) + "|" + Join(ExPositions)
+				+ "|" + PrevSortType + "|" + (PrevToggle ? 1 : 0);
 		}
 
 		protected override void Read(string[] parts)
@@ -262,7 +292,65 @@ public static class Ma9MSortMemory
 			}
 			SortType = int.Parse(parts[2]);
 			Toggle = parts[3] == "1";
+			// Saved before 2026-11-13: four values, then the two 제외 sets.
+			if (parts.Length >= 13)
+			{
+				Fill(Balls, parts[4]);
+				Fill(Teams, parts[5]);
+				Fill(Years, parts[6]);
+				Fill(Positions, parts[7]);
+				Fill(ExPositions, parts[8]);
+				PrevSortType = int.Parse(parts[9]);
+				PrevToggle = parts[10] == "1";
+			}
 		}
+	}
+
+	public static HashSet<int> Picks(RosterList list, SortPopup.eSortType type)
+	{
+		switch (type)
+		{
+		case SortPopup.eSortType.Ball:
+			return list.Balls;
+		case SortPopup.eSortType.Team:
+			return list.Teams;
+		case SortPopup.eSortType.Year:
+			return list.Years;
+		case SortPopup.eSortType.Position:
+			return list.Positions;
+		default:
+			return null;
+		}
+	}
+
+	public static HashSet<int> Excludes(RosterList list, SortPopup.eSortType type)
+	{
+		switch (type)
+		{
+		case SortPopup.eSortType.Ball:
+			return list.ExBalls;
+		case SortPopup.eSortType.Team:
+			return list.ExTeams;
+		case SortPopup.eSortType.Position:
+			return list.ExPositions;
+		default:
+			return null;
+		}
+	}
+
+	// The list a filter bar works on, for SortPopup / SortPopupPanel's multi picks: the bar's screen itself when it is a roster
+	// list (Roster_PossessPlayer, Roster_ChangePlayer since 2026-11-13), else its LazyLoading_CardList (LazyLoading_CardList.Ma9MListFor).
+	public static IMa9MPickList PickListFor(GameObject owner)
+	{
+		if (owner != null)
+		{
+			IMa9MPickList own = owner.GetComponent(typeof(IMa9MPickList)) as IMa9MPickList;
+			if (own != null && !(own is LazyLoading_CardList))
+			{
+				return own;
+			}
+		}
+		return LazyLoading_CardList.Ma9MListFor(owner);
 	}
 
 	// LazyLoading_CardList screens (선수조합, 계약/방출, 포지션 변경, ...): the chosen values, and since 2026-10-24 the

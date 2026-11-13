@@ -17,6 +17,12 @@ namespace Ma9MServer
 			public override int Next(int maxValue) => 0;
 		}
 
+		// Every roll misses (최고 칸 보장 check).
+		private sealed class Never : Random
+		{
+			public override int Next(int maxValue) => maxValue - 1;
+		}
+
 		public static int SelfTest(string dbPath)
 		{
 			if (Path.GetFullPath(dbPath).Equals(Path.GetFullPath(@"C:\Ma9MProject\server\data\ma9m.db"), StringComparison.OrdinalIgnoreCase))
@@ -273,14 +279,42 @@ namespace Ma9MServer
 
 			// 타격코치: comes 50% (엘리트), on the best result too, not to another club's card, not without SP, not on the lowest square
 			// (2026-11-12); takes the slot up for 50 SP.
+			// Squares 1-2 at the grade's chance; the top square (3) with 최고 칸 보장 (2026-11-13) below.
 			int came = 0;
 			for (int n = 0; n < 20_000; n++)
 			{
 				Ma9MPacket.PKS_SC_TRY_CARD_TRAINING t = new Ma9MPacket.PKS_SC_TRY_CARD_TRAINING();
-				OfferTraining(user, batter, batter.Idx, 0, TrainingBooks.Book(1, 1), 1 + n % 3, t, rng);
+				OfferTraining(user, batter, batter.Idx, 0, TrainingBooks.Book(1, 1), 1 + n % 2, t, rng);
 				came += t.encounter_coach.n;
 			}
 			s_offers.Clear();
+			// 최고 칸 보장 (user 2026-11-13: "5에서 코치가 안 나오면 다음 5때 반드시"): a missed top square makes the next one certain, so
+			// never two top squares in a row without him; his share of top squares 1 / (2 − p) (71.4% at 엘리트 60%). Squares 1-2 keep it.
+			SetOwed(user, CoachCatalog.HC, false);
+			int topCame = 0, missRun = 0, worstRun = 0;
+			for (int n = 0; n < 20_000; n++)
+			{
+				Ma9MPacket.PKS_SC_TRY_CARD_TRAINING t = new Ma9MPacket.PKS_SC_TRY_CARD_TRAINING();
+				OfferTraining(user, batter, batter.Idx, 0, TrainingBooks.Book(1, 1), TopResult, t, rng);
+				topCame += t.encounter_coach.n;
+				missRun = t.encounter_coach.n == 1 ? 0 : missRun + 1;
+				worstRun = Math.Max(worstRun, missRun);
+			}
+			s_offers.Clear();
+			SetOwed(user, CoachCatalog.HC, false);
+			int[] pity = new int[5];
+			Random never = new Never();
+			foreach ((int step, int square) in new[] { (0, TopResult), (1, 2), (2, 1), (3, TopResult), (4, TopResult) })
+			{
+				Ma9MPacket.PKS_SC_TRY_CARD_TRAINING t = new Ma9MPacket.PKS_SC_TRY_CARD_TRAINING();
+				OfferTraining(user, batter, batter.Idx, 0, TrainingBooks.Book(1, 1), square, t, never);
+				pity[step] = t.encounter_coach.n;
+			}
+			s_offers.Clear();
+			double pElite = CoachCatalog.TrainingChance[CoachCatalog.Elite] / 100.0;
+			Check(Math.Abs(topCame / 200.0 - 100 / (2 - pElite)) < 1.5 && worstRun == 1 && pity.SequenceEqual(new[] { 0, 0, 0, 1, 0 }) && !Owed(user, CoachCatalog.PC),
+				$"최고 칸 보장: 엘리트 타격코치 on top squares {topCame / 200.0:F1}% (expected {100 / (2 - pElite):F1}%), longest miss run {worstRun}; "
+				+ $"miss top → +4 miss → +3 miss → top {(pity[3] == 1 ? "comes" : "MISSING")} → top miss again {pity[4] == 0}; 투수코치 untouched");
 			Ma9MPacket.PKS_SC_TRY_CARD_TRAINING top = new Ma9MPacket.PKS_SC_TRY_CARD_TRAINING(), strange = new Ma9MPacket.PKS_SC_TRY_CARD_TRAINING(), lowest = new Ma9MPacket.PKS_SC_TRY_CARD_TRAINING();
 			OfferTraining(user, batter, batter.Idx, 0, TrainingBooks.Book(1, 3), 3, top, new Always());
 			OfferTraining(user, strangerBatter, strangerBatter.Idx, 0, TrainingBooks.Book(1, 3), 1, strange, new Always());
@@ -289,6 +323,7 @@ namespace Ma9MServer
 			Check(Math.Abs(came / 200.0 - CoachCatalog.TrainingChance[CoachCatalog.Elite]) < 1.5 && top.encounter_coach.n == 1 && strange.encounter_coach.n == 0 && lowest.encounter_coach.n == 0,
 				$"타격코치 came {came / 200.0:F1}%, on the best result {top.encounter_coach.n}, to another club's card {strange.encounter_coach.n}, on the lowest square {lowest.encounter_coach.n}");
 			int book = TrainingBooks.Book(2, 3);
+			SetOwed(user, CoachCatalog.HC, false);
 			TrainingHandlers.SetSlot(user, batter.Idx, 2, book, 1);
 			Ma9MPacket.PKS_SC_TRY_CARD_TRAINING offer = new Ma9MPacket.PKS_SC_TRY_CARD_TRAINING();
 			OfferTraining(user, batter, batter.Idx, 2, book, 1, offer, new Always());

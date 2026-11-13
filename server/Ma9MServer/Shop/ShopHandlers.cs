@@ -838,6 +838,8 @@ namespace Ma9MServer
 			List<int> cards = Enumerable.Range(0, amount).Select(_ => CoachCatalog.RollPack(s_rnd, ownLine)).ToList();
 			CoachHandlers.AddCoaches(user, cards);
 			int after = s_db.AddMp(user, -p.Cost * amount);
+			// 오늘의 미션 카드팩 (user, 2026-11-13 16:5x 결정 7: "코치팩, 모든 선수팩을 해당하게"; every player pack already counts in BuyPack).
+			Missions.Add(user, Missions.CardPacksBought, amount);
 			reply.error.SetNoError();
 			reply.AfterMP = after;
 			reply.AfterCash = 0;

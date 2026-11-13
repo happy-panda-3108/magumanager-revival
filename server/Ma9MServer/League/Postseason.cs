@@ -142,6 +142,20 @@ namespace Ma9MServer
 			return null;
 		}
 
+		// The first slot of the series the user's club waits for: a higher seed whose opponent is not decided yet (1위 for the
+		// 한국시리즈, 2위 for the 플레이오프, 3위 for the 준플레이오프), its first game in that slot whoever wins. null when the club
+		// plays next (NextOf), is out, or the league has no postseason. 2026-11-13 (AI testers LG·kt·쌍방울: the top bar counted
+		// to the next season's game 1, "12:00", while the 한국시리즈 began at 06:00; the season summary said 06:00).
+		public static int? WaitingSlot(LeagueState s)
+		{
+			if (!LeagueRules.HasPostseason(s.Tier) || s.NextGame <= LeagueRules.Games || s.NextTier >= 0) return null;
+			foreach (SeriesState sr in Of(s).Series)
+			{
+				if (!sr.Decided && sr.High == s.MyIndex && sr.Low < 0 && sr.FirstSlot >= s.PostSlot) return sr.FirstSlot;
+			}
+			return null;
+		}
+
 		public static void Register(GameLoop loop)
 		{
 			loop.Register<Ma9MPacket.PKS_CS_ENTER_POSTSEASON_INFO>(Info);

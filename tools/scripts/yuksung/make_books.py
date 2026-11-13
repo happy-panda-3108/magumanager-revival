@@ -12,17 +12,18 @@ from openpyxl.worksheet.datavalidation import DataValidation
 
 BAT = ['컨택', '파워', '스피드', '선구', '수비', 'H정신']
 PIT = ['체력', '구속', '컨트롤', '테크닉', '구위', 'P정신']
-GRADE_EN = {'노말': 'NORMAL', '스페셜': 'SPECIAL', '레어': 'RARE', '엘리트': 'ELITE'}
-GRADE_RGB = {'노말': 'FF2896EC', '스페셜': 'FFFAC61C', '레어': 'FFEC2E38', '엘리트': 'FFAC58F6'}
+GRADE_EN = {'노말': 'NORMAL', '스페셜': 'SPECIAL', '레어': 'RARE', '엘리트': 'ELITE', '레전드': 'LEGEND'}
+# 레전드 in dark gold as book_spec.py (2026-11-13: new books with a 레전드 block, alloc_owned.py).
+GRADE_RGB = {'노말': 'FF2896EC', '스페셜': 'FFFAC61C', '레어': 'FFEC2E38', '엘리트': 'FFAC58F6', '레전드': 'FFB8860B'}
 HEAD_FONT = {'스페셜': 'FF3D3000'}
 # The template tints each block's 기본~재계약 rows (light) and 합계 row (mid) in its own player's grade colour; repaint them in
 # the new card's grade, or a 레어 block keeps the template's 스페셜 yellow (user 11-07: "레어 박해민이 왜 노란색으로 칠해져있니").
-GRADE_LIGHT = {'노말': 'FFEEF6FE', '스페셜': 'FFFFF9E0', '레어': 'FFFDEEEF', '엘리트': 'FFF6EEFE'}
-GRADE_MID = {'노말': 'FFCFE6FC', '스페셜': 'FFFFEDA6', '레어': 'FFFAC9CC', '엘리트': 'FFE3CBFC'}
+GRADE_LIGHT = {'노말': 'FFEEF6FE', '스페셜': 'FFFFF9E0', '레어': 'FFFDEEEF', '엘리트': 'FFF6EEFE', '레전드': 'FFFBF4E2'}
+GRADE_MID = {'노말': 'FFCFE6FC', '스페셜': 'FFFFEDA6', '레어': 'FFFAC9CC', '엘리트': 'FFE3CBFC', '레전드': 'FFF0DBA8'}
 # Output names and the date in the notes; YUKSUNG_NOTE is appended to the B104 note (e.g. how the staff was chosen).
 TAG, DATE, NOTE = os.environ.get('YUKSUNG_TAG', '1105'), os.environ.get('YUKSUNG_DATE', '11/5'), os.environ.get('YUKSUNG_NOTE', '')
 SLOT_ROLE = {'SP': '12', 'RP': '13', 'SU': '14', 'CP': '15'}
-GRADE = {'1': '노말', '2': '스페셜', '3': '레어', '4': '엘리트'}
+GRADE = {'1': '노말', '2': '스페셜', '3': '레어', '4': '엘리트', '5': '레전드'}
 TEAM = {'롯데': 7, '삼성': 8, 'LG': 6, '쌍방울': 11, '현대': 4}
 DEF = ['def_C', 'def_1B', 'def_2B', 'def_3B', 'def_SS', 'def_LF', 'def_CF', 'def_RF']
 FIRST, STRIDE, BLOCKS = 5, 9, 11
@@ -147,15 +148,39 @@ def new_books(alloc_path, template, out_dir):
                 if i >= len(lst):
                     continue
                 p = lst[i]
-                row = cards[(kind, year, str(TEAM[club]), p['name'])]
+                # A 레전드 card is listed as year 1981 of its club (2026-11-13).
+                row = cards.get((kind, year, str(TEAM[club]), p['name'])) or cards[(kind, '1981', str(TEAM[club]), p['name'])]
                 # A pitcher on another role's spot without a 포지션 변경 plays out of role (−15%), e.g. '01 현대 김수경 in RP4.
                 out = kind == 'P' and not p.get('change') and row['mainposition'] != SLOT_ROLE[p['slot'][:2]]
                 fill_side(ws, r, c0, kind, p, card_base(row, kind), GRADE[row['cardgrade']], out)
+                done = p.get('done')
+                if done and (done.get('renewals') or done.get('coach') or any(done.get('training') or [])):
+                    names = BAT if kind == 'B' else PIT
+                    parts = []
+                    if done.get('coach'):
+                        parts.append(f"특강 {done['coach']} 받음")
+                    if done.get('renewals'):
+                        parts.append(f"재계약 {done['renewals']}번 함(" + ', '.join(f"{names[k]} +{done['contract'][k]}" for k in range(6) if done['contract'][k]) + ")")
+                    if any(done.get('training') or []):
+                        parts.append('트레이닝 ' + ', '.join(f"{names[k]} +{done['training'][k]}" for k in range(6) if done['training'][k]))
+                    ws.cell(r + 5, c0).comment = Comment(f"{DATE} 이 카드에 이미 있는 육성: " + ' · '.join(parts) + ". 재계약 줄은 한 것 + 남은 추천의 합입니다.", 'Claude')
+        st = d.get('settings')
         hc, pc = d['hc'][0][1], d['pc'][0][1]
-        add_box(ws, 3, hc, 2, pc, 2)
-        ws['B104'] = (f"기본 줄은 11/5 라이브 카드값입니다. 특강·트레이닝·재계약 줄은 {DATE} 재계산 추천입니다(팀컬러 S 21 + 코칭스태프 엘리트 세트 +3 "
-                      f"+ 타격코치 {hc} +2 · 투수코치 {pc} +2, 트레이닝 = IV북 +5에 코치 +1 = 칸당 6 × 3칸, 재계약 = +3 × 6번). "
-                      "회색 숫자는 추천 배분이니 따를지 정해서 고쳐 쓰면 됩니다. 머리 줄 오른쪽 회색 글씨는 추천 타순·보직입니다." + (' ' + NOTE if NOTE else ''))
+        if st:
+            # The club's own staff (alloc_owned.py): its team colour, set and coach stats.
+            hcb = st['hc'][1] if st.get('hc') else 0
+            pcb = st['pc'][1] if st.get('pc') else 0
+            add_box(ws, st['set'], hc, hcb, pc, pcb)
+            ws['O2'] = st['tc']
+            ws['B104'] = (f"기본 줄은 {DATE} 라이브 카드값입니다. 특강·트레이닝·재계약 줄은 {DATE} 추천입니다(팀컬러 {st['tc']} + 코칭스태프 세트 +{st['set']} "
+                          f"+ 타격코치 {hc} +{hcb} · 투수코치 {pc} +{pcb}, 트레이닝 = IV북 +5에 코치 +1 = 칸당 6 × 3칸, 재계약 = +3 × 6번). "
+                          "이미 한 재계약·특강은 그대로 두고 남은 것만 배분했습니다(재계약 칸 메모). "
+                          "회색 숫자는 추천 배분이니 따를지 정해서 고쳐 쓰면 됩니다. 머리 줄 오른쪽 회색 글씨는 추천 타순·보직입니다." + (' ' + NOTE if NOTE else ''))
+        else:
+            add_box(ws, 3, hc, 2, pc, 2)
+            ws['B104'] = (f"기본 줄은 11/5 라이브 카드값입니다. 특강·트레이닝·재계약 줄은 {DATE} 재계산 추천입니다(팀컬러 S 21 + 코칭스태프 엘리트 세트 +3 "
+                          f"+ 타격코치 {hc} +2 · 투수코치 {pc} +2, 트레이닝 = IV북 +5에 코치 +1 = 칸당 6 × 3칸, 재계약 = +3 × 6번). "
+                          "회색 숫자는 추천 배분이니 따를지 정해서 고쳐 쓰면 됩니다. 머리 줄 오른쪽 회색 글씨는 추천 타순·보직입니다." + (' ' + NOTE if NOTE else ''))
         value_sheet(wb, label, d)
         short = f"{year[2:]}{club}"
         path = f'{out_dir}/육성표_{TAG}_{short}.xlsx'
@@ -168,7 +193,9 @@ def value_sheet(wb, label, d):
     ws = wb.create_sheet('스탯 가치')
     ws['A1'] = f'{label} · 능력치별 가치 ({DATE}, 새 엔진)'
     ws['A1'].font = Font(bold=True, size=13)
-    ws['A2'] = ('각 칸은 팀컬러 S 21 + 코칭스태프 +3에서 그 능력치에 +9를 더했을 때의 승률 변화(%p, 같은 덱끼리 20만 경기)입니다. '
+    st = d.get('settings')
+    where = f"팀컬러 {st['tc']} + 코칭스태프 +{st['set']}" if st else '팀컬러 S 21 + 코칭스태프 +3'
+    ws['A2'] = (f'각 칸은 {where}에서 그 능력치에 +9를 더했을 때의 승률 변화(%p, 같은 덱끼리 20만 경기)입니다. '
                 '이미 높은 능력치는 100·120을 넘으면 육성 효과가 75%·50%로 줄고 140에서 멈추므로, 추천 배분은 이 값을 곡선에 맞춰 나눈 결과입니다.')
     ws['A2'].alignment = Alignment(wrap_text=True, vertical='top')
     ws.merge_cells('A2:N2')

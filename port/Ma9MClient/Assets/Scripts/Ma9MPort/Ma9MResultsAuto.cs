@@ -32,11 +32,24 @@ public static class Ma9MResultsAuto
 	// Every top bar that comes (PKS_SC_GLOBAL_INFO: Common_TopMenu and TopMenu_DataCenter.UpdateInfo both take it, whichever
 	// is first — the first try watched TopMenu_DataCenter.m_inBroadcast in one of them only, after the other had already
 	// set it, and never saw the change): 경기중 that is no longer 경기중 = my game's result can be opened.
-	public static void OnBar(bool inBroadcast)
+	// gameType: the bar's cur_game_type (0 정규시즌, 1 포스트시즌, 2 포스트시즌의 남의 경기 — the server from 11-13, TopBar.
+	// OthersPostGame: a club out of the postseason or waiting still sees 경기중 so the lobby can show that series live). A
+	// 경기중 that was someone else's game brings no result to open (AI testers LG·kt 11-13: empty results screens).
+	private static bool s_othersOnAir;
+
+	public static void OnBar(bool inBroadcast, int gameType = 0)
 	{
-		if (s_onAir && !inBroadcast)
+		if (inBroadcast)
+		{
+			s_othersOnAir = gameType == 2;
+		}
+		if (s_onAir && !inBroadcast && !s_othersOnAir)
 		{
 			s_pending = true;
+		}
+		if (!inBroadcast)
+		{
+			s_othersOnAir = false;
 		}
 		s_onAir = inBroadcast;
 	}
@@ -45,6 +58,16 @@ public static class Ma9MResultsAuto
 	public static void Clear()
 	{
 		s_pending = false;
+	}
+
+	// Whether the lobby went to the results screen by itself (taken once by its first list: an empty one goes back).
+	private static bool s_autoOpened;
+
+	public static bool TakeAutoOpened()
+	{
+		bool was = s_autoOpened;
+		s_autoOpened = false;
+		return was;
 	}
 
 	// A server restart drops the connection, and the app only comes back (its access token) when it next sends something:
@@ -121,6 +144,7 @@ public static class Ma9MResultsAuto
 			return;
 		}
 		s_pending = false;
+		s_autoOpened = true;
 		Debug.Log("[Ma9MResultsAuto] a game ended while the lobby was open: on to the results screen");
 		TopMenu_DataCenter.m_SceneManage.Push(scene);
 		SceneChanger.LoadLevel("Scene_Unconfirmed");

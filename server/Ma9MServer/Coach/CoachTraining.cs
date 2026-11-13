@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Ma9MPackets;
+using Microsoft.Data.Sqlite;
 
 namespace Ma9MServer
 {
@@ -57,15 +58,50 @@ namespace Ma9MServer
 			if (coach == 0 || !CoachCatalog.Serves(coach, info.TeamCode)) return;
 			// Not on the lowest square (user 2026-11-12: "트레이닝하다가 젤 낮은 단계에서 코치가 등장하는거 살짝 역겨운데 그 때는 코치가 등장하지
 			// 않는걸로 합시다").
-			if (result == 0 || result > 3) return;
+			if (result == 0 || result > TopResult) return;
 			if (Sp(user) < CoachCatalog.TrainingSp) return;
-			if (!CoachCatalog.AlwaysTraining && rng.Next(100) >= CoachCatalog.TrainingChance[CoachCatalog.Grade(coach)]) return;
+			// 최고 칸 보장 (user 2026-11-13 01:5x: "코치 … 5뜰때는 안 나오고 4뜰때만 쳐 나와서 열받게 해" → "3, 4 에서도 코치는 나오는데 5에서
+			// 코치가 안 나오면 다음 5때 반드시 코치가 나오게"): a top square he missed by the roll makes the next top square of the same
+			// role (타격코치 / 투수코치) certain; coach_pity keeps it across restarts. Squares 1-2 roll as before and leave it alone.
+			int role = info.IsBatter ? CoachCatalog.HC : CoachCatalog.PC;
+			bool owed = result == TopResult && Owed(user, role);
+			if (!CoachCatalog.AlwaysTraining && !owed && rng.Next(100) >= CoachCatalog.TrainingChance[CoachCatalog.Grade(coach)])
+			{
+				if (result == TopResult) SetOwed(user, role, true);
+				return;
+			}
+			if (owed) SetOwed(user, role, false);
 			int id = ++s_nextOffer;
 			s_offers[id] = (user, cardIdx, slot, item, result, DateTime.Now);
 			reply.encounter_coach.n = 1;
 			reply.transaction_id.n = id;
 			reply.CoachMent_Encounter.n = (short)(info.IsBatter ? CoachCatalog.HitterMeet + rng.Next(CoachCatalog.HitterMeetLines) : CoachCatalog.PitcherMeet + rng.Next(CoachCatalog.PitcherMeetLines));
-			ServerLog.Info($"코칭스태프: {Label(coach)} came to {info.Year} {info.Name}'s training (offer {id})");
+			ServerLog.Info($"코칭스태프: {Label(coach)} came to {info.Year} {info.Name}'s training (offer {id}{(owed ? ", 최고 칸 보장" : string.Empty)})");
+		}
+
+		// The book's top square (TrainingStore results 0-3).
+		internal const int TopResult = 3;
+
+		// 최고 칸 보장: whether the next top square of this role is owed a coach.
+		internal static bool Owed(uint user, int role)
+		{
+			using SqliteConnection c = Open();
+			using SqliteCommand cmd = c.CreateCommand();
+			cmd.CommandText = "SELECT owed FROM coach_pity WHERE user_code = $u AND role = $r";
+			cmd.Parameters.AddWithValue("$u", (long)user);
+			cmd.Parameters.AddWithValue("$r", role);
+			return Convert.ToInt64(cmd.ExecuteScalar() ?? 0L) != 0;
+		}
+
+		internal static void SetOwed(uint user, int role, bool owed)
+		{
+			using SqliteConnection c = Open();
+			using SqliteCommand cmd = c.CreateCommand();
+			cmd.CommandText = "INSERT INTO coach_pity (user_code, role, owed) VALUES ($u, $r, $o) ON CONFLICT (user_code, role) DO UPDATE SET owed = $o";
+			cmd.Parameters.AddWithValue("$u", (long)user);
+			cmd.Parameters.AddWithValue("$r", role);
+			cmd.Parameters.AddWithValue("$o", owed ? 1 : 0);
+			cmd.ExecuteNonQuery();
 		}
 
 		private static void TryCoachTraining(GameSession session, Ma9MPacket.PKS_CS_TRY_COACH_TRAINING packet)

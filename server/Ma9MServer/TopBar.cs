@@ -17,6 +17,23 @@ namespace Ma9MServer
 		// LeagueSchedule.GamesPerTab; the original season was six days of 24 games).
 		private const int GamesPerDay = 24;
 
+		// cur_game_type: 0 정규시즌, 1 포스트시즌, 2 포스트시즌 경기중이지만 내 구단 경기가 아님 (2026-11-13).
+		public const byte OthersPostGame = 2;
+
+		// What the countdown counts to: the user's next game (league, or the postseason game the club plays next), the first
+		// game of the series the club waits for (Postseason.WaitingSlot, 2026-11-13: it counted to the next season while a 1위
+		// waited for the 한국시리즈), else the next season's game 1. game -1 for the next season. --posttest checks it.
+		internal static (DateTime at, int game) Next(LeagueState s)
+		{
+			if (LeagueService.NextGameOf(s) is (int g, _)) return (s.SlotTime(g), g);
+			if (Postseason.WaitingSlot(s) is int w) return (s.SlotTime(Postseason.GameNumber(w)), Postseason.GameNumber(w));
+			return (s.Start + LeagueCalendar.Cycle, -1);
+		}
+
+		// Whether the slot on air (BroadcastWindow) is a postseason game without the user's club (--posttest checks it slot by slot).
+		internal static bool OthersGame(LeagueState s, int live) =>
+			Postseason.IsPost(live) && !LeagueService.Store.Games(s.UserCode, s.Season, game: live, club: s.MyIndex).Any();
+
 		public static void Send(GameSession session)
 		{
 			TeamRow team = session.Team;
@@ -42,8 +59,8 @@ namespace Ma9MServer
 				info.league_draw.n = (byte)Math.Min(255, me.D);
 				DateTime now = DateTime.Now;
 				int shown = Math.Min(s.NextGame, LeagueRules.Games);
-				(int game, int opponent)? next = LeagueService.NextGameOf(s);
 				info.in_broadcast.n = 0;
+				bool othersGame = false;
 				if (LeagueHandlers.BroadcastWindow(s, now) is (int live, double left))
 				{
 					// The game started less than 5 minutes ago: 경기중 and the 중계 button, also after another menu
@@ -51,19 +68,25 @@ namespace Ma9MServer
 					info.in_broadcast.n = 1;
 					info.remain_time_to_next_game.n = (int)Math.Ceiling(left);
 					shown = live;
+					// 2026-11-13 (engine session; AI testers LG·kt: in the postseason a club with no game was taken to an empty
+					// results screen after every slot, as the app's Ma9MResultsAuto takes the end of 경기중 for the end of its own
+					// game). A postseason slot without the user's club stays 경기중 with the 중계 button (the series on now, 10-21),
+					// but cur_game_type says 2 = "a postseason game, not yours": the app does not go to the results screen for it.
+					// Older apps read anything but 0 as the postseason, as before.
+					othersGame = OthersGame(s, live);
 				}
 				else
 				{
 					// Time to the user's next game: the league game, the postseason game the club plays next, or
 					// the next season's first one (until 2026-10-21 this was 0, so the bar said 경기중 for good).
-					DateTime at = next is (int nextGame, _) ? s.SlotTime(nextGame) : s.Start + LeagueCalendar.Cycle;
+					(DateTime at, int upcoming) = Next(s);
 					info.remain_time_to_next_game.n = (int)Math.Max(0, Math.Ceiling((at - now).TotalSeconds));
-					if (next is (int g, _)) shown = g;
+					if (upcoming > 0) shown = upcoming;
 				}
 				// "포스트시즌 1일차 N경기" with N the postseason slot (145 on); otherwise 24 games a day.
 				bool post = Postseason.IsPost(shown) || (s.NextGame > LeagueRules.Games && LeagueRules.HasPostseason(s.Tier) && s.NextTier < 0);
 				int postSlot = Postseason.IsPost(shown) ? Postseason.SlotOf(shown) : Math.Clamp(s.PostSlot, 1, LeagueCalendar.LastPostSlot);
-				info.cur_game_type.n = (byte)(post ? 1 : 0);
+				info.cur_game_type.n = (byte)(!post ? 0 : othersGame ? OthersPostGame : 1);
 				info.cur_game_date.n = (byte)(post ? 1 : (shown - 1) / GamesPerDay + 1);
 				info.cur_game_num.n = (short)(post ? postSlot : shown);
 			}

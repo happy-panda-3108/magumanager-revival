@@ -75,7 +75,10 @@ namespace Ma9MServer
 
 		private static string DayText(DateTime d) => d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
-		// Clubs of real accounts that have a 1군.
+		// Clubs of real accounts that have a 1군, and the 자급자족 tester (user, 2026-11-13 16:5x 결정 1: autotest7 plays as an ordinary
+		// user on START2026 alone, to measure how long the game lasts without coupons; the other testers stay out).
+		public const string SelfSufficientTester = "autotest7@ma9m.local";
+
 		private static List<(uint code, string name)> AutoClubs()
 		{
 			List<(uint code, string name)> clubs = new List<(uint, string)>();
@@ -84,7 +87,8 @@ namespace Ma9MServer
 				c.Open();
 				using SqliteCommand cmd = c.CreateCommand();
 				cmd.CommandText = @"SELECT t.user_code, t.team_name FROM team t JOIN account a ON a.id = t.account_id
-					WHERE a.email NOT LIKE 'autotest%' AND t.team_name <> '' ORDER BY t.user_code";
+					WHERE (a.email NOT LIKE 'autotest%' OR a.email = $self) AND t.team_name <> '' ORDER BY t.user_code";
+				cmd.Parameters.AddWithValue("$self", SelfSufficientTester);
 				using SqliteDataReader r = cmd.ExecuteReader();
 				while (r.Read()) clubs.Add(((uint)r.GetInt64(0), r.GetString(1)));
 			}
@@ -232,13 +236,20 @@ namespace Ma9MServer
 		public static void DeliverAuto(GameSession session)
 		{
 			if (session.Team == null || s_cs == null || s_autoTimer == null) return;
+			bool cards = false;
 			foreach ((string title, string text) in AutoPopups(session.Team.UserCode))
 			{
 				Ma9MPacket.PKS_SC_POPUP popup = new Ma9MPacket.PKS_SC_POPUP();
 				popup.Type.n = 1;
 				popup.Messages.array = new[] { new PLongString { str = title }, new PLongString { str = text } };
 				session.Send(popup);
+				cards |= text.Contains("얻은 선수:");
 				ServerLog.Info($"[{session.Id}] exhibition auto popup: {text.Replace("\n", " / ")}");
+			}
+			// Prize cards of the night into a full storage (user 2026-11-13 결정 3): the same note as after a game by hand.
+			if (cards && StorageFullPopup(session.Team.UserCode) is Ma9MPacket.PKS_SC_POPUP full)
+			{
+				session.Send(full);
 			}
 		}
 

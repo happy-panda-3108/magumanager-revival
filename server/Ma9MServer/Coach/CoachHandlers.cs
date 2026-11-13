@@ -58,7 +58,8 @@ namespace Ma9MServer
 					CREATE TABLE IF NOT EXISTS coach_consult (user_code INTEGER NOT NULL, sitting TEXT NOT NULL, card_idx INTEGER NOT NULL, status INTEGER NOT NULL,
 						slump INTEGER NOT NULL, row_index INTEGER NOT NULL DEFAULT 0, steps INTEGER NOT NULL DEFAULT 0, until TEXT, PRIMARY KEY (user_code, sitting, card_idx));
 					CREATE TABLE IF NOT EXISTS coach_cheer (user_code INTEGER NOT NULL, season INTEGER NOT NULL, game INTEGER NOT NULL, mp INTEGER NOT NULL,
-						paid INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_code, season, game));";
+						paid INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_code, season, game));
+					CREATE TABLE IF NOT EXISTS coach_pity (user_code INTEGER NOT NULL, role INTEGER NOT NULL, owed INTEGER NOT NULL, PRIMARY KEY (user_code, role));";
 				cmd.ExecuteNonQuery();
 			}
 			if (CoachCatalog.TestMode)

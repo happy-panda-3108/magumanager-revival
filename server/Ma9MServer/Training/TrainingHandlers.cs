@@ -211,7 +211,8 @@ namespace Ma9MServer
 				TrainingBooks.ForPitcher(item) == info.IsBatter ? (info.IsBatter ? "타자에게는 타자용 트레이닝북만 쓸 수 있습니다." : "투수에게는 투수용 트레이닝북만 쓸 수 있습니다.") :
 				slot < 0 || slot >= TrainingStore.Slots ? "트레이닝 슬롯이 잘못되었습니다." :
 				InventoryHandlers.ItemAmount(user, item) < 1 ? "트레이닝북이 없습니다." :
-				s_store.TpLeft(user, cardIdx) < 1 ? "TRAINING POINT가 없습니다. 트레이닝 횟수 충전권을 써 주세요." :
+				// Where the ticket comes from (user 2026-11-13 16:5x 결정 5; ShopHandlers 202 at 100,000 MP): TP never refills by itself.
+				s_store.TpLeft(user, cardIdx) < 1 ? "TRAINING POINT가 없습니다(저절로 차지 않음).\n상점 트레이닝 탭의 트레이닝 횟수 충전권(10만 MP)을\n아이템 버튼으로 쓰면 6칸이 다시 찹니다." :
 				null;
 			if (info != null)
 			{

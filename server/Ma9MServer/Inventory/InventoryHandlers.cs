@@ -103,6 +103,7 @@ namespace Ma9MServer
 			s_store = new InventoryStore(Path.Combine(dataDir, "ma9m.db"));
 			ItemCatalog.WriteTable(Path.Combine(dataDir, "tables"));
 			TopUpCoachCoupon(Path.Combine(dataDir, "ma9m.db"));
+			ReclaimTesterDouble(Path.Combine(dataDir, "ma9m.db"));
 			loop.Register<Ma9MPacket.PKS_CS_ENTER_INVENTORY>(EnterInventory);
 			loop.Register<Ma9MPacket.PKS_CS_USE_CARDPACK_ITEM>(UseCardPack);
 			loop.Register<Ma9MPacket.PKS_CS_USE_ITEM>(UseItem);
@@ -134,6 +135,50 @@ namespace Ma9MServer
 			cmd.CommandText = "INSERT INTO league_fix (name, done) VALUES ('coach2026_legend', datetime('now', 'localtime'))";
 			cmd.ExecuteNonQuery();
 			ServerLog.Info($"COACH2026: {CoachCouponLegendPacks} 레전드 선수팩 each to {teams.Count} team(s) that used it before");
+		}
+
+		// The LG AI tester (autotest2) used both MAGU2026 + TRAIN2026 and their tester twins TESTGIFT + TESTTRAIN, so it holds
+		// those gifts twice (user, 2026-11-13 16:5x 결정 16: "LG 테스터가 2번 받은 몫은 당연히 회수해야함"). Once (league_fix
+		// 'autotest2_double_gift'): TESTGIFT's 1억 MP, 100 전체 and 100 고급 선수팩 and TESTTRAIN's 100 트레이닝 카드팩 come
+		// back; packs already opened are taken as MP at the shop price (전체 5만, 고급 10만, 트레이닝 3만), never below 0 MP.
+		// The coupon_use rows stay, so neither coupon can be used again.
+		private static void ReclaimTesterDouble(string dbPath)
+		{
+			using Microsoft.Data.Sqlite.SqliteConnection c = new Microsoft.Data.Sqlite.SqliteConnection(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = dbPath }.ToString());
+			c.Open();
+			using Microsoft.Data.Sqlite.SqliteCommand cmd = c.CreateCommand();
+			cmd.CommandText = "CREATE TABLE IF NOT EXISTS league_fix (name TEXT PRIMARY KEY, done TEXT NOT NULL)";
+			cmd.ExecuteNonQuery();
+			cmd.CommandText = "SELECT COUNT(*) FROM league_fix WHERE name = 'autotest2_double_gift'";
+			if ((long)cmd.ExecuteScalar() > 0) return;
+			cmd.CommandText = "SELECT t.user_code FROM team t JOIN account a ON a.id = t.account_id WHERE a.email = 'autotest2@ma9m.local' "
+				+ "AND EXISTS (SELECT 1 FROM coupon_use u WHERE u.account_id = a.id AND u.code = 'TESTGIFT') "
+				+ "AND EXISTS (SELECT 1 FROM coupon_use u WHERE u.account_id = a.id AND u.code = 'MAGU2026')";
+			object found = cmd.ExecuteScalar();
+			if (found != null && found is not DBNull)
+			{
+				uint team = (uint)(long)found;
+				bool train = false;
+				cmd.CommandText = "SELECT COUNT(*) FROM coupon_use u JOIN account a ON a.id = u.account_id WHERE a.email = 'autotest2@ma9m.local' AND u.code IN ('TESTTRAIN', 'TRAIN2026')";
+				train = (long)cmd.ExecuteScalar() >= 2;
+				long mp = 100_000_000;
+				List<string> parts = new List<string>();
+				foreach ((int item, int count, int price, string name) in new[] { (ItemCatalog.AllPlayersPack, 100, 50_000, "전체 선수팩"),
+					(ItemCatalog.HighPlayersPack, 100, 100_000, "고급 선수팩"), (TrainingBooks.Pack, train ? 100 : 0, 30_000, "트레이닝 카드팩") })
+				{
+					if (count == 0) continue;
+					int take = Math.Min(count, Math.Max(0, s_store.Amount(team, item)));
+					if (take > 0) s_store.Add(team, item, -take);
+					mp += (long)(count - take) * price;
+					parts.Add($"{name} {take}개 회수{(count > take ? $" + 연 {count - take}개는 {(count - take) * (long)price:N0} MP" : string.Empty)}");
+				}
+				int before = s_db.AddMp(team, 0);
+				int taken = (int)Math.Min(before, mp);
+				int after = s_db.AddMp(team, -taken);
+				ServerLog.Info($"autotest2 이중 쿠폰 회수: team {team}, {string.Join(", ", parts)}, MP {before:N0} → {after:N0} (−{taken:N0}{(taken < mp ? $", 모자라 {mp - taken:N0} 못 뺌" : string.Empty)})");
+			}
+			cmd.CommandText = "INSERT INTO league_fix (name, done) VALUES ('autotest2_double_gift', datetime('now', 'localtime'))";
+			cmd.ExecuteNonQuery();
 		}
 
 		// For other systems (shop, rewards): gives a team count of an item; returns its new amount.
@@ -315,7 +360,10 @@ namespace Ma9MServer
 			long account = session.Account?.Id ?? 0;
 			string code = (packet.coupon_code.str ?? string.Empty).Trim();
 			bool tester = session.Account?.Email?.StartsWith("autotest", StringComparison.OrdinalIgnoreCase) == true;
-			CouponDef coupon = Array.Find(Coupons, c => c.Code == code && (!c.TesterOnly || tester));
+			// The 자급자족 tester takes START2026 and nothing else (user, 2026-11-13 결정 1: "START2026을 제공하고, 더이상 지원하지 않고"):
+			// any other code reads as unknown (result 1), so one slip cannot spoil the measurement.
+			bool selfSufficient = string.Equals(session.Account?.Email, ExhibitionHandlers.SelfSufficientTester, StringComparison.OrdinalIgnoreCase);
+			CouponDef coupon = Array.Find(Coupons, c => c.Code == code && (!c.TesterOnly || tester) && (!selfSufficient || c.Code == "START2026"));
 			Ma9MPacket.PKS_SC_USE_COUPON reply = new Ma9MPacket.PKS_SC_USE_COUPON();
 			reply.endDate.dateTime = DateTime.Now;
 			reply.error.SetNoError();

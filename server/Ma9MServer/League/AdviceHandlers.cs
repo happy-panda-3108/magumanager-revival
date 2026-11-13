@@ -341,7 +341,8 @@ namespace Ma9MServer
 			{
 				s.Add($"선수보호 {r.Locked.Count}명은 그 자리 그대로 둡니다");
 			}
-			s.Add("오늘 컨디션·팀컬러·계약·트레이닝·특강을 넣어 계산");
+			// 2026-11-13 (user 16:5x 결정 10, engine: AutoLineup plays every condition as 보통): the line says so.
+			s.Add("팀컬러·계약·트레이닝·특강을 넣어 계산(컨디션은 보통으로)");
 
 			List<string> pages = new List<string>();
 			List<string> bat = Enumerable.Range(0, Ma9MServer.Lineup.FielderSlots).Where(p => AtField(was, p) != AtField(now, p)).Select(p => Slot(FieldNames[p], AtField(was, p), AtField(now, p))).ToList();

@@ -25,6 +25,14 @@ public class Ma9MHelp : MonoBehaviour
 		"· 면담실 면담: 1~3단계 올라 12시간 갑니다.\n" +
 		"계약이 끝난 선수는 1군에 있어도\n매우 나쁨으로 뜁니다(연장하면 보통부터).";
 
+	// 2026-11-13 (user 16:5x 결정 5: "TP는 최초 6개 있고, TP 충전권을 상점에서 10만 MP로 사야한다는 것도 도움말로 적어야겠네"; server
+	// TrainingStore.TpCharges 6, ShopHandlers 202 트레이닝 횟수 충전권 100,000 MP). The training tab is a panel of the player window,
+	// which has no path title of its own, so the page goes on the screens that lead there.
+	private static readonly string TrainingPoint =
+		"트레이닝(선수 정보 > 트레이닝)은 카드마다\nTRAINING POINT 6칸으로 시작해 한 번에 1칸씩 씁니다.\n" +
+		"다 쓰면 저절로 다시 차지 않습니다.\n" +
+		"상점 트레이닝 탭의 트레이닝 횟수 충전권(10만 MP)을\n트레이닝 화면의 아이템 버튼으로 쓰면 6칸이 다시 찹니다.";
+
 	private static readonly Dictionary<string, Func<string[]>> Pages = new Dictionary<string, Func<string[]>>
 	{
 		["Scene_Roster"] = () => new[]
@@ -38,12 +46,19 @@ public class Ma9MHelp : MonoBehaviour
 			"수비할 수 없는 자리의 타자는 능력치가 10%,\n보직이 아닌 자리의 투수는 15% 낮아집니다.",
 			// AI 테스터 불편 6·61 (타순 바꾸는 법을 1~5회차에 못 찾음).
 			"타순 바꾸기: 타순 줄을 1초쯤 꾹 누른 채\n다른 줄로 끌면 두 줄의 타순이 맞바뀝니다\n(수비 자리는 그대로).\n" +
+			// 2026-11-13 (AI tester NC 8회차: 선발 순서를 끌어 바꿀 수 있다는 안내가 없음; Roster_Common_Processor.Ma9MNoNextStarter).
+			"선발 순서: 다음 경기가 없을 때만 선발끼리 끌어 바꿈.\n" +
 			"다 바꾼 뒤 \"등록하기\"를 눌러야 저장됩니다.",
 			// 2026-11-12 (user 10:4x, server AutoLineup Locked).
 			"자동 편성: 가진 카드로 볼 상한 안에서\n가장 강한 1군을 계산해 바뀌는 선수를 보여 줍니다.\n" +
 			"선수 정보 창에서 선수보호를 건 1군 선수는\n자동 편성이 빼거나 자리를 옮기지 않습니다\n(타순은 바뀔 수 있음).",
+			// 2026-11-13 (user 16:5x 결정 11 (가): 로스터 거르기를 카드 목록 방식으로, "길게 누르면 거르기" 안내; Ma9MRosterPicks).
+			"보유선수·선수교체 목록 위 버튼\n짧게 누르면 정렬(한 번 더 누르면 반대로),\n" +
+			"길게 누르면 거르기: 여러 값 고르기·제외·모두 해제.\n" +
+			"거르기는 버튼끼리 함께 걸리고(예: LG + 1~2볼),\n바로 전 정렬이 같은 묶음 안의 2순위가 됩니다.",
 			Condition,
-			ConditionUp
+			ConditionUp,
+			TrainingPoint
 		},
 		["Scene_ContractManage"] = () => new[]
 		{
@@ -85,8 +100,8 @@ public class Ma9MHelp : MonoBehaviour
 			"칸: 수석 · 타격 · 투수 · 트레이닝코치 · 치어리더",
 			"코치는 자기 구단(계보) 선수에게만 일합니다.\n" +
 			"수석코치: 면담실에 선수를 보냅니다(뒤쪽).\n" +
-			// 2026-11-12 (user): not on the lowest square.
-			"타격·투수코치: 트레이닝에 나와(노말 30% ~ 엘리트 60%,\n가장 낮은 칸이 나왔을 때는 안 나옴)\nSP 50을 쓰면 결과가 한 칸 오릅니다.\n" +
+			// 2026-11-12 (user): not on the lowest square. 2026-11-13: a missed top square makes the next top square certain.
+			"타격·투수코치: 트레이닝에 나와(노말 30% ~ 엘리트 60%,\n가장 낮은 칸엔 안 나오고, 가장 높은 칸을 놓치면\n다음 가장 높은 칸엔 꼭) SP 50으로 결과 한 칸 위로.\n" +
 			"치어리더: 리그 경기 MP +3% · 6% · 10% · 15%",
 			"트레이닝코치: \"북 조합\" 버튼(트레이닝북 조합)에서\nIII 트레이닝북 5·4·3·2권으로 IV 1권을 만들고,\n그 구단 선수의 트레이닝 결과를 좋게 합니다.\n" +
 			"다섯 칸이 모두 한 구단(계보)이면 세트 보너스로\n그 구단 선수 능력치가 오릅니다(가장 낮은 등급 기준\n스페셜 +1 · 레어 +2 · 엘리트 +3, 노말은 없음).",
@@ -131,12 +146,14 @@ public class Ma9MHelp : MonoBehaviour
 			// Five short lines (2026-11-12, engine screen check: two long lines shrank the whole page's text).
 			"1군을 등록하면 칸마다 가장 강한 팀컬러가\n저절로 등록됩니다. 다른 것을 쓰려면\n" +
 			"목록의 칸을 두 번 눌러 고른 뒤 등록하세요\n(직접 고른 것은 조건을 채우는 동안 그대로).\n" +
-			"보라색 = 채움 · 회색 = 절반 넘게 모임",
+			// 2026-11-13 (user 16:5x 결정 4): hints from a third of the members (server TeamColors.Hints).
+			"보라색 = 채움 · 회색 = 3분의 1 이상 모임",
 			// Five lines (2026-11-12, engine screen check: six made it the smallest page).
 			"S 등급 효과(해당 선수의 모든 능력치 +)\n" +
 			"전체 칸: 단일 년도 팀 15 · 듀얼 팀 15 · 듀얼 년도 14\n연대 7 · 년도 올스타 3 · 팀 올스타 2 · 듀얼 팀 올스타 1\n" +
 			"타자진·투수진 칸: 6·4·4·3·2·1·1 (같은 순서)\n" +
-			"A는 S의 45%, B 25%, C 15%(반올림). 칸끼리 더해집니다."
+			// 2026-11-13 (AI tester LG 79: page 5's 70/50/30% and these differ with no word why; about as wide as before).
+			"A는 S의 45%·B 25%·C 15%(연대 단일 팀만 5쪽), 칸끼리 더함."
 		},
 		["Scene_Combine"] = () => new[]
 		{
@@ -222,7 +239,8 @@ public class Ma9MHelp : MonoBehaviour
 			"코치 등급에 따라 5·4·3·2권으로 IV 1권.\n빠른선택: 같은 등급 4권을 칸에 올립니다.",
 			"빠른조합: 고른 등급(II·III·IV)까지 가진 책을\n아래 등급부터 한 번에 모두 조합합니다.\n" +
 			// 2026-11-12 (AI tester 쌍방울 B12): 목표교환 is for III·IV books, so only those results offer it.
-			"모자라 남는 책은 그대로입니다.\nIII·IV까지 조합하면 결과 창에서\n목표교환을 바로 열 수 있습니다."
+			"모자라 남는 책은 그대로입니다.\nIII·IV까지 조합하면 결과 창에서\n목표교환을 바로 열 수 있습니다.",
+			TrainingPoint
 		},
 		// 2026-11-12 (AI testers LG 38 · kt 48: "시범경기에 다음 리그 선발이 나오는데 체력 영향 안내가 없다"; 야구팬 24: 카드를 받았는지
 		// 모름). Server ExhibitionHandlers (TriesPerDay, RewardMp, PrizeChance; no fatigue) and ExhibitionAuto (05-09시).

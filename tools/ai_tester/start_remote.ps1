@@ -2,9 +2,9 @@
 # Batch mode: no window, no sound, no real mouse; the tester drives it with ma9m_remote.exe <port>. Live server (CDN 127.0.0.1:18080, game 18000).
 #   powershell -File start_remote.ps1 -Tester 1..4 [-Restart]
 # Tester n uses autotest(n+2)@ma9m.local / (가림) and port 18510+n; its game log is runs\1110\<n>_<name>\game.log.
-param([Parameter(Mandatory = $true)][ValidateRange(1, 5)][int]$Tester, [switch]$Restart)
-$names = @{ 1 = '1_원작올드팬'; 2 = '2_야구팬첫게임'; 3 = '3_효율파'; 4 = '4_출퇴근라이트'; 5 = '..\1109' }  # 5 = the first tester (autotest2, LG), its notes in runs\1109 (user 11-10: "LG덱도 테스터를 이어감")
-$account = if ($Tester -eq 5) { 'autotest2@ma9m.local' } else { "autotest$($Tester + 2)@ma9m.local" }
+param([Parameter(Mandatory = $true)][ValidateRange(1, 6)][int]$Tester, [switch]$Restart)
+$names = @{ 1 = '1_원작올드팬'; 2 = '2_야구팬첫게임'; 3 = '3_효율파'; 4 = '4_출퇴근라이트'; 5 = '..\1109'; 6 = '6_자급자족' }  # 5 = the first tester (autotest2, LG), its notes in runs\1109 (user 11-10: "LG덱도 테스터를 이어감"); 6 = the no-coupon tester (autotest7, 삼성, START2026 only; user 11-13)
+$account = if ($Tester -eq 5) { 'autotest2@ma9m.local' } elseif ($Tester -eq 6) { 'autotest7@ma9m.local' } else { "autotest$($Tester + 2)@ma9m.local" }
 $port = 18510 + $Tester
 $dir = "C:\Ma9MProject\tools\ai_tester\runs\1110\$($names[$Tester])"
 New-Item -ItemType Directory -Force $dir | Out-Null

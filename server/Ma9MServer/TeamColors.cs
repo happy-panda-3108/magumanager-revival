@@ -487,8 +487,9 @@ namespace Ma9MServer
 			List<CardInfo> normal = cards.Where(c => !c.IsLegend).ToList();
 			if (normal.Count == 0) return (0, -1, 0);
 			List<(int group, int a, int b)> pairs = new List<(int, int, int)>();
-			// Seasons too small even for a hint (half the lowest grade) are skipped: 자동 편성 asks this thousands of times.
-			int floor = (Need(k, slot, 3) + 1) / 2 - (cards.Count - normal.Count);
+			// Seasons too small even for a hint (a third of the lowest grade since 2026-11-13, Hints) are skipped: 자동 편성 asks
+			// this thousands of times.
+			int floor = (Need(k, slot, 3) + 2) / 3 - (cards.Count - normal.Count);
 			if (kind == Kind.SingleYearDualTeam)
 			{
 				foreach (IGrouping<int, CardInfo> season in normal.GroupBy(c => c.Year).Where(s => s.Count() >= floor))
@@ -562,7 +563,8 @@ namespace Ma9MServer
 
 		// Greyed hints for the list: per kind and slot, the best group's next grade up (or its lowest grade
 		// when it reaches none), so the screen shows what a few more players would give. Since 2026-11-12 (user 11-10 결정 8:
-		// "팀컬러의 경우 조건의 반이상 인원이 갖춰지면 보이게끔") only once the group has half that grade's members.
+		// "팀컬러의 경우 조건의 반이상 인원이 갖춰지면 보이게끔") only once the group has half that grade's members; a third since
+		// 2026-11-13 (user 16:5x 결정 4: "팀컬러 힌트의 기준을 1/3로 낮춥시다"; AI testers: half hid the targets worth chasing).
 		private static List<int> Hints(Lineup l)
 		{
 			List<CardInfo>[] scopes = Scopes(l);
@@ -575,7 +577,7 @@ namespace Ma9MServer
 					if (members == 0) continue;
 					int reached = grade < 0 ? 4 : grade;
 					int target = Enumerable.Range(0, reached).Where(g => Value(k, slot, g) > 0).DefaultIfEmpty(-1).Last();
-					if (target >= 0 && members * 2 >= Need(k, slot, target)) hints.Add(Instance(Kinds[k].kind, slot, target, group));
+					if (target >= 0 && members * 3 >= Need(k, slot, target)) hints.Add(Instance(Kinds[k].kind, slot, target, group));
 				}
 			}
 			return hints;
@@ -1231,10 +1233,22 @@ namespace Ma9MServer
 						string duals = string.Join(" · ", new[] { 15, 16, 20, 24 }.Select(a => $"{a}+{25 - a} {Dual(a)}"));
 						Check(duals == "15+10 S · 16+9 A · 20+5 C · 24+1 -", $"듀얼 팀 팀마다 40%: '{season.Key % 100:00} {duals}");
 					}
-					// Hints: half the members of the shown grade (14 of 25 for 연대 S's next step … 7 of the lowest C 14).
-					Lineup few = Make(decade.Where(c => c.IsBatter).Take(3).Concat(outsiders.Where(c => c.IsBatter)).Take(14).ToList(), outsiders.Where(c => !c.IsBatter).Take(11).ToList());
-					bool hinted = Hints(few).Any(i => Parse(i)?.kind == Kind.DecadeTeam && i / 10_000_000 % 10 == 0);
-					Check(!hinted, $"연대 3명뿐인 1군: 전체 칸 연대 힌트 {(hinted ? "보임 FAIL" : "안 보임")}");
+					// Hints: a third of the members of the shown grade (9 of 25 for 연대 S's next step … 5 of the lowest C 14).
+					// The outsiders' pitchers come on their own (2026-11-13: the catalog lists batters first, so the 80 above had none
+					// and the test stopped here).
+					// One card per other line and decade on each side, so no other 연대 group gets near a hint (two at most).
+					List<CardInfo> Others(bool bat) => real.Where(c => c.IsBatter == bat && Lineage(c.TeamCode) != decade.Key.line && c.Year / 10 != decade.Key.dec)
+						.GroupBy(c => (Lineage(c.TeamCode), c.Year / 10)).Select(g => g.First()).ToList();
+					List<CardInfo> otherBats = Others(true), otherArms = Others(false).Take(11).ToList();
+					bool DecadeHint(int members)
+					{
+						Lineup few = Make(decade.Where(c => c.IsBatter).Take(members).Concat(otherBats).Take(14).ToList(), otherArms);
+						return Hints(few).Any(i => Parse(i)?.kind == Kind.DecadeTeam && i / 10_000_000 % 10 == 0);
+					}
+					int decadeBats = decade.Count(c => c.IsBatter);
+					bool hint3 = DecadeHint(3), hint4 = DecadeHint(4), hint5 = decadeBats >= 5 && DecadeHint(5);
+					Check(!hint3 && !hint4 && (hint5 || decadeBats < 5),
+						$"전체 칸 연대 힌트 (C 14명의 1/3 = 5명부터): 3명 {(hint3 ? "보임" : "안 보임")} · 4명 {(hint4 ? "보임" : "안 보임")} · 5명 {(hint5 ? "보임" : decadeBats < 5 ? "(연대 타자 모자람)" : "안 보임")}");
 				}
 
 				// 6. 특성 CP: the dot when CP is left that a trait can take.

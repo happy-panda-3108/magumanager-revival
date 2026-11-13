@@ -8,7 +8,7 @@ namespace Ma9MServer
 	// 자동 편성 (engine session, 2026-11-11; user 18:4x 10번: "볼 상한 안에서 가장 강한 라인업을 짜는 기능도 요즘 매니징 게임의 특징이라
 	// 구현을 해보고 싶긴 한데, 난이도가 있지 않을까 싶음. 일단 진행해봅시다"; keeping the team colour or not: the kt AI tester's
 	// idea): the strongest 1군 of the club's own cards under its ball cap, as Ma9MSim.TeamValue counts it against its league.
-	// - A 1군 is valued as league games build it: today's condition, development (교육·계약·트레이닝·코치), the team colour the
+	// - A 1군 is valued as league games build it, at 보통 condition (11-13; before: today's), development (교육·계약·트레이닝·코치), the team colour the
 	//   자동 등록 would give it (TeamColors.AutoBonuses), lineup effects (선수분석 graph, out of position / role), the league
 	//   reference of now (TeamStrength.LeagueShift), the club's 팀 특성; against the league's typical batter and pitcher.
 	// - Rules: the cap (RosterHandlers.MaxCostOf), no card in a 특별수강 (LessonHandlers.InLesson), one 레전드 batter and one
@@ -102,8 +102,10 @@ namespace Ma9MServer
 			LeagueClub club = s.Clubs[me];
 			List<TeamCard> owned = s_db.GetCards(userCode);
 			x.Owned = owned.ToDictionary(c => c.Idx);
-			DateTime day = s.SlotTime(game);
-			x.Cond = owned.ToDictionary(c => c.Idx, c => Condition.For(club.Owner, c.Idx, day));
+			// Condition: none (user 11-13 16:5x: "자동 편성에서는 컨디션 반영 없이 순수 스탯 싸움으로 이 선수가 더 승률이 좋냐 그걸 따져서
+			// 라인업을 만들기 바람. 그 날 그 날 선수가 달라지면 좀 이상할 것 같음") — every card at 보통 (an empty x.Cond reads 2), the league's
+			// clubs too (Teams raw). Before: today's Condition.For.
+			x.Cond = new Dictionary<int, byte>();
 			HashSet<int> lesson = LessonHandlers.InLesson(userCode);
 			x.Info = owned.Where(c => !lesson.Contains(c.Idx)).Select(c => s_data.Catalog.Get(c.Idx)).Where(c => c != null).ToDictionary(c => c.Idx);
 			x.Blocked = SpBlock.ForRoster(userCode, x.Info.Values.Where(c => !c.IsBatter).Select(c => c.Idx), x.Current).Select(b => b.idx).ToHashSet();
@@ -806,6 +808,12 @@ namespace Ma9MServer
 				double w = 0;
 				object gate = new object();
 				double[] one = each[k] = new double[opps.Length * games];
+				if (LineupSimSeries > 1)
+				{
+					w = PlaySeries(x, mine, opps, traits, games, threads, one);
+					wins[k] = w / (opps.Length * games);
+					continue;
+				}
 				System.Threading.Tasks.Parallel.For(0, opps.Length * games, new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = threads }, n =>
 				{
 					int j = opps[n / games];
@@ -833,6 +841,74 @@ namespace Ma9MServer
 				seVsFirst[k] = d.Length > 1 ? Math.Sqrt(d.Sum(v => (v - mean) * (v - mean)) / (d.Length - 1) / d.Length) : 0;
 			}
 			return wins;
+		}
+
+		// League games carry pitchers' fatigue from one game to the next (LeagueService.PlayGame: TacticModel.CarryIn, days in a
+		// row, pitches in the last two; tired or overused relievers sit out). Played one by one, a 1군 whose starters go 35
+		// pitches (relievers in the rotation) has a fresh bullpen every game and looked strong: AI tester 두산 11-13, "79%" →
+		// .538 in 14 games, the same as before the change. So the check plays chains of LineupSimSeries games in a row (the
+		// club's rotation turning over, against the other clubs in turn); each opponent carries its own fatigue between its
+		// games in the chain. MA9M_AUTOLINEUP_SERIES=0 plays them one by one as before.
+		public static readonly int LineupSimSeries = int.TryParse(Environment.GetEnvironmentVariable("MA9M_AUTOLINEUP_SERIES"), out int ls) ? ls : 24;
+
+		private static double PlaySeries(LineupContext x, GameTeam mine, int[] opps, TraitEffects.Effect[] traits, int games, int threads, double[] one)
+		{
+			GameEnv env = s_data.Env;
+			int total = opps.Length * games, len = LineupSimSeries, chains = (total + len - 1) / len;
+			double w = 0;
+			object gate = new object();
+			System.Threading.Tasks.Parallel.For(0, chains, new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = threads }, c =>
+			{
+				double[] units = new double[11];
+				int[] days = new int[11], last1 = new int[11], last2 = new int[11];
+				Dictionary<int, (double[] u, int[] d, int[] l1, int[] l2)> opp = new Dictionary<int, (double[], int[], int[], int[])>();
+				double cw = 0;
+				for (int n = c * len; n < Math.Min(total, (c + 1) * len); n++)
+				{
+					int j = opps[n % opps.Length];
+					if (!opp.TryGetValue(j, out var os)) opp[j] = os = (new double[11], new int[11], new int[11], new int[11]);
+					GameTeam home = CopyTeam(mine), away = CopyTeam(x.Teams[j]);
+					home.StarterSlot = n % 5;
+					away.StarterSlot = (n / opps.Length) % 5;
+					SeasonModel m = CardGame.Build(home, away, env);
+					TraitEffects.Apply(m, 0, x.Traits);
+					TraitEffects.Apply(m, 1, traits[j]);
+					for (int t = 0; t < 2 && m.Tac != null; t++)
+					{
+						for (int slot = 0; slot < 11 && slot < m.Decks[t].Pitchers.Length; slot++)
+						{
+							int p = m.Decks[t].Pitchers[slot];
+							if (p < 0) continue;
+							m.Tac.CarryIn[p] = t == 0 ? units[slot] : os.u[slot];
+							m.Tac.DaysInRow[p] = t == 0 ? days[slot] : os.d[slot];
+							m.Tac.Last1[p] = t == 0 ? last1[slot] : os.l1[slot];
+							m.Tac.Last2[p] = t == 0 ? last2[slot] : os.l2[slot];
+						}
+					}
+					SimStats st = new SeasonSimulator(m, new EngineParams { RunEnvironment = env.RunEnvironment, ReachOnError = env.ReachOnError }, (ulong)(n + 1) * 7919).PlayOne(0, 1, null);
+					for (int t = 0; t < 2 && m.Tac != null; t++)
+					{
+						double[] u = t == 0 ? units : os.u;
+						int[] d = t == 0 ? days : os.d, l1 = t == 0 ? last1 : os.l1, l2 = t == 0 ? last2 : os.l2;
+						for (int slot = 0; slot < 11 && slot < m.Decks[t].Pitchers.Length; slot++)
+						{
+							int p = m.Decks[t].Pitchers[slot];
+							if (p < 0) continue;
+							int np = (int)st.Pit(p, PS.NP);
+							u[slot] = m.Tac.R.CarryOut(m.Tac.CarryIn[p], m.Tac.Units(p, np), m.Tac.Limit[p]);
+							d[slot] = st.Pit(p, PS.G) > 0 ? d[slot] + 1 : 0;
+							l2[slot] = l1[slot];
+							l1[slot] = np;
+						}
+					}
+					long r0 = m.TeamBatters[0].Sum(i => st.Bat(i, BS.R)), r1 = m.TeamBatters[1].Sum(i => st.Bat(i, BS.R));
+					double v = r0 > r1 ? 1 : r0 == r1 ? 0.5 : 0;
+					one[n] = v;
+					cw += v;
+				}
+				lock (gate) w += cw;
+			});
+			return w;
 		}
 	}
 }

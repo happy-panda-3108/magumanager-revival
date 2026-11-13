@@ -156,7 +156,10 @@ public static class Ma9MAdvice
 				p.Content.text = pages[shown];
 				if (more != null)
 				{
-					more.text = (shown == pages.Length - 1) ? "요약" : ("자세히 " + (shown + 1) + "/" + (pages.Length - 1));
+					// The page shown now, then where the button goes (2026-11-13, AI testers LG 78·kt 51: "자세히 2/2" named the next
+					// page, so the one before the last read as the last and the "참고" page after it was never found).
+					int last = pages.Length - 1;
+					more.text = (shown == 0) ? "자세히" : (shown + "/" + last + ((shown == last) ? " · 요약" : " · 다음"));
 				}
 			});
 		}
