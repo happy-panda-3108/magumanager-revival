@@ -39,7 +39,8 @@ public class Ma9MHelp : MonoBehaviour
 		{
 			"1군은 타자 14명(주전 9 + 후보 5), 투수 11명입니다.\n" +
 			"1군 볼 합계는 리그 상한(Today Ball) 안이어야 하고,\n넘으면 리그 경기에서 전력이 크게 떨어집니다.\n" +
-			"상한: 비기너 120 · 루키 130 · 트리플A 140\n메이저 145 · 레전드 150 · 챔피언스 155",
+			// 2026-11-14 (user: 더블A 140, 트리플A부터 +5; server LeagueRules.BallCap7 from the 11-16 season).
+			"상한: 비기너 120 · 루키 130 · 더블A 140\n트리플A 145 · 메이저 150 · 레전드 155 · 챔피언스 160",
 			"선발에서 뺀 투수는 리그 5경기 동안\n다시 선발로 넣을 수 없습니다.\n" +
 			"레전드 카드는 1군에 타자 1장, 투수 1장까지입니다.\n" +
 			"같은 선수의 카드(레전드 포함)는 1군에 한 장만 됩니다.\n" +
@@ -107,7 +108,8 @@ public class Ma9MHelp : MonoBehaviour
 			"다섯 칸이 모두 한 구단(계보)이면 세트 보너스로\n그 구단 선수 능력치가 오릅니다(가장 낮은 등급 기준\n스페셜 +1 · 레어 +2 · 엘리트 +3, 노말은 없음).",
 			"SP: 접속 +50, 리그 승리 +30 (최대 2,000)\n" +
 			"코치 카드 4장(엘리트 3장)으로 한 등급 위 카드를\n만들 수 있습니다(전력강화 > 코칭스태프 조합).\n" +
-			"코치는 100장까지 가질 수 있습니다.",
+			// 2026-11-14 (user: "코치는 중복해서 등장할 수 있다고 도움말에 적혀있지 않나?"; CoachCatalog: copies allowed since 11-05).
+			"코치는 100장까지 가질 수 있고, 선수 카드와 달리\n같은 코치가 또 나올 수 있습니다(팩·조합 모두).",
 			"면담실: 면담 시간은 0시~12시, 12시~24시입니다.\n" +
 			"수석코치 구단(계보)의 1군 선수 중 컨디션이\n나쁨·매우 나쁨인 선수가 찾아옵니다(후보 제외).\n" +
 			"한 시간대에 수석코치 등급만큼 옵니다.\n(노말 2 · 스페셜 3 · 레어 4 · 엘리트 5명)",
@@ -190,9 +192,10 @@ public class Ma9MHelp : MonoBehaviour
 		["Scene_CoachCardCombine"] = () => new[]
 		{
 			"같은 등급 코치 카드 4장을 넣으면\n한 등급 위 카드 1장이 나옵니다(스태프에 있는 카드는 못 넣음).\n" +
-			"같은 카드 4장: 그 카드의 한 등급 위\n같은 계보 4장: 그 계보의 한 등급 위 카드\n그 밖의 4장: 무작위 한 등급 위 카드",
+			"같은 카드 4장: 그 카드의 한 등급 위\n같은 계보 4장: 그 계보의 한 등급 위 카드\n그 밖의 4장: 무작위 한 등급 위 카드(가진 코치도 나옴)",
 			// 2026-11-13 (user): three 엘리트 타격코치 (투수코치) of one line → the same coach, its stat drawn again (CoachMix).
-			"엘리트는 3장으로 새 엘리트 1장을 받습니다\n(같은 계보 3장이면 그 계보의 엘리트,\n같은 계보 타격코치 3장·투수코치 3장은 능력치만 새로).\n" +
+			// 2026-11-14 (user: 정신·정신·스피드 gave 스피드 again): the new stat is one the three did not have (CoachCatalog.RollOtherStat).
+			"엘리트는 3장으로 새 엘리트 1장을 받습니다\n(같은 계보 3장이면 그 계보의 엘리트,\n같은 계보 타격·투수코치 3장은 넣은 카드에 없던 능력치로).\n" +
 			"계보는 이름이 바뀐 구단을 한 구단으로 봅니다\n(예: 해태·KIA, OB·두산, 빙그레·한화)."
 		},
 		// AI 테스터 NC (11-11): 작전실·순위표에 (?)가 없음. sim TacticRules (Tactics.cs), LeagueState.Ranked, LeagueRules.NextTier.
@@ -218,9 +221,9 @@ public class Ma9MHelp : MonoBehaviour
 			"순위는 승률(승 ÷ (승+패), 무승부 제외) 순입니다.\n" +
 			"승률이 같으면 그 팀끼리의 맞대결 성적,\n그다음 득실차로 정합니다.\n" +
 			"시즌은 144경기, 20분마다 한 경기씩 열립니다.",
-			"승격·강등 (10팀)\n" +
+			// 2026-11-14 (engine tester_y: six lines made this page's text smaller than page 1's): five lines, no heading line.
 			"비기너: 1~4위 승격(포스트시즌 없음)\n" +
-			"루키·트리플A·메이저: 포스트시즌 최종 1~4위 승격,\n정규 8~10위 강등\n" +
+			"루키·더블A·트리플A·메이저: 포스트시즌 최종 1~4위\n승격, 정규 8~10위 강등\n" +
 			"레전드: 최종 1~3위 챔피언스, 4~6위 잔류, 7~10위 강등\n" +
 			"챔피언스: 최종 1~3위 잔류, 나머지는 레전드로"
 		},
@@ -295,27 +298,80 @@ public class Ma9MHelp : MonoBehaviour
 			{
 				yield break;
 			}
-			UILabel title = FindTitle();
-			if (title == null)
+			List<UILabel> titles = FindTitles(scene);
+			if (titles.Count == 0)
 			{
 				continue;
 			}
-			if (title.transform.parent != null && title.transform.parent.Find("Ma9MHelpButton") != null)
+			int made = 0;
+			foreach (UILabel title in titles)
 			{
-				yield break;
+				if (title.transform.parent != null && title.transform.parent.Find("Ma9MHelpButton") != null)
+				{
+					continue;
+				}
+				MakeButton(title, scene);
+				made++;
 			}
-			MakeButton(title, scene);
+			Debug.Log("[Ma9MHelp] " + scene + ": (?) on " + made + " of " + titles.Count + " title(s) \"" + titles[0].text + "\" (" + PathOf(titles[0].transform) + ")");
 			yield break;
 		}
+		Debug.Log("[Ma9MHelp] " + scene + ": no path title found");
 	}
 
-	// The highest visible label whose text is a path ("팀 관리 > 계약관리").
-	private static UILabel FindTitle()
+	// 2026-11-14 (engine tester_x: no "(?)" on 기록실 > 리그순위표): the ranking chart is five pages side by side (DragPage, x 0 …
+	// 4800), each with its own "기록실 > 리그순위표" label, so the one highest label could be another page's or some other " > "
+	// text. A scene listed here takes only titles holding its words, and every page's copy of the title gets a button.
+	private static readonly Dictionary<string, string> TitleHints = new Dictionary<string, string>
+	{
+		["Scene_LeagueRankingChart"] = "순위표"
+	};
+
+	private static List<UILabel> FindTitles(string scene)
+	{
+		string hint;
+		TitleHints.TryGetValue(scene, out hint);
+		UILabel best = FindTitle(hint);
+		List<UILabel> all = new List<UILabel>();
+		if (best == null)
+		{
+			return all;
+		}
+		foreach (UILabel label in UnityEngine.Object.FindObjectsByType<UILabel>(FindObjectsSortMode.None))
+		{
+			if (label.gameObject.activeInHierarchy && label.gameObject.name != "Ma9MHelpButton" && label.text == best.text)
+			{
+				all.Add(label);
+			}
+		}
+		if (!all.Contains(best))
+		{
+			all.Insert(0, best);
+		}
+		return all;
+	}
+
+	private static string PathOf(Transform t)
+	{
+		string path = t.name;
+		for (Transform p = t.parent; p != null; p = p.parent)
+		{
+			path = p.name + "/" + path;
+		}
+		return path;
+	}
+
+	// The highest visible label whose text is a path ("팀 관리 > 계약관리"), holding hint when given.
+	private static UILabel FindTitle(string hint = null)
 	{
 		UILabel best = null;
 		foreach (UILabel label in UnityEngine.Object.FindObjectsByType<UILabel>(FindObjectsSortMode.None))
 		{
 			if (!label.gameObject.activeInHierarchy || string.IsNullOrEmpty(label.text) || !label.text.Contains(" > ") || label.text.Contains("\n"))
+			{
+				continue;
+			}
+			if (!string.IsNullOrEmpty(hint) && !label.text.Contains(hint))
 			{
 				continue;
 			}

@@ -72,6 +72,7 @@ namespace Ma9MServer
 			}
 			ResetOnce();
 			OldClubsOnce();
+			RerollFix1114();
 			CoachCatalog.WriteTables(Path.Combine(dataDir, "tables"));
 			ServerLog.Info($"코칭스태프: on{(CoachCatalog.TestMode ? " (test mode: packs and SP topped up)" : string.Empty)}, 타격·투수코치 +1 even on the book's best, {CoachCatalog.All().Count()} cards");
 			if (loop == null)
@@ -94,6 +95,65 @@ namespace Ma9MServer
 			SqliteConnection c = new SqliteConnection(s_cs);
 			c.Open();
 			return c;
+		}
+
+		// 2026-11-14 22:25 (user, SKY마토 user 7: "롯데 타격코치 3명 넣었는데, 각각 정신, 정신, 스피드였음 … 왜 다시 스피드가 나온 것인지??
+		// … 컨택 타격코치로 변경해줄 것"): the 능력치 다시 뽑기 then drew from all five stats (fixed in RollOtherStat). Once, at the next
+		// start (the staff is cached while the server runs), that card — 롯데 엘리트 타격코치 스피드 9072433, coach_card id 10052 — becomes
+		// the 컨택 one (9072411), on the staff too, with a notice.
+		private static void RerollFix1114()
+		{
+			const uint User = 7;
+			const long Row = 10052;
+			const int From = 9072433, To = 9072411;
+			using SqliteConnection c = Open();
+			using SqliteCommand cmd = c.CreateCommand();
+			cmd.CommandText = "SELECT COUNT(*) FROM coach_fix WHERE name = 'reroll_fix_1114'";
+			if ((long)cmd.ExecuteScalar() > 0) return;
+			using SqliteTransaction t = c.BeginTransaction();
+			cmd.Transaction = t;
+			cmd.CommandText = "UPDATE coach_card SET coach_idx = $to WHERE id = $row AND user_code = $u AND coach_idx = $from";
+			cmd.Parameters.AddWithValue("$to", To);
+			cmd.Parameters.AddWithValue("$row", Row);
+			cmd.Parameters.AddWithValue("$u", (long)User);
+			cmd.Parameters.AddWithValue("$from", From);
+			int cards = cmd.ExecuteNonQuery();
+			int staff = 0;
+			if (cards == 1)
+			{
+				cmd.Parameters.Clear();
+				cmd.CommandText = "SELECT staff FROM coach_state WHERE user_code = $u";
+				cmd.Parameters.AddWithValue("$u", (long)User);
+				string s = cmd.ExecuteScalar() as string;
+				if (s != null)
+				{
+					string[] slots = s.Split(',');
+					int k = Array.IndexOf(slots, From.ToString());
+					if (k >= 0)
+					{
+						slots[k] = To.ToString();
+						cmd.CommandText = "UPDATE coach_state SET staff = $s WHERE user_code = $u";
+						cmd.Parameters.AddWithValue("$s", string.Join(",", slots));
+						staff = cmd.ExecuteNonQuery();
+					}
+				}
+				cmd.Parameters.Clear();
+				// A notice already seen (the 11-05 reset's) is replaced, not shown again; one still waiting gets this added.
+				cmd.CommandText = @"INSERT INTO coach_notice (user_code, title, text, shown) VALUES ($u, $t, $x, 0)
+					ON CONFLICT(user_code) DO UPDATE SET title = excluded.title,
+					text = CASE WHEN shown = 0 THEN text || char(10) || char(10) || excluded.text ELSE excluded.text END, shown = 0";
+				cmd.Parameters.AddWithValue("$u", (long)User);
+				cmd.Parameters.AddWithValue("$t", "코치 카드 정정");
+				cmd.Parameters.AddWithValue("$x", "코치 조합(능력치 다시 뽑기)에서 넣은 카드의\n능력치가 다시 나오던 문제를 고쳤습니다.\n롯데 엘리트 타격코치: 스피드 → 컨택");
+				cmd.ExecuteNonQuery();
+			}
+			cmd.Parameters.Clear();
+			cmd.CommandText = "INSERT INTO coach_fix (name, done) VALUES ('reroll_fix_1114', $d)";
+			cmd.Parameters.AddWithValue("$d", DateTime.Now.ToString("s"));
+			cmd.ExecuteNonQuery();
+			t.Commit();
+			s_staff.Clear();
+			ServerLog.Info($"코치 카드 정정(11-14): user {User} {From} → {To} ({cards} card, {staff} staff slot)");
 		}
 
 		// The lineage change (user, 2026-11-05 19:25: "코치카드를 전부 회수해서 그 비용을 다시 돌려주고 처음부터 다시 까도록
@@ -124,7 +184,7 @@ namespace Ma9MServer
 			{
 				int n = cards.GetValueOrDefault(user), bought = packs.GetValueOrDefault(user);
 				long mp = (long)bought * CoachCatalog.PackPrice;
-				if (mp > 0) s_db.AddMp(user, (int)mp);
+				if (mp > 0) s_db.AddMp(user, (int)mp, MpLedger.Coach);
 				cmd.CommandText = "INSERT OR REPLACE INTO coach_notice (user_code, title, text, shown) VALUES ($u, $t, $x, 0)";
 				cmd.Parameters.Clear();
 				cmd.Parameters.AddWithValue("$u", (long)user);
@@ -545,7 +605,7 @@ namespace Ma9MServer
 				object paid = pay.ExecuteScalar();
 				if (paid != null) mp += Convert.ToInt32(paid);
 			}
-			if (mp > 0) s_db.AddMp(user, mp);
+			if (mp > 0) s_db.AddMp(user, mp, MpLedger.Coach);
 			if (wins > 0) AddSp(user, wins * CoachCatalog.LeagueWinSp);
 			if (mp > 0 || wins > 0) ServerLog.Info($"코칭스태프: user {user} league games confirmed, 치어리더 +{mp:N0} MP, {wins} wins SP +{wins * CoachCatalog.LeagueWinSp}");
 		}

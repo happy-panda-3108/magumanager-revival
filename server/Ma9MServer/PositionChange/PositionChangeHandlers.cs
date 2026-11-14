@@ -218,7 +218,7 @@ namespace Ma9MServer
 				return refuse;
 			}
 			result = s_rng.NextDouble() < GreatChance ? Great : Success;
-			s_db.AddMp(user, -Fee);
+			s_db.AddMp(user, -Fee, MpLedger.PositionChange);
 			Save(user, idx, (byte)((target - 11) * 10 + result));
 			return null;
 		}
@@ -316,7 +316,7 @@ namespace Ma9MServer
 			int pick = s_roles.Where(kv => kv.Value.Contains((byte)CardPos.SU) && s_catalog.Get(kv.Key)?.MainPosition == CardPos.RP && !owned.Contains(kv.Key)).Select(kv => kv.Key).FirstOrDefault();
 			int notAllowed = s_catalog.All.Where(ci => !ci.IsBatter && !s_roles.ContainsKey(ci.Idx) && !owned.Contains(ci.Idx)).Select(ci => ci.Idx).FirstOrDefault();
 			db.AddCards(user, new[] { pick, notAllowed }, RosterHandlers.StartContract);
-			db.AddMp(user, 2_000_000);
+			db.AddMp(user, 2_000_000, MpLedger.Test);
 			Ma9MPacket.PKS_SC_ENTER_PITCHER_POSITION_TRAINING list = EnterReply(user, DateTime.Now);
 			bool listed = list.players.array.Any(p => p.ui_info.index.n == pick) && list.players.array.All(p => s_roles.ContainsKey(p.ui_info.index.n))
 				&& !list.players.array.Any(p => p.ui_info.index.n == notAllowed);
@@ -342,7 +342,7 @@ namespace Ma9MServer
 				CardInfo info = s_catalog.Get(legend);
 				byte to = s_roles[legend][0];
 				db.AddCards(user, new[] { legend }, RosterHandlers.StartContract);
-				db.AddMp(user, Fee);
+				db.AddMp(user, Fee, MpLedger.Test);
 				bool shown = EnterReply(user, DateTime.Now).players.array.Any(p => p.ui_info.index.n == legend);
 				string changed = TryChange(user, legend, to, out byte legendResult);
 				TeamCard legendCard = db.GetCards(user).First(c => c.Idx == legend);

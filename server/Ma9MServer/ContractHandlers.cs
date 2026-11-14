@@ -268,7 +268,7 @@ namespace Ma9MServer
 				cmd.Parameters.AddWithValue("$i", idx);
 				cmd.ExecuteNonQuery();
 			}
-			mp = s_db.AddMp(user, -cost);
+			mp = s_db.AddMp(user, -cost, MpLedger.Contract);
 			Invalidate(user);
 			Missions.Add(user, Missions.Contracts);  // 업적
 			return null;
@@ -348,7 +348,7 @@ namespace Ma9MServer
 				return $"보유한 선수가 {MinCards}명 이하일 때는 방출할 수 없습니다.";
 			}
 			s_db.RemoveCards(user, new[] { idx });
-			mp = s_db.AddMp(user, info.Ball * RefundPerBall);
+			mp = s_db.AddMp(user, info.Ball * RefundPerBall, MpLedger.Release);
 			Invalidate(user);
 			return null;
 		}
@@ -453,7 +453,7 @@ namespace Ma9MServer
 			// The user's numbers for a 9볼 (11-10 02:2x, after 2 days): 3 days 43.2만, 7 days 72만, 14 days 122.4만.
 			Check(SurchargeAfter != 2 || Cost(0, 9, 2) == 360_000 && Cost(0, 9, 3) == 432_000 && Cost(0, 9, 7) == 720_000 && Cost(0, 9, 14) == 1_224_000,
 				$"9볼 at 2/3/7/14 days left: {Cost(0, 9, 2):N0} / {Cost(0, 9, 3):N0} / {Cost(0, 9, 7):N0} / {Cost(0, 9, 14):N0} (surcharge after {SurchargeAfter})");
-			s_db.AddMp(user, 50_000_000);
+			s_db.AddMp(user, 50_000_000, MpLedger.Test);
 			int mp0 = s_db.AddMp(user, 0);
 			string why = TryExtend(user, pick.Idx, 1, today, out int mp1);
 			TeamCard after = s_db.GetCards(user).First(c => c.Idx == pick.Idx);

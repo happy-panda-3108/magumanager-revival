@@ -86,7 +86,7 @@ namespace Ma9MServer
 			if (list == null) s_store.RevealLines(user, season);
 			else if (list.Count > 0) s_store.RevealLines(user, season, list.Max());
 			Missions.OnLeagueGames(user, confirming);
-			if (due.mp != 0) s_db.AddMp(user, due.mp);
+			if (due.mp != 0) s_db.AddMp(user, due.mp, MpLedger.League);
 			if (due.homeRuns > 0) s_store.AddHomeRunBalls(user, due.homeRuns);
 			// 코칭스태프: the 치어리더's MP and SP for the wins (CoachHandlers; nothing unless MA9M_COACH=1).
 			CoachHandlers.OnLeagueConfirmed(user, confirming);
@@ -107,8 +107,11 @@ namespace Ma9MServer
 			// a data copy only) runs the switch now.
 			if (Environment.GetEnvironmentVariable("MA9M_TIERS6") == "1") s_store.MigrateTiers6("MA9M_TIERS6");
 			if (s_store.Tiers6Done()) LeagueRules.UseNewStructure();
+			// Seven tiers (더블A, 2026-11-14) likewise; MA9M_TIERS7=1 (a data copy only) runs that switch now.
+			if (Environment.GetEnvironmentVariable("MA9M_TIERS7") == "1") s_store.MigrateTiers7("MA9M_TIERS7");
+			if (s_store.Tiers7Done()) LeagueRules.UseSeven();
 			AiTeams.Init(dbPath, data.Catalog, data);
-			if (Environment.GetEnvironmentVariable("MA9M_TIERS6") == "1") AiTeams.RenewNow(data);
+			if (Environment.GetEnvironmentVariable("MA9M_TIERS6") == "1" || Environment.GetEnvironmentVariable("MA9M_TIERS7") == "1") AiTeams.RenewNow(data);
 			SeasonBonus.Init(db, dbPath);
 		}
 
@@ -278,6 +281,12 @@ namespace Ma9MServer
 				if (!LeagueRules.NewStructure && next >= LeagueRules.NewStructureFrom)
 				{
 					s_store.MigrateTiers6($"편성 for {next:MM-dd HH:mm}");
+					AiTeams.Reload();
+				}
+				// 더블A (2026-11-14): the first 편성 for a season from LeagueRules.SevenFrom moves to seven tiers the same way.
+				if (LeagueRules.NewStructure && !LeagueRules.Seven && next >= LeagueRules.SevenFrom)
+				{
+					s_store.MigrateTiers7($"편성 for {next:MM-dd HH:mm}");
 					AiTeams.Reload();
 				}
 				AiTeams.RenewForSeason(s_data, next);

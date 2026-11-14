@@ -109,6 +109,15 @@ namespace Ma9MServer
 				string[] pools = Array.FindAll(args, a => a.Split(':').Length >= 2 && Array.TrueForAll(a.Split(':'), p => int.TryParse(p, out _)));
 				Environment.Exit(LeagueService.AiStrengthTest(aiSeasons, pools));
 			}
+			int aiTest7 = Array.IndexOf(args, "--aitest7");
+			if (aiTest7 >= 0)
+			{
+				// Dev (systems session, 2026-11-14, 더블A): 루키's fixed clubs, 더블A's and 트리플A's decks against each other; run with
+				// MA9M_TIERS7=1 on a data copy (the switch and the decks made at startup). [seasons] after the flag.
+				int seasons7 = aiTest7 + 1 < args.Length && int.TryParse(args[aiTest7 + 1], out int n7) ? n7 : 6;
+				string[] variants7 = Array.FindAll(args, a => a.Split(':').Length == 2 && Array.TrueForAll(a.Split(':'), q => int.TryParse(q, out _)));
+				Environment.Exit(LeagueService.AiStrengthTest7(seasons7, variants7));
+			}
 			int warTest = Array.IndexOf(args, "--wartest");
 			if (warTest >= 0)
 			{
@@ -228,6 +237,16 @@ namespace Ma9MServer
 					Environment.Exit(2);
 				}
 				Environment.Exit(TeamColors.AutoSelfTest(Path.Combine(dataDir, "ma9m.db")));
+			}
+			if (Array.IndexOf(args, "--missionpaytest") >= 0)
+			{
+				// Dev (systems session, 2026-11-14): 오늘의 미션 0시 자동 지급 on the test team; writes, so a copy only.
+				if (Path.GetFullPath(dataDir).TrimEnd('\\', '/').Equals(@"C:\Ma9MProject\server\data", StringComparison.OrdinalIgnoreCase))
+				{
+					ServerLog.Warn("--missionpaytest writes to the DB: run it on a copy of the data directory");
+					Environment.Exit(2);
+				}
+				Environment.Exit(Missions.AutoPaySelfTest("autotest@ma9m.local"));
 			}
 			if (Array.IndexOf(args, "--lessontest") >= 0)
 			{

@@ -103,7 +103,8 @@ namespace Ma9MServer
 				SeasonBonus.Record(bonusUser, 9999, 0, 1);
 				List<string> paidLines = SeasonBonus.Pay(bonusUser);
 				int got = LeagueService.Balance(bonusUser) - mpBeforeBonus;
-				bool bonusOk = SeasonBonus.Amount(0, 1) == 3_000_000 && SeasonBonus.Amount(3, 1) == 6_000_000 && SeasonBonus.Amount(LeagueRules.ChampionsTier, 1) == (LeagueRules.NewStructure ? 7_800_000 : 7_500_000) && SeasonBonus.Amount(0, 10) == 1_000_000
+				// Tier 3 is 메이저 (×2.0) with six tiers, 트리플A (×1.8) with seven.
+				bool bonusOk = SeasonBonus.Amount(0, 1) == 3_000_000 && SeasonBonus.Amount(3, 1) == (LeagueRules.Seven ? 5_400_000 : 6_000_000) && SeasonBonus.Amount(LeagueRules.ChampionsTier, 1) == (LeagueRules.NewStructure ? 7_800_000 : 7_500_000) && SeasonBonus.Amount(0, 10) == 1_000_000
 					&& paidLines.Count == 2 && got == 3_000_000 && SeasonBonus.Pay(bonusUser).Count == 0;
 				if (!bonusOk) opProblems++;
 				ServerLog.Info($"시즌 완주 보너스: {(bonusOk ? "ok" : "FAIL")} — 비기너 1위 {SeasonBonus.Amount(0, 1):N0}, 4위 {SeasonBonus.Amount(0, 4):N0}, 10위 {SeasonBonus.Amount(0, 10):N0}, 메이저 1위 {SeasonBonus.Amount(3, 1):N0}; 지급 {got:N0} ({string.Join(" ", paidLines)})");

@@ -222,7 +222,20 @@ namespace Ma9MServer
 			public CardInfo Info;
 			public double Off, PerBf, Stamina;
 			public double[] Def = new double[8];
+			// (11-14) A pitcher's runs saved a batter faced in each kind of slot — 0 starter, 1 RP1-4, 2 SU, 3 CP — with the
+			// lineup effect of that slot for his role (LineupEffects: graph 80 in role, a starter in relief or a reliever
+			// starting graph 40/60 and −15%), as a league game plays him.
+			public double[] PerBfRole = new double[4];
 		}
+
+		// The LineupEffects view of each kind of pitcher slot (PerBfRole) and the kind of pitching slot k.
+		private static readonly int[] RoleViews = { 0, 1, 5, 6 };
+
+		private static int RoleOfSlot(int k) => k < 5 ? 0 : k < 9 ? 1 : k == 9 ? 2 : 3;
+
+		// Dev (11-14): MA9M_AUTOLINEUP_ROLEVALUE=0 values pitchers as before (one PerBf for every slot, no role effect in the
+		// cards' own values; the whole-1군 evaluation always had it) — to compare on a data copy.
+		private static readonly bool RoleValue = Environment.GetEnvironmentVariable("MA9M_AUTOLINEUP_ROLEVALUE") != "0";
 
 		private static Dictionary<int, CardValue> CardValues(LineupContext x)
 		{
@@ -286,6 +299,28 @@ namespace Ma9MServer
 					PitcherTalent pt = CardGame.PitcherTalentOf(r, s_data.Env);
 					cv.PerBf = basePit - TeamValue.MatchupRuns(x.OppBat, pt, lg) + TeamValue.PitClutchWeight * TeamValue.PitMentalPerBf * (r.R[5] - 65);
 					cv.Stamina = TeamValue.LimitRuns / 5 * (Math.Min(TeamValue.LimitUseful, CardGame.Rules.Limit(r.R[0])) - 110);
+					// The role effect in the card's own value too (AI testers 두산 29·쌍방울 11-14: 자동 편성 put RP cards in 3 of the 5
+					// starter slots — the seeds (Greedy, by SlotValue) valued a reliever starting as if in role, and the single
+					// changes did not always undo it).
+					int order = tc != null && tc.PositionTrainingInfo % 10 != 0 ? PositionChangeHandlers.OrderOf(info, tc.PositionTrainingInfo) : info.PreferredOrder;
+					for (int role = 0; role < 4; role++)
+					{
+						if (!RoleValue)
+						{
+							cv.PerBfRole[role] = cv.PerBf;
+							continue;
+						}
+						int view = RoleViews[role];
+						double share = LineupEffects.FromGraph(LineupEffects.PitcherGraph(view, order));
+						if (!LineupEffects.InRole(view, order)) share = (1 + share) * (1 + LineupEffects.OutOfRole) - 1;
+						double fr = f * (1 + share);
+						CardRow rr = g.Row.Clone();
+						for (int j = 0; j < 6; j++) rr.R[j] *= fr;
+						rr.Pitches = rr.Pitches?.Select(q => (q.code, q.rating * fr)).ToList();
+						PitcherTalent prt = CardGame.PitcherTalentOf(rr, s_data.Env);
+						cv.PerBfRole[role] = basePit - TeamValue.MatchupRuns(x.OppBat, prt, lg) + TeamValue.PitClutchWeight * TeamValue.PitMentalPerBf * (rr.R[5] - 65);
+						if (role == 0) cv.Stamina = TeamValue.LimitRuns / 5 * (Math.Min(TeamValue.LimitUseful, CardGame.Rules.Limit(rr.R[0])) - 110);
+					}
 				}
 				x.ValueCache[(info.Idx, colour)] = cv;
 				return cv;
@@ -301,7 +336,7 @@ namespace Ma9MServer
 			if (pitcher)
 			{
 				double bf = k < 5 ? TeamValue.BfStart / 5 : TeamValue.BfRelief[k - 5];
-				return TeamValue.Leverage[k] * bf * c.PerBf + (k < 5 ? c.Stamina : 0);
+				return TeamValue.Leverage[k] * bf * c.PerBfRole[RoleOfSlot(k)] + (k < 5 ? c.Stamina : 0);
 			}
 			int pos = PositionOf(l, k);
 			if (pos < 0) return -0.001 * c.Info.Ball;   // the bench plays no part but its balls (and the team colour)

@@ -489,7 +489,7 @@ namespace Ma9MServer
 			}
 			if (mp > 0)
 			{
-				session.Team.Mp = s_db.AddMp(user, mp);
+				session.Team.Mp = s_db.AddMp(user, mp, MpLedger.Achievement);
 				TopBar.Send(session);
 				ServerLog.Info($"[{session.Id}] 업적 {due.Count}개: +{mp:N0} MP{(named.Count > 0 ? $" (팀컬러 {string.Join(", ", named.Select(d => d.Name))})" : string.Empty)}");
 			}
@@ -627,7 +627,8 @@ namespace Ma9MServer
 			Mark(place == 1, Missions.KoreanSeriesWon);
 			// By the six-tier numbering (before the switch this season's 메이저 counts as 레전드, 2026-11-08).
 			int tier6 = Missions.Reached(s.Tier);
-			Mark(place == 1 && tier6 == LeagueRules.MajorTier, Missions.MajorKoreanSeriesWon);
+			// 3 = 메이저 in the six-tier numbering (LeagueRules.MajorTier is 4 with seven tiers).
+			Mark(place == 1 && tier6 == 3, Missions.MajorKoreanSeriesWon);
 			Mark(place == 1 && tier6 == 4, Missions.LegendKoreanSeriesWon);
 			Mark(place == 1 && tier6 == 5, Missions.ChampionsKoreanSeriesWon);
 			int next = LeagueRules.NextTier(s.Tier, rank, place);
@@ -684,7 +685,7 @@ namespace Ma9MServer
 			{
 				return;
 			}
-			session.Team.Mp = s_db.AddMp(user, mp);
+			session.Team.Mp = s_db.AddMp(user, mp, MpLedger.Achievement);
 			Ma9MPacket.PKS_SC_POPUP popup = new Ma9MPacket.PKS_SC_POPUP();
 			popup.Type.n = 1;
 			popup.Messages.array = new[]

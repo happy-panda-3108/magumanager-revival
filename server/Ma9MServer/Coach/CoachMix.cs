@@ -86,7 +86,8 @@ namespace Ma9MServer
 			// 치어리더) still give any 엘리트 of the line, as the same card again would only lose two.
 			if (grade == CoachCatalog.Elite && same && CoachCatalog.HasStat(role, CoachCatalog.Elite))
 			{
-				made = CoachCatalog.Roll(rng, CoachCatalog.Elite, club, role);
+				// 2026-11-14 (user): a stat none of the three had (정신·정신·스피드 → 컨택·파워·선구); before, any of the five.
+				made = CoachCatalog.RollOtherStat(rng, CoachCatalog.Elite, club, role, cards.Select(CoachCatalog.Stat));
 				how = "같은 코치 능력치 다시";
 			}
 			else if (grade == CoachCatalog.Elite)

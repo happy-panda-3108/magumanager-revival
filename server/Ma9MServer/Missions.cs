@@ -76,7 +76,9 @@ namespace Ma9MServer
 		// MP by stars (user, 2026-10-20: "하루 38만은 너무 적소" → 370,000 + the same for all six). The 난이도
 		// table on the screen reads them from the table's level rows (category 99). Goals stay at 255 or
 		// below: the reply's record is a byte.
-		public static readonly int[] LevelMp = { 0, 30_000, 40_000, 60_000, 100_000, 150_000 };
+		// ×1.5 since 2026-11-14 (user 09:3x 결정 4: "미션 보상을 1.5배 늘립시다"; was 30,000 40,000 60,000 100,000 150,000): the six of a
+		// day pay 555,000 (was 370,000) and the all-clear the same again.
+		public static readonly int[] LevelMp = { 0, 45_000, 60_000, 90_000, 150_000, 225_000 };
 
 		private const int LevelRowCategory = 99, LevelRowIndex = 90;
 
@@ -109,6 +111,176 @@ namespace Ma9MServer
 			}
 			loop.Register<Ma9MPacket.PKS_CS_ENTER_DAILY_MISSION>(Enter);
 			loop.Register<Ma9MPacket.PKS_CS_GET_DAILY_MISSION_REWARD>(Reward);
+			// 0시 자동 지급: every minute on the game loop (the first a minute after the start, once 업적 and the rest are registered),
+			// which also pays the days the server was down for.
+			StartAutoPay();
+			s_dayTimer = new System.Threading.Timer(_ => loop.Post(() => Sweep(DateTime.Now)), null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
+		}
+
+		// 0시 자동 지급 (user, 2026-11-14 09:3x 결정 4: "0시에 못 받은 보상을 자동으로 주게 합시다"; AI tester autotest7 lost a cleared
+		// 6만 at midnight): once a day is over, every mission cleared that day and not taken is paid as [보상받기] pays it, and the
+		// all-clear bonus when all six are then taken; the lobby says so once (DeliverAutoPay). From the day this started
+		// (league_fix 'missions_autopay_from') — the days before stay as they were. Each day is swept once ('missions_autopay_<day>').
+		private static System.Threading.Timer s_dayTimer;
+
+		private static string s_autoPayFrom;
+
+		private static void StartAutoPay()
+		{
+			Execute(@"CREATE TABLE IF NOT EXISTS mission_autopay (user_code INTEGER NOT NULL, day TEXT NOT NULL, mp INTEGER NOT NULL, shown INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_code, day));
+				CREATE TABLE IF NOT EXISTS league_fix (name TEXT PRIMARY KEY, done TEXT NOT NULL)");
+			Execute($"INSERT OR IGNORE INTO league_fix (name, done) VALUES ('missions_autopay_from', '{Day(DateTime.Now)}')");
+			using SqliteConnection c = Open();
+			using SqliteCommand cmd = c.CreateCommand();
+			cmd.CommandText = "SELECT done FROM league_fix WHERE name = 'missions_autopay_from'";
+			s_autoPayFrom = cmd.ExecuteScalar() as string ?? Day(DateTime.Now);
+		}
+
+		// Pays the days before `now`'s that are not swept yet; returns the MP paid (tests).
+		internal static int Sweep(DateTime now)
+		{
+			if (s_cs == null || s_autoPayFrom == null) return 0;
+			string today = Day(now);
+			List<string> days = new List<string>();
+			using (SqliteConnection c = Open())
+			using (SqliteCommand cmd = c.CreateCommand())
+			{
+				cmd.CommandText = @"SELECT DISTINCT day FROM mission_daily WHERE day < $t AND day >= $f
+					AND NOT EXISTS (SELECT 1 FROM league_fix WHERE name = 'missions_autopay_' || mission_daily.day) ORDER BY day";
+				cmd.Parameters.AddWithValue("$t", today);
+				cmd.Parameters.AddWithValue("$f", s_autoPayFrom);
+				using SqliteDataReader r = cmd.ExecuteReader();
+				while (r.Read()) days.Add(r.GetString(0));
+			}
+			int total = 0;
+			foreach (string day in days)
+			{
+				List<uint> users = new List<uint>();
+				using (SqliteConnection c = Open())
+				using (SqliteCommand cmd = c.CreateCommand())
+				{
+					cmd.CommandText = "SELECT DISTINCT user_code FROM mission_daily WHERE day = $d";
+					cmd.Parameters.AddWithValue("$d", day);
+					using SqliteDataReader r = cmd.ExecuteReader();
+					while (r.Read()) users.Add((uint)r.GetInt64(0));
+				}
+				int paidDay = 0, teams = 0;
+				foreach (uint user in users)
+				{
+					int paid = PayDay(user, day);
+					if (paid > 0)
+					{
+						paidDay += paid;
+						teams++;
+					}
+				}
+				Execute($"INSERT OR IGNORE INTO league_fix (name, done) VALUES ('missions_autopay_{day}', datetime('now', 'localtime'))");
+				ServerLog.Info($"오늘의 미션 자동 지급 {day}: {teams}개 구단 {paidDay:N0} MP");
+				total += paidDay;
+			}
+			return total;
+		}
+
+		// One team's unclaimed rewards of a day that is over: the MP paid (0 if none).
+		private static int PayDay(uint user, string day)
+		{
+			Dictionary<int, int> claims = new Dictionary<int, int>();
+			using (SqliteConnection c = Open())
+			using (SqliteCommand cmd = c.CreateCommand())
+			{
+				cmd.CommandText = "SELECT category, mp FROM mission_claim WHERE user_code = $u AND day = $d";
+				cmd.Parameters.AddWithValue("$u", (long)user);
+				cmd.Parameters.AddWithValue("$d", day);
+				using SqliteDataReader r = cmd.ExecuteReader();
+				while (r.Read()) claims[r.GetInt32(0)] = r.GetInt32(1);
+			}
+			int paid = 0;
+			foreach (Daily d in Today)
+			{
+				if (claims.ContainsKey(d.Category) || Read("SELECT value FROM mission_daily WHERE user_code = $u AND day = $d AND key = $k", user, d.Key, day) < d.Goal)
+				{
+					continue;
+				}
+				int mp = LevelMp[d.Level];
+				if (ClaimOn(user, day, d.Category, mp))
+				{
+					claims[d.Category] = mp;
+					paid += mp;
+				}
+			}
+			if (paid > 0 && !claims.ContainsKey(AllClearCategory) && Today.All(x => claims.ContainsKey(x.Category)))
+			{
+				int bonus = claims.Where(kv => kv.Key != AllClearCategory).Sum(kv => kv.Value);
+				if (ClaimOn(user, day, AllClearCategory, bonus))
+				{
+					paid += bonus;
+					// 업적 미션 올클리어 counts it (the total only: the day is over).
+					using SqliteConnection c = Open();
+					using SqliteCommand cmd = c.CreateCommand();
+					cmd.CommandText = "INSERT INTO mission_counter (user_code, key, value) VALUES ($u, $k, 1) ON CONFLICT (user_code, key) DO UPDATE SET value = value + 1";
+					cmd.Parameters.AddWithValue("$u", (long)user);
+					cmd.Parameters.AddWithValue("$k", AllClears);
+					cmd.ExecuteNonQuery();
+				}
+			}
+			if (paid <= 0) return 0;
+			s_db.AddMp(user, paid, MpLedger.Mission);
+			using (SqliteConnection c = Open())
+			using (SqliteCommand cmd = c.CreateCommand())
+			{
+				cmd.CommandText = "INSERT OR IGNORE INTO mission_autopay (user_code, day, mp, shown) VALUES ($u, $d, $m, 0)";
+				cmd.Parameters.AddWithValue("$u", (long)user);
+				cmd.Parameters.AddWithValue("$d", day);
+				cmd.Parameters.AddWithValue("$m", paid);
+				cmd.ExecuteNonQuery();
+			}
+			Achievements.Evaluate(user);
+			ServerLog.Info($"오늘의 미션 자동 지급 user {user} {day}: +{paid:N0} MP");
+			return paid;
+		}
+
+		// True when this day's row was new (a [보상받기] at the same moment cannot pay twice).
+		private static bool ClaimOn(uint user, string day, int category, int mp)
+		{
+			using SqliteConnection c = Open();
+			using SqliteCommand cmd = c.CreateCommand();
+			cmd.CommandText = "INSERT OR IGNORE INTO mission_claim (user_code, day, category, mp) VALUES ($u, $d, $c, $m)";
+			cmd.Parameters.AddWithValue("$u", (long)user);
+			cmd.Parameters.AddWithValue("$d", day);
+			cmd.Parameters.AddWithValue("$c", category);
+			cmd.Parameters.AddWithValue("$m", mp);
+			return cmd.ExecuteNonQuery() == 1;
+		}
+
+		// At the lobby (LobbyHandlers): the days paid by themselves since the last visit, once.
+		public static void DeliverAutoPay(GameSession session)
+		{
+			if (session.Team == null || s_cs == null || s_autoPayFrom == null) return;
+			List<(string day, int mp)> rows = new List<(string, int)>();
+			using (SqliteConnection c = Open())
+			using (SqliteCommand cmd = c.CreateCommand())
+			{
+				cmd.CommandText = "SELECT day, mp FROM mission_autopay WHERE user_code = $u AND shown = 0 ORDER BY day";
+				cmd.Parameters.AddWithValue("$u", (long)session.Team.UserCode);
+				using SqliteDataReader r = cmd.ExecuteReader();
+				while (r.Read()) rows.Add((r.GetString(0), r.GetInt32(1)));
+			}
+			if (rows.Count == 0) return;
+			Execute($"UPDATE mission_autopay SET shown = 1 WHERE user_code = {(long)session.Team.UserCode} AND shown = 0");
+			List<string> lines = new List<string> { "받지 않은 오늘의 미션 보상을" };
+			foreach ((string day, int mp) in rows.Skip(Math.Max(0, rows.Count - 3)))
+			{
+				DateTime d = DateTime.ParseExact(day, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+				lines.Add($"{d.Month}월 {d.Day}일 +{mp:N0} MP");
+			}
+			lines.Add("자정이 지나 자동으로 넣었습니다.");
+			Ma9MPacket.PKS_SC_POPUP popup = new Ma9MPacket.PKS_SC_POPUP();
+			popup.Type.n = 1;
+			popup.Messages.array = new[] { new PLongString { str = "오늘의 미션" }, new PLongString { str = string.Join("\n", lines) } };
+			session.Send(popup);
+			session.Team.Mp = s_db.AddMp(session.Team.UserCode, 0);
+			TopBar.Send(session);
+			ServerLog.Info($"[{session.Id}] mission autopay popup: {string.Join(" / ", lines)}");
 		}
 
 		private static SqliteConnection Open()
@@ -191,7 +363,8 @@ namespace Ma9MServer
 		private const string Backfilled = "backfill_v1";
 
 		// A league tier as TierReached counts it: the six-tier numbering (before the switch 메이저 3 → 4, 챔피언스 4 → 5).
-		public static int Reached(int tier) => LeagueRules.NewStructure ? tier : LeagueRules.ToNew(tier);
+		// Seven tiers (더블A, 2026-11-14): still the six-tier numbering, 더블A counting as 루키 (no achievement of its own yet).
+		public static int Reached(int tier) => LeagueRules.Seven ? LeagueRules.ToSix(tier) : LeagueRules.NewStructure ? tier : LeagueRules.ToNew(tier);
 
 		public static void SetAtLeast(uint user, string key, int value)
 		{
@@ -377,7 +550,7 @@ namespace Ma9MServer
 			}
 			int mp = LevelMp[d.Level];
 			Claim(user, category, mp);
-			int balance = s_db.AddMp(user, mp);
+			int balance = s_db.AddMp(user, mp, MpLedger.Mission);
 			string bonusText = string.Empty;
 			int allClear = 0;
 			if (Today.All(x => x.Category == category || claims.ContainsKey(x.Category)))
@@ -385,7 +558,7 @@ namespace Ma9MServer
 				// All six: what they paid, once more.
 				int bonus = claims.Where(kv => kv.Key != AllClearCategory).Sum(kv => kv.Value) + mp;
 				Claim(user, AllClearCategory, bonus);
-				balance = s_db.AddMp(user, bonus);
+				balance = s_db.AddMp(user, bonus, MpLedger.Mission);
 				bonusText = $", all clear +{bonus:N0}";
 				Add(user, AllClears);
 				allClear = bonus;
@@ -420,6 +593,65 @@ namespace Ma9MServer
 			cmd.Parameters.AddWithValue("$c", category);
 			cmd.Parameters.AddWithValue("$m", mp);
 			cmd.ExecuteNonQuery();
+		}
+
+		// Dev (--missionpaytest, a copy of the data only, 2026-11-14): 0시 자동 지급 on the test team — yesterday all six cleared and
+		// none taken (six + the all-clear), the day before three cleared (those three only), and a second sweep paying nothing.
+		public static int AutoPaySelfTest(string email)
+		{
+			uint user;
+			using (SqliteConnection c = Open())
+			using (SqliteCommand cmd = c.CreateCommand())
+			{
+				cmd.CommandText = "SELECT t.user_code FROM team t JOIN account a ON a.id = t.account_id WHERE a.email = $e AND t.team_name <> '' ORDER BY t.user_code LIMIT 1";
+				cmd.Parameters.AddWithValue("$e", email);
+				object found = cmd.ExecuteScalar();
+				if (found == null || found is DBNull)
+				{
+					ServerLog.Info("[missionpaytest] FAIL no test team");
+					return 1;
+				}
+				user = (uint)(long)found;
+			}
+			int problems = 0;
+			void Check(bool ok, string what)
+			{
+				if (!ok) problems++;
+				ServerLog.Info($"[missionpaytest] {(ok ? "ok  " : "FAIL")} {what}");
+			}
+			string d1 = Day(DateTime.Now.AddDays(-1)), d2 = Day(DateTime.Now.AddDays(-2));
+			Execute($@"DELETE FROM mission_daily WHERE user_code = {(long)user} AND day IN ('{d1}', '{d2}');
+				DELETE FROM mission_claim WHERE user_code = {(long)user} AND day IN ('{d1}', '{d2}');
+				DELETE FROM mission_autopay WHERE user_code = {(long)user};
+				DELETE FROM league_fix WHERE name IN ('missions_autopay_{d1}', 'missions_autopay_{d2}');
+				UPDATE league_fix SET done = '{d2}' WHERE name = 'missions_autopay_from'");
+			s_autoPayFrom = d2;
+			foreach (Daily d in Today)
+			{
+				Execute($"INSERT INTO mission_daily (user_code, day, key, value) VALUES ({(long)user}, '{d1}', '{d.Key}', {d.Goal})");
+				if (d.Category <= 2)
+				{
+					Execute($"INSERT INTO mission_daily (user_code, day, key, value) VALUES ({(long)user}, '{d2}', '{d.Key}', {d.Goal})");
+				}
+			}
+			int six = Today.Sum(d => LevelMp[d.Level]), three = Today.Where(d => d.Category <= 2).Sum(d => LevelMp[d.Level]);
+			int mp0 = s_db.AddMp(user, 0), clears0 = Total(user, AllClears);
+			Sweep(DateTime.Now);
+			int mp1 = s_db.AddMp(user, 0);
+			Check(mp1 - mp0 == three + 2 * six, $"MP +{mp1 - mp0:N0} (그제 3칸 {three:N0} + 어제 6칸 {six:N0} + 올클리어 {six:N0})");
+			using (SqliteConnection c = Open())
+			using (SqliteCommand cmd = c.CreateCommand())
+			{
+				cmd.CommandText = $"SELECT day, COUNT(*), SUM(mp) FROM mission_claim WHERE user_code = {(long)user} AND day IN ('{d1}', '{d2}') GROUP BY day ORDER BY day";
+				using SqliteDataReader r = cmd.ExecuteReader();
+				List<string> got = new List<string>();
+				while (r.Read()) got.Add($"{r.GetString(0)} {r.GetInt32(1)}칸 {r.GetInt64(2):N0}");
+				Check(got.Count == 2 && got[0].Contains(" 3칸 ") && got[1].Contains(" 7칸 "), "받은 칸: " + string.Join(" / ", got));
+			}
+			Check(Total(user, AllClears) == clears0 + 1, $"올클리어 누계 {clears0} → {Total(user, AllClears)}");
+			int again = Sweep(DateTime.Now);
+			Check(again == 0 && s_db.AddMp(user, 0) == mp1, $"두 번째 지급 {again:N0} MP (0이어야 함)");
+			return problems;
 		}
 
 		// Self-test on a data copy: every mission's counter reaches its goal.

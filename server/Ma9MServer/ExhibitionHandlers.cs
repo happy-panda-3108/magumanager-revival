@@ -578,7 +578,7 @@ namespace Ma9MServer
 			{
 				earned = Settle(code, match, out prize, out prizeCondition);
 			}
-			int balance = s_db.AddMp(code, earned);
+			int balance = s_db.AddMp(code, earned, MpLedger.Exhibition);
 			session.Team.Mp = balance;
 			reply.earned_point.n = earned;
 			reply.cur_point.n = balance;

@@ -161,7 +161,7 @@ namespace Ma9MServer
 			int earned = Settle(code, match, out int prize, out _);
 			// Off the memory too, so a client still holding this match (tried, not started) cannot start it again.
 			s_matches.Remove(code);
-			int balance = s_db.AddMp(code, earned);
+			int balance = s_db.AddMp(code, earned, MpLedger.Exhibition);
 			if (s_seen.TryGetValue(code, out var seen) && seen.session?.Team?.UserCode == code)
 			{
 				seen.session.Team.Mp = balance;

@@ -185,7 +185,9 @@ namespace Ma9MServer
 			{
 				for (int i = 0; i < add.Length; i++)
 				{
-					add[i] = (sbyte)Math.Clamp(card.Educated[i] + card.Contract[i] + card.Training[i] + card.TeamColor[i], sbyte.MinValue, sbyte.MaxValue);
+					// + 코칭스태프 (systems session 2026-11-14: tester_w found 선구 88 here against 89 in the 선수교체 창 and the game,
+					// TeamStrength; a 레어 LG 타격코치's +1 선구 was missing).
+					add[i] = (sbyte)Math.Clamp(card.Educated[i] + card.Contract[i] + card.Training[i] + card.TeamColor[i] + (card.Coach?[i] ?? 0), sbyte.MinValue, sbyte.MaxValue);
 				}
 			}
 			return add;

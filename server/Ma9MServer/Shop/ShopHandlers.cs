@@ -331,6 +331,7 @@ namespace Ma9MServer
 						cmd.Parameters.AddWithValue("$m", mp);
 						cmd.Parameters.AddWithValue("$t", DateTime.Now.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
 						cmd.ExecuteNonQuery();
+						MpLedger.Write(c, tx, user, MpLedger.Pouch, mp, nameof(RefundPouches));  // MP 장부 (11-14)
 						refunds.Add((user, pouches, (int)mp));
 					}
 				}
@@ -445,6 +446,7 @@ namespace Ma9MServer
 						cmd.Parameters.AddWithValue("$m", mp);
 						cmd.Parameters.AddWithValue("$t", DateTime.Now.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
 						cmd.ExecuteNonQuery();
+						MpLedger.Write(c, tx, user, MpLedger.Roster, mp, nameof(RefundOverCap));  // MP 장부 (11-14)
 						refunds.Add((user, expansions, mp));
 					}
 				}
@@ -676,7 +678,7 @@ namespace Ma9MServer
 				return new List<Packet.PKS_PACKET> { reply };
 			}
 			s_db.AddCards(user, cards.Select(c => c.Idx), RosterHandlers.StartContract);
-			int after = s_db.AddMp(user, -p.Cost * cards.Count);
+			int after = s_db.AddMp(user, -p.Cost * cards.Count, MpLedger.PlayerPack);
 			int total = bought + cards.Count;
 			int balls = total / CardsPerHomeRunBall - bought / CardsPerHomeRunBall;
 			Save(user, cap, expansions, total);
@@ -774,7 +776,7 @@ namespace Ma9MServer
 				return Refuse($"MP가 부족합니다. ({p.Cost * amount:N0} MP 필요)", out log);
 			}
 			InventoryHandlers.AddItem(user, p.Item, amount);
-			int after = s_db.AddMp(user, -p.Cost * amount);
+			int after = s_db.AddMp(user, -p.Cost * amount, MpLedger.Training);
 			if (p.Item == TrainingBooks.Pack) Missions.Add(user, Missions.TrainingPacksBought, amount);  // 오늘의 미션
 			log = $"{p.Name} x{amount} ({p.Cost * amount:N0} MP) → inventory";
 			return new List<Packet.PKS_PACKET> { Done(user, after) };
@@ -800,7 +802,7 @@ namespace Ma9MServer
 			{
 				InventoryHandlers.AddItem(user, book, 1);
 			}
-			int after = s_db.AddMp(user, -p.Cost * amount);
+			int after = s_db.AddMp(user, -p.Cost * amount, MpLedger.Training);
 			Missions.Add(user, Missions.TrainingPacksBought, amount);  // 오늘의 미션
 			Missions.Add(user, Missions.TrainingPacksOpened, amount);  // 업적
 			reply.error.SetNoError();
@@ -837,7 +839,7 @@ namespace Ma9MServer
 			int ownLine = CoachHandlers.OwnLine(user);
 			List<int> cards = Enumerable.Range(0, amount).Select(_ => CoachCatalog.RollPack(s_rnd, ownLine)).ToList();
 			CoachHandlers.AddCoaches(user, cards);
-			int after = s_db.AddMp(user, -p.Cost * amount);
+			int after = s_db.AddMp(user, -p.Cost * amount, MpLedger.Coach);
 			// 오늘의 미션 카드팩 (user, 2026-11-13 16:5x 결정 7: "코치팩, 모든 선수팩을 해당하게"; every player pack already counts in BuyPack).
 			Missions.Add(user, Missions.CardPacksBought, amount);
 			reply.error.SetNoError();
@@ -885,7 +887,7 @@ namespace Ma9MServer
 			}
 			int mp = RollPouch();
 			int left = InventoryHandlers.AddItem(user, LuckyPouch, -1);
-			s_db.AddMp(user, mp);
+			s_db.AddMp(user, mp, MpLedger.Pouch);
 			reply.error.SetNoError();
 			reply.RemainCount.n = (short)Math.Min(short.MaxValue, left);
 			reply.GetMPAmount.n = mp;
@@ -926,7 +928,7 @@ namespace Ma9MServer
 			}
 			short next = (short)Math.Min(MaxCapacity, cap + count * CapacityStep);
 			Save(user, next, expansions + count, bought);
-			int after = s_db.AddMp(user, -cost);
+			int after = s_db.AddMp(user, -cost, MpLedger.Roster);
 			log = $"로스터 확장 x{count} {cap} → {next} ({cost:N0} MP)";
 			// The client keeps the shop list it got on entry; send it again so the next price and the
 			// new storage size show.
@@ -1021,7 +1023,7 @@ namespace Ma9MServer
 				ServerLog.Info("shop self-test: no team for the purchase checks");
 				return problems;
 			}
-			db.AddMp(user, 50_000_000);
+			db.AddMp(user, 50_000_000, MpLedger.Test);
 			int Mp() => db.AddMp(user, 0);
 			int Cards() => db.GetCards(user).Count;
 			Ma9MPacket.PKS_SC_ENTER_SHOP_NEW_NORMAL enter = BuildEnter(user);
@@ -1123,7 +1125,7 @@ namespace Ma9MServer
 			Check(PouchOdds.Select((o, k) => Math.Abs(100.0 * got[k] / 20000 - o.pct)).Max() < 1.0,
 				"MP주머니 20,000번: " + string.Join(" ", PouchOdds.Select((o, k) => $"{o.mp / 10_000}만 {100.0 * got[k] / 20000:F1}%")));
 
-			db.AddMp(user, -Mp());
+			db.AddMp(user, -Mp(), MpLedger.Test);
 			r = Purchase(user, 102, 1, out log);
 			pack = r[0] as Ma9MPacket.PKS_SC_BUY_ITEM_SHOP_NEW_CARDPACK;
 			Check(pack != null && pack.error.error_code.n != 0, "MP 부족 거절: " + log);

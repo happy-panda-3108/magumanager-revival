@@ -87,6 +87,8 @@ namespace Ma9MServer
 					cmd.ExecuteNonQuery();
 				}
 			}
+			// MP 장부 (MpLedger, systems session 2026-11-14).
+			MpLedger.Ensure(c);
 		}
 
 		// Unknown email: create the account with this password (the user asked for sign-up on first login).
@@ -251,16 +253,33 @@ namespace Ma9MServer
 			return value == null ? null : Convert.ToInt64(value) != 0;
 		}
 
-		// Adds (or takes away) MP; returns the new balance.
-		public int AddMp(uint userCode, int amount)
+		// Adds (or takes away) MP; returns the new balance. A change goes into the MP 장부 under source (MpLedger's names;
+		// the caller's method name as well, so an unnamed one can still be traced).
+		public int AddMp(uint userCode, int amount, string source = null, [System.Runtime.CompilerServices.CallerMemberName] string caller = "")
 		{
 			using SqliteConnection connection = Open();
 			using SqliteCommand command = connection.CreateCommand();
+			if (amount == 0)
+			{
+				// A balance read: as before, no ledger row.
+				command.CommandText = "UPDATE team SET mp = MIN(2147483647, MAX(0, mp + $amount)) WHERE user_code = $code; SELECT mp FROM team WHERE user_code = $code";
+				command.Parameters.AddWithValue("$amount", amount);
+				command.Parameters.AddWithValue("$code", userCode);
+				return Convert.ToInt32(command.ExecuteScalar());
+			}
+			using SqliteTransaction transaction = connection.BeginTransaction();
+			command.Transaction = transaction;
+			command.CommandText = "SELECT mp FROM team WHERE user_code = $code";
+			command.Parameters.AddWithValue("$code", userCode);
+			long before = Convert.ToInt64(command.ExecuteScalar() ?? 0L);
 			// Kept inside the client's 32-bit MP field (an MP주머니 jackpot cannot overflow it).
 			command.CommandText = "UPDATE team SET mp = MIN(2147483647, MAX(0, mp + $amount)) WHERE user_code = $code; SELECT mp FROM team WHERE user_code = $code";
 			command.Parameters.AddWithValue("$amount", amount);
-			command.Parameters.AddWithValue("$code", userCode);
-			return Convert.ToInt32(command.ExecuteScalar());
+			int after = Convert.ToInt32(command.ExecuteScalar());
+			// What really changed (a clamp at 0 or the 32-bit top takes less).
+			MpLedger.Write(connection, transaction, userCode, source, after - before, caller);
+			transaction.Commit();
+			return after;
 		}
 
 		public void RemoveCards(uint userCode, IEnumerable<int> cardIdx)

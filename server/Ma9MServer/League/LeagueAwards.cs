@@ -290,7 +290,7 @@ namespace Ma9MServer
 			SaveResult("league_award", s, SafeResult(() => ResultJson(s, awards, mp)));   // the season result screen
 			if (mp > 0)
 			{
-				s_db.AddMp(s.UserCode, mp);
+				s_db.AddMp(s.UserCode, mp, MpLedger.Season);
 			}
 			s_pending.Add(s.UserCode);
 			ServerLog.Info($"league awards: user {s.UserCode} season {s.Season}, {awards.Count(a => a.Winners.Count > 0)} titles, mine {mp:N0} MP");
@@ -342,7 +342,7 @@ namespace Ma9MServer
 			}
 			if (mp > 0)
 			{
-				s_db.AddMp(s.UserCode, mp);
+				s_db.AddMp(s.UserCode, mp, MpLedger.Season);
 			}
 			if (pages.Count > 0)
 			{
@@ -521,7 +521,10 @@ namespace Ma9MServer
 			List<string> pages = Pages(s, awards, mine);
 			Ma9MPacket.PKS_SC_POPUP popup = Popup(pages);
 			popup.ToBytes(new byte[popup.GetSize() + 14], 14);
-			bool scale = Reward(TitleMp, 0) == 300_000 && Reward(TitleMp, 3) == 600_000 && Reward(MvpMp, 1) == 2_500_000 && Reward(KsMvpMp, 2) == 1_500_000
+			// Seven tiers (2026-11-14): tier 1 ×1.3, 2 (더블A) ×1.6, 3 (트리플A) ×1.8.
+			bool seven = LeagueRules.Seven;
+			bool scale = Reward(TitleMp, 0) == 300_000 && Reward(TitleMp, 3) == (seven ? 540_000 : 600_000) && Reward(MvpMp, 1) == (seven ? 2_600_000 : 2_500_000)
+				&& Reward(KsMvpMp, 2) == (seven ? 1_600_000 : 1_500_000)
 				&& Reward(MvpMp, LeagueRules.ChampionsTier) == (LeagueRules.NewStructure ? 5_200_000 : 5_000_000)
 				&& awards.All(a => a.Mp == Reward(a.Category == "리그 MVP" ? MvpMp : a.Category == "한국시리즈 MVP" ? KsMvpMp : TitleMp, s.Tier));
 			bool payOk = already ? paid == -1 && mp1 == mp0 : paid == mine && mp1 - mp0 == mine && s_pending.Contains(user);

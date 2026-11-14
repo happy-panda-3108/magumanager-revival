@@ -72,10 +72,12 @@ namespace Ma9MServer
 			List<AiTeam> decks = AiTeams.Decks(LeagueRules.ChampionsTier);
 			// The structure in force (five tiers, or six from the 11-11 season: 챔피언스 5, 24 CP).
 			int top = LeagueRules.ChampionsTier;
-			Check(LeagueRules.Tiers == (LeagueRules.NewStructure ? 6 : 5) && LeagueRules.TierNames[top] == "챔피언스" && LeagueRules.TierGrade[top] == 9
-				&& LeagueRules.TraitPoints[top] == (LeagueRules.NewStructure ? 24 : 23) && LeagueRules.BallCap[top] == 155 && LeagueRules.RewardMult[top] == (LeagueRules.NewStructure ? 2.6 : 2.5)
+			// Seven tiers (더블A, 2026-11-14): 챔피언스 26 CP, cap 160.
+			Check(LeagueRules.Tiers == (LeagueRules.Seven ? 7 : LeagueRules.NewStructure ? 6 : 5) && LeagueRules.TierNames[top] == "챔피언스" && LeagueRules.TierGrade[top] == 9
+				&& LeagueRules.TraitPoints[top] == (LeagueRules.Seven ? 26 : LeagueRules.NewStructure ? 24 : 23) && LeagueRules.BallCap[top] == (LeagueRules.Seven ? 160 : 155)
+				&& LeagueRules.RewardMult[top] == (LeagueRules.NewStructure ? 2.6 : 2.5)
 				&& LeagueAwards.Reward(LeagueAwards.TitleMp, top) == (LeagueRules.NewStructure ? 780_000 : 750_000),
-				$"챔피언스 (tier {top} of {LeagueRules.Tiers}): grade 9 (CHAMPIONS slot, blue badge), {LeagueRules.TraitPoints[top]} CP, cap 155, MP ×{LeagueRules.RewardMult[top]}, 시상 ×{LeagueRules.RewardMult[top]}");
+				$"챔피언스 (tier {top} of {LeagueRules.Tiers}): grade 9 (CHAMPIONS slot, blue badge), {LeagueRules.TraitPoints[top]} CP, cap {LeagueRules.BallCap[top]}, MP ×{LeagueRules.RewardMult[top]}, 시상 ×{LeagueRules.RewardMult[top]}");
 			Check(decks.Count == AiTeams.DeckPool && decks.Select(d => d.Name).Distinct().Count() == decks.Count && decks.All(d => d.Ball <= 155 && d.Development.Count == 25),
 				$"{decks.Count} team-year decks: {string.Join(", ", decks.Select(d => $"{d.Name} {d.Ball}볼"))}");
 
@@ -135,8 +137,9 @@ namespace Ma9MServer
 			List<(uint code, string name, byte emblem, byte grade)> after = store.ActiveTeams();
 			// The 편성 above may have been the six-tier switch (a season from 11-11): read the tiers again.
 			int topCp = LeagueRules.TraitPoints[LeagueRules.ChampionsTier], gateCp = LeagueRules.TraitPoints[LeagueRules.GateTier];
-			Check(members.All(m => after.First(t => t.code == m.UserCode).grade == 9 && RosterHandlers.MaxCostOf(m.UserCode) == 155 && TeamPropertyHandlers.AvailableCp(m.UserCode) == topCp),
-				$"members: league grade 9 (CHAMPIONS slot), cap 155, {topCp} CP ({LeagueRules.Tiers} tiers now)");
+			int topCap = LeagueRules.BallCap[LeagueRules.ChampionsTier];
+			Check(members.All(m => after.First(t => t.code == m.UserCode).grade == 9 && RosterHandlers.MaxCostOf(m.UserCode) == topCap && TeamPropertyHandlers.AvailableCp(m.UserCode) == topCp),
+				$"members: league grade 9 (CHAMPIONS slot), cap {topCap}, {topCp} CP ({LeagueRules.Tiers} tiers now)");
 
 			// 3. The season's first two hours (6 slots), played once for every member.
 			Tick(next + TimeSpan.FromHours(2) - TimeSpan.FromMinutes(1));
@@ -180,10 +183,23 @@ namespace Ma9MServer
 
 			// Every member uses all of 챔피언스's CP from here (a valid build: 23, or 24 with six tiers), so the next 편성 shows who goes
 			// down keeping only the gate tier's (20, or 레전드's 23).
-			string Build23 = topCp == 24 ? "121:2,122:2,124:2,123:2,125:2,126:2,131:2,132:2,133:1,134:2,138:1,140:1,127:2,130:1"
-				: "121:2,122:2,124:2,123:1,125:2,126:2,131:2,132:2,133:1,134:2,138:1,140:1,127:2,130:1";
-			byte[] buff23 = Build23.Split(',').SelectMany(kv => kv.Split(':').Select(byte.Parse)).ToArray();
+			// Seven tiers (2026-11-14): 26. The 23-point build, then a point at a time on the first pitching trait that stays valid.
+			string Build23 = "121:2,122:2,124:2,123:1,125:2,126:2,131:2,132:2,133:1,134:2,138:1,140:1,127:2,130:1";
 			Dictionary<byte, byte> points23 = Build23.Split(',').Select(kv => kv.Split(':')).ToDictionary(kv => byte.Parse(kv[0]), kv => byte.Parse(kv[1]));
+			for (int guard = 0; points23.Values.Sum(v => v) < topCp && guard < 50; guard++)
+			{
+				bool added = false;
+				for (byte k = 121; k <= 140 && !added; k++)
+				{
+					points23.TryGetValue(k, out byte v);
+					points23[k] = (byte)(v + 1);
+					if (TeamPropertyHandlers.Validate(points23, topCp) == null) added = true;
+					else if (v == 0) points23.Remove(k);
+					else points23[k] = v;
+				}
+				if (!added) break;
+			}
+			byte[] buff23 = points23.OrderBy(p => p.Key).SelectMany(p => new[] { p.Key, p.Value }).ToArray();
 			using (Microsoft.Data.Sqlite.SqliteConnection c = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}"))
 			{
 				c.Open();

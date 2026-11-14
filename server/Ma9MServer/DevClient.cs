@@ -901,11 +901,12 @@ namespace Ma9MServer
 			Ma9MPacket.PKS_SC_USE_COUPON first = Await<Ma9MPacket.PKS_SC_USE_COUPON>();
 			Dictionary<int, int> after = Inventory();
 			int Gain(int item) => after.GetValueOrDefault(item) - before.GetValueOrDefault(item);
-			Check(first.result.n == 0 && Gain(LessonHandlers.Lucky) == 10 && Gain(LessonHandlers.Instant) == 10 && Gain(LessonHandlers.Reset) == 10,
+			// 2.5억 MP and 40 of each since 11-14.
+			Check(first.result.n == 0 && Gain(LessonHandlers.Lucky) == 40 && Gain(LessonHandlers.Instant) == 40 && Gain(LessonHandlers.Reset) == 40,
 				$"LESSON2026: result {first.result.n}, 행운권 +{Gain(LessonHandlers.Lucky)}, 즉시 완료권 +{Gain(LessonHandlers.Instant)}, 초기화권 +{Gain(LessonHandlers.Reset)}");
 			// 11-12: what it gave, in the reply's message field (error code 0) for the 1.0.46 app.
 			string gift = first.error.error_msg.str ?? string.Empty;
-			Check(first.error.error_code.n == 0 && gift.StartsWith("받은 것: 1억 MP") && gift.Length <= 127 && gift.Split('\n').All(line => PopupText.Px(line) <= PopupText.Limit),
+			Check(first.error.error_code.n == 0 && gift.StartsWith("받은 것: 2.5억 MP") && gift.Length <= 127 && gift.Split('\n').All(line => PopupText.Px(line) <= PopupText.Limit),
 				$"LESSON2026 받은 것 글: \"{gift.Replace("\n", " | ")}\"");
 			Send(new Ma9MPacket.PKS_CS_USE_COUPON { coupon_code = { str = "LESSON2026" } });
 			Ma9MPacket.PKS_SC_USE_COUPON again = Await<Ma9MPacket.PKS_SC_USE_COUPON>();

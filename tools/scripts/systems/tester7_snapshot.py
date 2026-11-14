@@ -29,6 +29,23 @@ except OSError:
 TIERS = ["비기너", "루키", "트리플A", "메이저", "레전드", "챔피언스"]
 
 
+TABLES = r"C:\Ma9MProject\server\data\tables"
+
+
+def card_balls():
+    """card idx → ball, from the server's batter and pitcher tables (the 'ball' column)."""
+    balls = {}
+    for name in ("P_BatterTable.txt", "P_PitcherTable.txt"):
+        with open(os.path.join(TABLES, name), encoding="utf-8") as f:
+            head = f.readline().rstrip("\n").split("\t")
+            k = head.index("ball")
+            for line in f:
+                row = line.rstrip("\n").split("\t")
+                if len(row) > k and row[0].isdigit() and row[k].isdigit():
+                    balls[int(row[0])] = int(row[k])
+    return balls
+
+
 def snapshot(c):
     acct = c.execute("SELECT id FROM account WHERE email = ?", (EMAIL,)).fetchone()
     if not acct:
@@ -52,6 +69,14 @@ def snapshot(c):
             s["w"], s["l"], s["d"], s["rf"], s["ra"], s["ball"] = rec
         s["rank"] = 1 + sum(1 for (w, l) in c.execute("SELECT w, l FROM league_club WHERE user_code = ? AND club <> ?", (u, lg[3]))
                             if rec and (w - l) > (rec[0] - rec[1]))
+    # 1군 balls (11-14 fix: league_club.ball is 0 for the user's own club): the lineup's 14 batters and 11 pitchers by the card
+    # tables' ball column.
+    lineup = c.execute("SELECT lineup FROM team_lineup WHERE user_code = ?", (u,)).fetchone()
+    if lineup:
+        parts = lineup[0].split("|")
+        idxs = [int(x) for x in (parts[0].split(",") + (parts[2].split(",") if len(parts) > 2 else [])) if x.strip().isdigit()]
+        balls = card_balls()
+        s["ball"] = sum(balls.get(i, 0) for i in idxs)
     s["mission_mp"] = c.execute("SELECT COALESCE(SUM(mp), 0) FROM mission_claim WHERE user_code = ?", (u,)).fetchone()[0]
     s["achievement_mp"] = c.execute("SELECT COALESCE(SUM(paid_mp), 0) FROM achievement WHERE user_code = ?", (u,)).fetchone()[0]
     s["season_mp"] = c.execute("SELECT COALESCE(SUM(mp), 0) FROM season_bonus WHERE user_code = ? AND paid = 1", (u,)).fetchone()[0]

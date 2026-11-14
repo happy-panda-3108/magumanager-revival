@@ -92,7 +92,9 @@ namespace Ma9MServer
 				&& LeagueRules.NextTier(top, 1, 1) == top && LeagueRules.NextTier(top, 2, 3) == top && LeagueRules.NextTier(top, 5, 4) == gate && LeagueRules.NextTier(top, 4, 5) == gate
 				&& LeagueRules.NextTier(top, 6, 0) == gate
 				// Six tiers (2026-11-08): the new 메이저 plays as 루키 and 트리플A (postseason top 4 up to 레전드, bottom 3 down).
-				&& (!LeagueRules.NewStructure || LeagueRules.NextTier(3, 5, 4) == 4 && LeagueRules.NextTier(3, 1, 5) == 3 && LeagueRules.NextTier(3, 8, 0) == 2),
+				&& (!LeagueRules.NewStructure || LeagueRules.NextTier(3, 5, 4) == 4 && LeagueRules.NextTier(3, 1, 5) == 3 && LeagueRules.NextTier(3, 8, 0) == 2)
+				// Seven tiers (2026-11-14): 더블A (2) between 루키 and 트리플A, the same rule.
+				&& (!LeagueRules.Seven || LeagueRules.NextTier(1, 2, 3) == 2 && LeagueRules.NextTier(2, 5, 4) == 3 && LeagueRules.NextTier(2, 8, 0) == 1),
 				$"promotion ({LeagueRules.Tiers} tiers): postseason top 4 (비기너 regular top 4), bottom 3 down; {LeagueRules.TierNames[gate]} 1-3 up, 4-6 stay, 7-10 down; 챔피언스 top 3 stay, the rest down");
 
 			// 2. Leagues on their own clock move to the calendar.
@@ -300,12 +302,18 @@ namespace Ma9MServer
 			}
 
 			// 6. 편성 and the next season's first games.
+			bool sevenBefore = LeagueRules.Seven;
 			Tick(start + LeagueCalendar.FormAt + TimeSpan.FromMinutes(1));
+			// The seven-tier switch at this 편성 (11-16 season, LeagueStore.MigrateTiers7) moves the closed leagues' next tiers: from
+			// 트리플A up one up, a fall from there to 루키 to 더블A instead; 루키's and 비기너's stay.
+			bool switched = !sevenBefore && LeagueRules.Seven;
+			if (switched) ServerLog.Info("[posttest] the seven-tier switch ran at this 편성");
 			foreach ((uint code, string name, _, _) in teams)
 			{
 				if (!closed.TryGetValue(code, out LeagueState c)) continue;
 				LeagueState s = store.Load(code);
-				Check(s.Season == c.Season + 1 && s.Start == start + LeagueCalendar.Cycle && s.NextGame == 1 && s.FirstGame == 1 && s.Tier == c.NextTier && s.NextTier == -1
+				int expect = !switched || c.Tier < 2 ? c.NextTier : c.NextTier >= 2 ? c.NextTier + 1 : c.NextTier == 1 ? 2 : c.NextTier;
+				Check(s.Season == c.Season + 1 && s.Start == start + LeagueCalendar.Cycle && s.NextGame == 1 && s.FirstGame == 1 && s.Tier == expect && s.NextTier == -1
 					&& store.Games(code, s.Season).Count == 0 && s.Clubs[s.MyIndex].LastRank == c.RankOf(c.MyIndex),
 					$"[{name}] 편성: season {s.Season} {LeagueRules.TierNames[s.Tier]} from {s.Start:MM-dd HH:mm}");
 				Check(LeagueService.StartersFree(s, start + LeagueCalendar.FormAt + TimeSpan.FromMinutes(1)) && !LeagueService.StartersFree(s, s.Start + TimeSpan.FromMinutes(1)),

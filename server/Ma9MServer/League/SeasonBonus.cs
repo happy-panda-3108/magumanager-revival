@@ -132,7 +132,7 @@ namespace Ma9MServer
 					cmd.Parameters.AddWithValue("$s", season);
 					if (cmd.ExecuteNonQuery() == 0) continue;
 				}
-				s_db.AddMp(user, mp);
+				s_db.AddMp(user, mp, MpLedger.Season);
 				paid.Add((season, tier, rank, mp));
 			}
 			return paid;

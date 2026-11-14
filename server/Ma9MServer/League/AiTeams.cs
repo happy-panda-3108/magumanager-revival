@@ -56,8 +56,9 @@ namespace Ma9MServer
 		// card's most valuable ones, Valuable), Position changes a pitcher standing in another role's slot to it when his card
 		// may (1 대성공, 2 성공), and Coach gives the coaching-staff set of the deck's own club by its grade (1 노말, 2 스페셜:
 		// CoachCatalog.SetBonus on every stat; a 타격·투수코치's own stat adds nothing below 레어).
+		// BelowNext (더블A, 2026-11-14): the decks of the tier above's pool are left out first, so the pool is the next ones down.
 		public sealed record DeckRule(int Skip, int Grade, bool Lecture, int Backups = 0, int MinBackups = 1, int LectureMain = 0,
-			int TrainSlots = 0, int TrainEach = 0, int Renewals = 0, int Position = 0, int Coach = 0);
+			int TrainSlots = 0, int TrainEach = 0, int Renewals = 0, int Position = 0, int Coach = 0, bool BelowNext = false);
 
 		// 챔피언스 (user, 2026-11-02: "팀들마다 주전 선수 1~2명을 후보로 교체한 덱 … 아직 단일덱이 완성 되지 않은 팀들에게는 빡센
 		// 난이도"): one or two starters of every deck out.
@@ -81,7 +82,16 @@ namespace Ma9MServer
 			new DeckRule(0, 0, true, LectureMain: 5, TrainSlots: 3, TrainEach: 5, Renewals: 3, Position: 1, Coach: 2),
 		};
 
-		public static DeckRule RuleOf(int tier) => LeagueRules.NewStructure ? Rules6[Math.Clamp(tier - 2, 0, Rules6.Length - 1)]
+		// Seven tiers (user, 2026-11-14 20:5x: "더블 A는 팀-연도 덱에 트리플A에서 사용되는 덱보다 순위가 낮은 조금 약한 덱들이 나오고,
+		// 팀컬러는 B, 특강은 없음, 트레이닝은 1과목 +4, 재계약 3, 코치 없음, 주전 2~3명 후보로"; asked: "트리플A 30덱을 빼고 다음 30덱"):
+		// 더블A at tier 2, then the six-tier rules for 트리플A … 챔피언스 at 3-6. 재계약 3 = one stat +3, as 트리플A's (11-08 reading).
+		public static readonly DeckRule DoubleADecks = new DeckRule(0, 2, false, Backups: 3, MinBackups: 2, TrainSlots: 1, TrainEach: 4, Renewals: 1,
+			BelowNext: true);
+
+		private static readonly DeckRule[] Rules7 = { DoubleADecks, Rules6[0], Rules6[1], Rules6[2], Rules6[3] };
+
+		public static DeckRule RuleOf(int tier) => LeagueRules.Seven ? Rules7[Math.Clamp(tier - 2, 0, Rules7.Length - 1)]
+			: LeagueRules.NewStructure ? Rules6[Math.Clamp(tier - 2, 0, Rules6.Length - 1)]
 			: tier == LeagueRules.ChampionsTier ? ChampionsDecks : MajorDecks;
 
 		public static bool HasDecks(int tier) => LeagueRules.NewStructure ? tier >= 2 : tier == LeagueRules.MajorTier || tier == LeagueRules.ChampionsTier;
@@ -480,11 +490,24 @@ namespace Ma9MServer
 		private static List<TeamColorSim.TeamYearDeck> Ranked(GameData data) =>
 			s_ranked ??= TeamColorSim.TeamYearDecks(data, LeagueRules.BallCap[LeagueRules.ChampionsTier]).OrderByDescending(d => d.Value).ToList();
 
+		// The team-year decks of a tier's pool: within its ball cap by value, rule.Skip left out, the next DeckPool; with
+		// rule.BelowNext the tier above's pool left out before that (더블A under 트리플A, 2026-11-14).
+		public static List<TeamColorSim.TeamYearDeck> PoolDecks(GameData data, int tier, DeckRule rule)
+		{
+			IEnumerable<TeamColorSim.TeamYearDeck> fit = Ranked(data).Where(d => d.Balls <= LeagueRules.BallCap[tier]);
+			if (rule.BelowNext && tier + 1 < LeagueRules.Tiers && HasDecks(tier + 1))
+			{
+				HashSet<(int, int)> above = PoolDecks(data, tier + 1, RuleOf(tier + 1)).Select(d => (d.Year, d.TeamCode)).ToHashSet();
+				fit = fit.Where(d => !above.Contains((d.Year, d.TeamCode)));
+			}
+			return fit.Skip(rule.Skip).Take(DeckPool).ToList();
+		}
+
 		// A deck pool as AI clubs (not saved): the team-year decks ranked by value (built once), rule.Skip of them left
 		// out, the next DeckPool with 단일 년도 팀 at rule.Grade on every card and, with rule.Lecture, one 특별수강 each.
 		public static List<AiTeam> MakePool(GameData data, int tier, DeckRule rule)
 		{
-			List<TeamColorSim.TeamYearDeck> decks = Ranked(data).Where(d => d.Balls <= LeagueRules.BallCap[tier]).Skip(rule.Skip).Take(DeckPool).ToList();
+			List<TeamColorSim.TeamYearDeck> decks = PoolDecks(data, tier, rule);
 			(int bat, int pit) colour = TeamColors.SingleYearTeam(rule.Grade);
 			List<AiTeam> pool = new List<AiTeam>();
 			List<string> swapped = new List<string>(), changed = new List<string>();

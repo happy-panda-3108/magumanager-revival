@@ -53,6 +53,68 @@ namespace Ma9MServer
 			return 0;
 		}
 
+		// "--aitest7 [seasons]" (2026-11-14, 더블A): with seven tiers, 루키's fixed clubs, 더블A's decks and 트리플A's decks two groups at
+		// a time, as above. 더블A should land between 루키 and 트리플A (user: "트리플A 리그보다 AI 구단을 약하게").
+		public static int AiStrengthTest7(int seasons, IEnumerable<string> variants = null, int games = LeagueRules.Games)
+		{
+			// Variants "skip:grade" of 더블A's rule (the rest as DoubleADecks): each pool against 루키's clubs and 트리플A's decks.
+			foreach (string v in variants ?? Enumerable.Empty<string>())
+			{
+				int[] p = v.Split(':').Select(int.Parse).ToArray();
+				AiTeams.DeckRule rule = AiTeams.DoubleADecks with { Skip = p[0], Grade = p[1] };
+				List<AiTeam> pool = AiTeams.MakePool(s_data, LeagueRules.DoubleATier, rule);
+				string name = $"더블A 안{p[0] + 1}~ {"SABC"[p[1]]}";
+				ServerLog.Info($"[aitest7] {name} ({pool.Count}): {string.Join(", ", pool.Select(t => $"{t.Name} {t.Ball}볼"))}");
+				foreach ((string y, List<AiTeam> other) in new[] { ("루키 고정", AiTeams.OfTier(1).ToList()), ("트리플A", AiTeams.Decks(3)) })
+				{
+					int w = 0, l = 0;
+					for (int season = 0; season < seasons; season++)
+					{
+						foreach ((string club, bool won, bool lost) in Mixed(pool, other, season, games))
+						{
+							if (won) w++; else if (lost) l++;
+						}
+					}
+					ServerLog.Info($"[aitest7] {name} vs {y}: {w}-{l}, {(w + l == 0 ? 0 : 100.0 * w / (w + l)):F1}%");
+				}
+			}
+			if (!LeagueRules.Seven)
+			{
+				ServerLog.Warn("[aitest7] seven tiers are not on (MA9M_TIERS7=1 on a data copy)");
+				return 2;
+			}
+			Dictionary<string, List<AiTeam>> groups = new Dictionary<string, List<AiTeam>>
+			{
+				["루키 고정"] = AiTeams.OfTier(1).ToList(),
+				["더블A"] = AiTeams.Decks(LeagueRules.DoubleATier),
+				["트리플A"] = AiTeams.Decks(3)
+			};
+			foreach (KeyValuePair<string, List<AiTeam>> g in groups)
+			{
+				ServerLog.Info($"[aitest7] {g.Key} ({g.Value.Count}): {string.Join(", ", g.Value.Select(t => $"{t.Name} {t.Ball}볼"))}");
+			}
+			if (groups.Values.Any(g => g.Count < 5)) return 3;
+			foreach ((string x, string y) in new[] { ("더블A", "루키 고정"), ("트리플A", "더블A"), ("트리플A", "루키 고정") })
+			{
+				Stopwatch sw = Stopwatch.StartNew();
+				int w = 0, l = 0, d = 0;
+				Dictionary<string, (int w, int l)> byClub = new Dictionary<string, (int w, int l)>();
+				for (int season = 0; season < seasons; season++)
+				{
+					foreach ((string club, bool won, bool lost) in Mixed(groups[x], groups[y], season, games))
+					{
+						if (won) w++; else if (lost) l++; else d++;
+						byClub.TryGetValue(club, out (int w, int l) r);
+						byClub[club] = (r.w + (won ? 1 : 0), r.l + (lost ? 1 : 0));
+					}
+				}
+				double pct = w + l == 0 ? 0 : 100.0 * w / (w + l);
+				ServerLog.Info($"[aitest7] {x} vs {y}: {w}-{l}-{d}, {pct:F1}% ({seasons} seasons, {sw.Elapsed.TotalSeconds:F0} s)");
+				ServerLog.Info($"[aitest7]   {x} clubs: {string.Join(", ", byClub.OrderByDescending(kv => Pct(kv.Value)).Select(kv => $"{kv.Key} {Pct(kv.Value):F0}"))}");
+			}
+			return 0;
+		}
+
 		private static double Pct((int w, int l) r) => r.w + r.l == 0 ? 0 : 100.0 * r.w / (r.w + r.l);
 
 		// One season of five clubs from x and five from y; per game between the groups: x's club, won, lost.

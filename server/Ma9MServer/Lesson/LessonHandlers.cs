@@ -561,7 +561,7 @@ namespace Ma9MServer
 				log = $"refused {result}";
 				return result;
 			}
-			s_db.AddMp(user, -fee);
+			s_db.AddMp(user, -fee, MpLedger.Lesson);
 			if (lucky)
 			{
 				InventoryHandlers.AddItem(user, Lucky, -1);
@@ -749,7 +749,7 @@ namespace Ma9MServer
 				ServerLog.Info("[lessontest] no test team");
 				return problems + 1;
 			}
-			db.AddMp(user, 100_000_000);
+			db.AddMp(user, 100_000_000, MpLedger.Test);
 			DateTime now = DateTime.Now;
 			var batCoach = OnDuty(false, now).coach;
 			HashSet<int> lineup = Lineup(user);

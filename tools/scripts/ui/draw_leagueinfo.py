@@ -1,5 +1,7 @@
-# The 리그 정보 popup image (Atlas_TopMenu sprite 'leagueinfo', 782x414 at x0 y610) redrawn for six tiers (2026-11-08).
+# The 리그 정보 popup image (Atlas_TopMenu sprite 'leagueinfo', 782x414 at x0 y610) redrawn for six tiers (2026-11-08), then for
+# seven (2026-11-14, 더블A between 루키 and 트리플A; caps 120/130/140/145/150/155/160).
 # Keeps the frame, the panels and the original badges; clears the left panel's text and draws a new table.
+# Input: the original sprite, port\ripped\ExportedProject\Assets\Texture2D\Atlas_TopMenu.png cropped at (0, 610, 782, 1024).
 import sys
 from PIL import Image, ImageDraw, ImageFont
 
@@ -10,7 +12,7 @@ REG = 'C:/Windows/Fonts/malgun.ttf'
 BOLD = 'C:/Windows/Fonts/malgunbd.ttf'
 
 # Badges from the old table (row bands found by colour), before anything is painted over.
-bands = {'챔피언스': 114, '레전드': 170, '메이저': 226, '트리플A': 254, '루키': 338, '비기너': 366}
+bands = {'챔피언스': 114, '레전드': 170, '메이저': 226, '트리플A': 254, '더블A': 282, '루키': 338, '비기너': 366}
 badges = {k: im.crop((219, y - 2, 289, y + 23)) for k, y in bands.items()}
 
 # The yellow of the panel titles.
@@ -69,10 +71,11 @@ paragraph(298, '리그 승강 조건', [
 X = [207, 300, 386, 516, 642, 769]
 Y0, HDR1, HDR2, Y1 = 55, 80, 106, 390
 rows = [
-    ('챔피언스', '155', '-', '최종 1~3위', '나머지 (레전드로)'),
-    ('레전드', '150', '최종 1~3위', '최종 4~6위', '최종 7~10위'),
-    ('메이저', '145', '포스트시즌 1~4위', '나머지', '정규리그 8~10위'),
-    ('트리플A', '140', '포스트시즌 1~4위', '나머지', '정규리그 8~10위'),
+    ('챔피언스', '160', '-', '최종 1~3위', '나머지 (레전드로)'),
+    ('레전드', '155', '최종 1~3위', '최종 4~6위', '최종 7~10위'),
+    ('메이저', '150', '포스트시즌 1~4위', '나머지', '정규리그 8~10위'),
+    ('트리플A', '145', '포스트시즌 1~4위', '나머지', '정규리그 8~10위'),
+    ('더블A', '140', '포스트시즌 1~4위', '나머지', '정규리그 8~10위'),
     ('루키', '130', '포스트시즌 1~4위', '나머지', '정규리그 8~10위'),
     ('비기너', '120', '정규리그 1~4위', '나머지', '없음'),
 ]

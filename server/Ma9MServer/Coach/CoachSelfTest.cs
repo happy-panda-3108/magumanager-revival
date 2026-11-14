@@ -475,6 +475,8 @@ namespace Ma9MServer
 				AddCoaches(user, trio);
 				string r3 = TryCoachMix(user, trio, rng, out int r3Made, out string r3How);
 				if (r3 != null || r3How != "같은 코치 능력치 다시" || CoachCatalog.Role(r3Made) != role || CoachCatalog.LineOf(r3Made) != CoachCatalog.Line(other) || CoachCatalog.Grade(r3Made) != CoachCatalog.Elite) rerollOut++;
+				// 2026-11-14 (user: 정신·정신·스피드 gave 스피드 again): never a stat of the three.
+				if (trio.Select(CoachCatalog.Stat).Contains(CoachCatalog.Stat(r3Made))) rerollOut++;
 				if (role == CoachCatalog.HC) rerollStats[CoachCatalog.Stat(r3Made)] = rerollStats.GetValueOrDefault(CoachCatalog.Stat(r3Made)) + 1;
 				RemoveCoaches(user, new[] { r3Made });
 				int[] hds = Enumerable.Range(0, 3).Select(_ => CoachCatalog.Card(other, CoachCatalog.HD, CoachCatalog.Elite)).ToArray();
@@ -484,8 +486,21 @@ namespace Ma9MServer
 				if (CoachCatalog.Role(hdMade) != CoachCatalog.HD) hdRoles++;
 				RemoveCoaches(user, new[] { hdMade });
 			}
+			// The user's case: 정신, 정신, 스피드 → 컨택, 파워 or 선구 only.
+			int[] userCase = { 6, 6, 3 };
+			HashSet<int> userGot = new HashSet<int>();
+			for (int n = 0; n < 60; n++)
+			{
+				int[] trio = userCase.Select(st => CoachCatalog.Card(other, CoachCatalog.HC, CoachCatalog.Elite, st)).ToArray();
+				AddCoaches(user, trio);
+				TryCoachMix(user, trio, rng, out int ucMade, out _);
+				userGot.Add(CoachCatalog.Stat(ucMade));
+				RemoveCoaches(user, new[] { ucMade });
+			}
+			if (!userGot.SetEquals(new[] { 1, 2, 4 })) rerollOut++;
+			ServerLog.Info($"[coachtest] 정신·정신·스피드 엘리트 타격코치 3장 ×60 → {string.Join("·", userGot.OrderBy(x => x).Select(x => CoachCatalog.StatName(CoachCatalog.HC, x)))}");
 			Check(rerollOut == 0 && rerollStats.Count >= 4 && hdRoles > 0,
-				$"조합 3 엘리트 타격·투수코치 of one line ×60 → the same coach, 타격코치 stats {string.Join(" ", rerollStats.OrderBy(k => k.Key).Select(k => $"{CoachCatalog.StatName(CoachCatalog.HC, k.Key)} {k.Value}"))}; 3 수석코치 → any role ({hdRoles}/60 not 수석)");
+				$"조합 3 엘리트 타격·투수코치 of one line ×60 → the same coach, a stat none of the three had, 타격코치 stats {string.Join(" ", rerollStats.OrderBy(k => k.Key).Select(k => $"{CoachCatalog.StatName(CoachCatalog.HC, k.Key)} {k.Value}"))}; 3 수석코치 → any role ({hdRoles}/60 not 수석)");
 			// 자팀 (OwnLine): the 1군's most common line.
 			int ownLine = OwnLine(user);
 			Lineup ownLineup = s_db.GetLineup(user);
@@ -499,7 +514,7 @@ namespace Ma9MServer
 				$"pack odds text {string.Join(" · ", Enumerable.Range(1, 4).Select(CoachCatalog.PackPercentText))}%");
 			// 상점 203: 30만 MP → opened at once (2026-11-08): a coach more, no pack in the inventory, the card on the reply;
 			// more packs than the room for coaches are refused whole, MP kept.
-			int mpBuy = s_db.AddMp(user, CoachCatalog.PackPrice), packsBuy = InventoryHandlers.ItemAmount(user, CoachCatalog.Pack), coachesBuy = Coaches(user).Count;
+			int mpBuy = s_db.AddMp(user, CoachCatalog.PackPrice, MpLedger.Test), packsBuy = InventoryHandlers.ItemAmount(user, CoachCatalog.Pack), coachesBuy = Coaches(user).Count;
 			var bought = ShopHandlers.Purchase(user, 203, 1, out string buyLog);
 			var openReply = bought.Count == 1 ? bought[0] as Ma9MPacket.PKS_SC_BUY_ITEM_SHOP_NEW_CARDPACK : null;
 			bool room = coachesBuy < CoachCatalog.MaxCoaches;
@@ -514,7 +529,7 @@ namespace Ma9MServer
 				AddCoaches(user, Enumerable.Range(0, roomLeft - 3).Select(_ => CoachCatalog.Roll(rng)).ToList());
 				roomLeft = 3;
 			}
-			int mpOver = s_db.AddMp(user, CoachCatalog.PackPrice * (roomLeft + 1));
+			int mpOver = s_db.AddMp(user, CoachCatalog.PackPrice * (roomLeft + 1), MpLedger.Test);
 			ShopHandlers.Purchase(user, 203, roomLeft + 1, out string overLog);
 			Check(Coaches(user).Count == CoachCatalog.MaxCoaches - roomLeft && s_db.AddMp(user, 0) == mpOver, $"{roomLeft + 1} packs with room for {roomLeft}: refused, MP kept ({overLog})");
 			ShopHandlers.Purchase(user, 203, roomLeft, out string fitLog);

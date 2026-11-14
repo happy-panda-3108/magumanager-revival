@@ -527,6 +527,107 @@ namespace Ma9MServer
 				+ $"(레전드 4, 챔피언스 5), grades of {Count("SELECT COUNT(DISTINCT user_code) FROM league")} team(s) set again from their leagues");
 		}
 
+		// 더블A (systems session, 2026-11-14; LeagueRules.Seven): whether the seven-tier switch is done (league_fix 'tiers7').
+		public bool Tiers7Done()
+		{
+			using SqliteConnection c = Open();
+			using SqliteCommand cmd = c.CreateCommand();
+			cmd.CommandText = "CREATE TABLE IF NOT EXISTS league_fix (name TEXT PRIMARY KEY, done TEXT NOT NULL)";
+			cmd.ExecuteNonQuery();
+			cmd.CommandText = "SELECT COUNT(*) FROM league_fix WHERE name = 'tiers7'";
+			return (long)cmd.ExecuteScalar() > 0;
+		}
+
+		// The seven-tier switch, once, at the first 편성 for a season from LeagueRules.SevenFrom (LeagueService.RenewAi), after the
+		// six-tier one: every stored tier from 트리플A (2) up moves up one (트리플A 3, 메이저 4, 레전드 5, 챔피언스 6) in the leagues,
+		// their history, the 시즌 완주 보너스 rows and the AI decks (top tier first, the keys being (tier, slot)). A next tier
+		// from those tiers moves with them, and one going down to 루키 (트리플A's bottom three) goes to the new 더블A (2) instead;
+		// 루키's leagues keep theirs, so its top four go to 더블A. The AI rules are dropped, so the 편성 right after makes every
+		// deck tier again under the new ball caps (트리플A 145 … 챔피언스 160) and makes 더블A's. Grades are set again from each
+		// team's latest league.
+		public void MigrateTiers7(string why)
+		{
+			if (Tiers7Done())
+			{
+				LeagueRules.UseSeven();
+				return;
+			}
+			if (!Tiers6Done())
+			{
+				ServerLog.Warn($"league: seven tiers asked ({why}) before the six-tier switch; not done");
+				return;
+			}
+			using SqliteConnection c = Open();
+			void Sql(string text)
+			{
+				using SqliteCommand cmd = c.CreateCommand();
+				cmd.CommandText = text;
+				cmd.ExecuteNonQuery();
+			}
+			int Count(string text)
+			{
+				using SqliteCommand cmd = c.CreateCommand();
+				cmd.CommandText = text;
+				return Convert.ToInt32(cmd.ExecuteScalar());
+			}
+			bool Has(string table) => Count($"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '{table}'") > 0;
+			int leagues = Count("SELECT COUNT(*) FROM league WHERE tier >= 2"), history = Count("SELECT COUNT(*) FROM league_history WHERE tier >= 2"),
+				toDoubleA = Count("SELECT COUNT(*) FROM league WHERE tier >= 2 AND next_tier = 1") + Count("SELECT COUNT(*) FROM league WHERE tier = 1 AND next_tier = 2");
+			Sql("BEGIN");
+			try
+			{
+				// One statement per table: SQLite reads the old tier in the CASE.
+				const string NextOf = "CASE WHEN next_tier >= 2 THEN next_tier + 1 WHEN next_tier = 1 THEN 2 ELSE next_tier END";
+				Sql($"UPDATE league SET next_tier = {NextOf}, tier = tier + 1 WHERE tier >= 2");
+				Sql($"UPDATE league_history SET next_tier = {NextOf}, tier = tier + 1 WHERE tier >= 2");
+				if (Has("season_bonus"))
+				{
+					Sql("UPDATE season_bonus SET tier = tier + 1 WHERE tier >= 2");
+				}
+				if (Has("league_ai_team"))
+				{
+					for (int t = 5; t >= 2; t--) Sql($"UPDATE league_ai_team SET tier = {t + 1} WHERE tier = {t}");
+				}
+				if (Has("league_ai_rule"))
+				{
+					Sql("DELETE FROM league_ai_rule");
+				}
+				LeagueRules.UseSeven();
+				List<(long user, int tier)> latest = new List<(long, int)>();
+				using (SqliteCommand cmd = c.CreateCommand())
+				{
+					cmd.CommandText = @"SELECT l.user_code, CASE WHEN l.next_tier >= 0 THEN l.next_tier ELSE l.tier END FROM league l
+						JOIN (SELECT user_code, MAX(season) AS season FROM league GROUP BY user_code) m ON m.user_code = l.user_code AND m.season = l.season";
+					using SqliteDataReader r = cmd.ExecuteReader();
+					while (r.Read()) latest.Add((r.GetInt64(0), r.GetInt32(1)));
+				}
+				foreach ((long user, int tier) in latest)
+				{
+					using SqliteCommand cmd = c.CreateCommand();
+					cmd.CommandText = "UPDATE team SET league_grade = $g WHERE user_code = $u";
+					cmd.Parameters.AddWithValue("$g", (int)LeagueRules.TierGrade[Math.Clamp(tier, 0, LeagueRules.Tiers - 1)]);
+					cmd.Parameters.AddWithValue("$u", user);
+					cmd.ExecuteNonQuery();
+				}
+				using (SqliteCommand cmd = c.CreateCommand())
+				{
+					cmd.CommandText = "INSERT INTO league_fix (name, done) VALUES ('tiers7', $t)";
+					cmd.Parameters.AddWithValue("$t", DateTime.Now.ToString("o"));
+					cmd.ExecuteNonQuery();
+				}
+				Sql("COMMIT");
+			}
+			catch
+			{
+				Sql("ROLLBACK");
+				LeagueRules.UseSeven(false);
+				throw;
+			}
+			ServerLog.Info($"league: seven tiers from now ({why}): {leagues} league row(s) and {history} history row(s) from 트리플A up moved up one "
+				+ $"(트리플A 3 … 챔피언스 6), {toDoubleA} team(s) going to 더블A, AI rules dropped (decks made again), grades of "
+				+ $"{Count("SELECT COUNT(DISTINCT user_code) FROM league")} team(s) set again from their leagues");
+		}
+
 		public void SetTeamGrade(uint user, byte grade)
 		{
 			using SqliteConnection c = Open();

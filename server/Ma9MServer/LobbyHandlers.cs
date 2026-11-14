@@ -111,6 +111,8 @@ namespace Ma9MServer
 				LessonHandlers.OnLobby(session);
 				// 새벽 자동 시범경기 결과 (ExhibitionAuto.cs).
 				ExhibitionHandlers.DeliverAuto(session);
+				// 오늘의 미션 0시 자동 지급 (Missions, systems session 2026-11-14).
+				Missions.DeliverAutoPay(session);
 				// 코칭스태프: the day's SP and the 치어리더's gift (CoachHandlers; off unless MA9M_COACH=1).
 				CoachHandlers.OnLobby(session);
 			}

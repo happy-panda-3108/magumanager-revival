@@ -272,6 +272,21 @@ namespace Ma9MServer
 			return Card(club, role, grade, HasStat(role, grade) ? StatsOf(role)[rng.Next(Pictures)] : 0);
 		}
 
+		// The 능력치 다시 뽑기 of three 엘리트 타격·투수코치 of one line (user, 2026-11-14: "롯데 타격코치 3명 넣었는데, 각각 정신, 정신,
+		// 스피드였음. 그럼 조합결과가 타격코치이고 컨택, 파워, 선구 중에서 나왔어야하는데 왜 다시 스피드가 나온 것인지"): the same
+		// role at that grade, its stat drawn from the ones none of the cards put in had (three cards leave at least two of five).
+		public static int RollOtherStat(Random rng, int grade, int club, int role, IEnumerable<int> had)
+		{
+			int[] left = StatsOf(role).Except(had).ToArray();
+			if (left.Length == 0) return Roll(rng, grade, club, role);
+			if (Array.IndexOf(OldClubs, club) >= 0)
+			{
+				int[] line = LineClubs(club);
+				club = line[rng.Next(line.Length)];
+			}
+			return Card(club, role, grade, left[rng.Next(left.Length)]);
+		}
+
 		// Comment codes in ma9_Coach_String.txt (the room's line, the training coach's two lines).
 		public const int RoomVisitors = 2001, RoomNobody = 2002, RoomNoCoach = 2003, RoomDone = 2004;
 

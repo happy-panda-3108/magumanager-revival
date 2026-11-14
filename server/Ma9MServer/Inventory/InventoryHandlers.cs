@@ -83,12 +83,48 @@ namespace Ma9MServer
 			// The 특별수강 coupon (user, 2026-11-11 20:3x via the engine session: "육성 테스트 시간을 줄이기 위해 쿠폰을 하나 더 만듭시다.
 			// ai테스터들도 사용할 수 있게 해줘. 1억 MP + 특강 행운권 10장 + 특강 즉시 완료권 10장 + 특강 초기화권 10장"), once per account,
 			// the user's and the AI testers' accounts alike (not TesterOnly).
+			// + 1.5억 MP and 30 more of each (user, 2026-11-14: "기존 LESSON 쿠폰에 1.5억 MP + 특강 초기화, 행운, 즉시완료권 30장씩 더
+			// 추가하고, 기존에 사용한 팀들에게 그대로 보상 넣어주는걸로 합시다. 육성하는데 MP가 확실히 많이 들어가긴 하네"): 2.5억 MP and
+			// 40 of each now; teams that used it before get the difference once (TopUpLessonCoupon).
 			new CouponDef
 			{
-				Code = "LESSON2026", Mp = 100_000_000,
-				Items = new[] { (LessonHandlers.Lucky, 10), (LessonHandlers.Instant, 10), (LessonHandlers.Reset, 10) }
+				Code = "LESSON2026", Mp = 250_000_000,
+				Items = new[] { (LessonHandlers.Lucky, 40), (LessonHandlers.Instant, 40), (LessonHandlers.Reset, 40) }
 			}
 		};
+
+		// What LESSON2026 gained on 2026-11-14, for the teams that used it before (league_fix 'lesson2026_topup').
+		public const int LessonTopUpMp = 150_000_000, LessonTopUpItems = 30;
+
+		private static void TopUpLessonCoupon(string dbPath)
+		{
+			using Microsoft.Data.Sqlite.SqliteConnection c = new Microsoft.Data.Sqlite.SqliteConnection(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = dbPath }.ToString());
+			c.Open();
+			using Microsoft.Data.Sqlite.SqliteCommand cmd = c.CreateCommand();
+			cmd.CommandText = "CREATE TABLE IF NOT EXISTS league_fix (name TEXT PRIMARY KEY, done TEXT NOT NULL)";
+			cmd.ExecuteNonQuery();
+			cmd.CommandText = "SELECT COUNT(*) FROM league_fix WHERE name = 'lesson2026_topup'";
+			if ((long)cmd.ExecuteScalar() > 0) return;
+			List<uint> teams = new List<uint>();
+			cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'coupon_use'";
+			if ((long)cmd.ExecuteScalar() > 0)
+			{
+				cmd.CommandText = "SELECT DISTINCT user_code FROM coupon_use WHERE code = 'LESSON2026'";
+				using Microsoft.Data.Sqlite.SqliteDataReader r = cmd.ExecuteReader();
+				while (r.Read()) teams.Add((uint)r.GetInt64(0));
+			}
+			foreach (uint team in teams)
+			{
+				s_db.AddMp(team, LessonTopUpMp, MpLedger.Coupon);
+				foreach (int item in new[] { LessonHandlers.Lucky, LessonHandlers.Instant, LessonHandlers.Reset })
+				{
+					s_store.Add(team, item, LessonTopUpItems);
+				}
+			}
+			cmd.CommandText = "INSERT INTO league_fix (name, done) VALUES ('lesson2026_topup', datetime('now', 'localtime'))";
+			cmd.ExecuteNonQuery();
+			ServerLog.Info($"LESSON2026: +{LessonTopUpMp:N0} MP and {LessonTopUpItems} of each 특강 item to {teams.Count} team(s) that used it before ({string.Join(", ", teams)})");
+		}
 
 		private static Database s_db;
 
@@ -104,6 +140,7 @@ namespace Ma9MServer
 			ItemCatalog.WriteTable(Path.Combine(dataDir, "tables"));
 			TopUpCoachCoupon(Path.Combine(dataDir, "ma9m.db"));
 			ReclaimTesterDouble(Path.Combine(dataDir, "ma9m.db"));
+			TopUpLessonCoupon(Path.Combine(dataDir, "ma9m.db"));
 			loop.Register<Ma9MPacket.PKS_CS_ENTER_INVENTORY>(EnterInventory);
 			loop.Register<Ma9MPacket.PKS_CS_USE_CARDPACK_ITEM>(UseCardPack);
 			loop.Register<Ma9MPacket.PKS_CS_USE_ITEM>(UseItem);
@@ -174,7 +211,7 @@ namespace Ma9MServer
 				}
 				int before = s_db.AddMp(team, 0);
 				int taken = (int)Math.Min(before, mp);
-				int after = s_db.AddMp(team, -taken);
+				int after = s_db.AddMp(team, -taken, MpLedger.Reclaim);
 				ServerLog.Info($"autotest2 이중 쿠폰 회수: team {team}, {string.Join(", ", parts)}, MP {before:N0} → {after:N0} (−{taken:N0}{(taken < mp ? $", 모자라 {mp - taken:N0} 못 뺌" : string.Empty)})");
 			}
 			cmd.CommandText = "INSERT INTO league_fix (name, done) VALUES ('autotest2_double_gift', datetime('now', 'localtime'))";
@@ -392,7 +429,7 @@ namespace Ma9MServer
 					s_store.UseCoupon(code, user, account);
 					if (coupon.Mp != 0)
 					{
-						session.Team.Mp = s_db.AddMp(user, coupon.Mp);
+						session.Team.Mp = s_db.AddMp(user, coupon.Mp, MpLedger.Coupon);
 					}
 					foreach ((int item, int count) in coupon.Items)
 					{
@@ -415,7 +452,10 @@ namespace Ma9MServer
 		// "받은 것: 1억 MP · 특별강좌 행운권 10개 · …", wrapped for the popup, at most 127 letters (the field's one-byte length).
 		public static string CouponText(CouponDef coupon)
 		{
-			static string Mp(long mp) => mp % 100_000_000 == 0 ? $"{mp / 100_000_000}억" : mp >= 10_000 ? $"{mp / 10_000:#,0}만" : $"{mp:#,0}";
+			// 2.5억 (LESSON2026 since 11-14) rather than 25,000만.
+			static string Mp(long mp) => mp % 100_000_000 == 0 ? $"{mp / 100_000_000}억"
+				: mp >= 100_000_000 && mp % 10_000_000 == 0 ? $"{mp / 100_000_000.0:0.#}억"
+				: mp >= 10_000 ? $"{mp / 10_000:#,0}만" : $"{mp:#,0}";
 			List<string> parts = new List<string>();
 			if (coupon.Mp != 0)
 			{

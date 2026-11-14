@@ -115,7 +115,8 @@ namespace Ma9MServer
 			yield return new ItemDef
 			{
 				Index = ShopHandlers.LuckyPouch, Name = "MP주머니", Type = ItemType.EtcCardPack, TypeText = "행운의 주머니", File = "luckybag_mp",
-				Desc = "열면 1만~1,000만 MP 중 하나가 나옵니다. 홈런볼 상점에서 홈런볼 10개로 바꿉니다."
+				// 10만 since the 2026-10-25 odds (ShopHandlers.PouchOdds; engine tester_x 11-14 saw this card say 1만 and the shop 10만).
+				Desc = "열면 10만~1,000만 MP 중 하나가 나옵니다. 홈런볼 상점에서 홈런볼 10개로 바꿉니다."
 			};
 		}
 
