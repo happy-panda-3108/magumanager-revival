@@ -105,6 +105,9 @@ namespace Ma9MServer
 				case "lobbyrank":
 					LobbyRank();
 					break;
+				case "famarket":
+					FaMarketTest(catalog);
+					break;
 				default:
 					Log($"unknown scenario {scenario}");
 					return 2;
@@ -1006,6 +1009,74 @@ namespace Ma9MServer
 				Check(done.Type.n == AdviceHandlers.DoneType2 && after != before, $"적용 (v2): type {done.Type.n}: {Text(done)}; 1군 changed");
 				Log($"  1군 now: {string.Join(", ", after.Split('|')[0].Split(',').Take(9).Select(s => catalog.Get(int.Parse(s))?.Name ?? s))} | {string.Join(", ", after.Split('|')[2].Split(',').Select(s => catalog.Get(int.Parse(s))?.Name ?? s))}");
 			}
+		}
+
+		// FA 시장 (systems session, 2026-11-15) on a data copy holding the FA rows, the test team with the 계약금 in MP (set on the
+		// copy): the album's FA pages (등급별 5, a season's club 20), then a tap's question the app sends (Ma9MAdvice "ma9m:v2:fa:<idx>"
+		// → type 20), 취소 (ACK 11: not signed), 영입 (ACK 10 → type 21, the card owned, the MP taken), a second 영입 and a card that
+		// is not FA refused (type 1).
+		private static void FaMarketTest(CardCatalog catalog)
+		{
+			List<CardInfo> fa = catalog.All.Where(c => c.IsFA).ToList();
+			Check(fa.Count > 0, $"{fa.Count} FA cards in the tables");
+			if (fa.Count == 0)
+			{
+				return;
+			}
+			Ma9MPacket.PKS_SC_ENTER_ALBUM Page(int yy, int team)
+			{
+				Send(new Ma9MPacket.PKS_CS_ENTER_ALBUM { year = { n = (byte)yy }, team = { n = (byte)team } });
+				return Await<Ma9MPacket.PKS_SC_ENTER_ALBUM>();
+			}
+			HashSet<int> Owned(Ma9MPacket.PKS_SC_ENTER_ALBUM p) => (p.possess_player.array ?? Array.Empty<PInteger>()).Select(i => i.n).ToHashSet();
+			Ma9MPacket.PKS_SC_POPUP Ask(string what)
+			{
+				Send(new Ma9MPacket.PKS_CS_REQ_SCENE_TUTORIAL { scene_name = { str = what } });
+				return Await<Ma9MPacket.PKS_SC_POPUP>(20000);
+			}
+			void Ack(byte n) => Send(new Ma9MPacket.PKS_CS_POPUP_ACK { Ack = { n = n } });
+			string[] Msgs(Ma9MPacket.PKS_SC_POPUP p) => (p.Messages.array ?? Array.Empty<PLongString>()).Select(m => m.str ?? string.Empty).ToArray();
+			string Text(Ma9MPacket.PKS_SC_POPUP p) => string.Join(" / ", Msgs(p).Select(m => m.Replace("\n", " | ")));
+
+			Ma9MPacket.PKS_SC_ENTER_ALBUM all = Page(AlbumHandlers.GradePageYear, AlbumHandlers.FaPage);
+			HashSet<int> shown = (all.index.array ?? Array.Empty<PInteger>()).Select(i => i.n).ToHashSet();
+			HashSet<int> owned = Owned(all);
+			Check(shown.Count == fa.Count && fa.All(c => shown.Contains(c.Idx)),
+				$"등급별 FA page: {shown.Count} of {fa.Count} FA cards, all in colour; {owned.Count} owned; {all.total_count.n} seen in all (FA left out)");
+			CardInfo card = fa.Where(c => !owned.Contains(c.Idx) && c.Ball == 8).OrderByDescending(c => c.Year).FirstOrDefault()
+				?? fa.First(c => !owned.Contains(c.Idx));
+			Ma9MPacket.PKS_SC_ENTER_ALBUM season = Page(card.Year % 100, AlbumHandlers.FaAlbumTeam);
+			int seasonCount = season.index.array?.Length ?? 0;
+			Check(seasonCount == fa.Count(c => c.Year == card.Year) && season.index.array.Any(i => i.n == card.Idx),
+				$"'{card.Year % 100:00} FA page (club 20): {seasonCount} cards, {card.Name} among them");
+
+			int price = global::Ma9MServer.FaMarket.Price(card);
+			Ma9MPacket.PKS_SC_POPUP q = Ask("ma9m:v2:fa:" + card.Idx);
+			string[] m = Msgs(q);
+			double widest = m.Length > 1 ? m[1].Split('\n').Max(PopupText.Px) : 0;
+			Check(q.Type.n == AdviceHandlers.AskType2 && m.Length >= 3 && m[1].Contains($"계약금 {price:N0} MP") && m[2] == "영입" && widest <= PopupText.Limit,
+				$"asked {card.Year} {card.Name} ({card.Idx}): type {q.Type.n}: {Text(q)} (widest {widest:F0} px)");
+			if (q.Type.n != AdviceHandlers.AskType2)
+			{
+				return;
+			}
+			string after = m[1].Split('\n').FirstOrDefault(line => line.StartsWith("가진 MP"))?.Split('→').Last().Trim() ?? "?";
+			Ack(AdviceHandlers.AckCancel);
+			Check(!Owned(Page(AlbumHandlers.GradePageYear, AlbumHandlers.FaPage)).Contains(card.Idx), "취소 (ACK 11): not signed");
+
+			Ask("ma9m:v2:fa:" + card.Idx);
+			Ack(AdviceHandlers.AckApply);
+			Ma9MPacket.PKS_SC_POPUP done = Await<Ma9MPacket.PKS_SC_POPUP>(10000);
+			string[] d = Msgs(done);
+			bool signed = Owned(Page(AlbumHandlers.GradePageYear, AlbumHandlers.FaPage)).Contains(card.Idx);
+			Check(done.Type.n == AdviceHandlers.DoneType2 && signed && d.Length > 1 && d[1].Contains("남은 MP " + after),
+				$"영입 (ACK 10): type {done.Type.n}: {Text(done)}; owned {signed}; MP left as asked ({after})");
+
+			Ma9MPacket.PKS_SC_POPUP again = Ask("ma9m:v2:fa:" + card.Idx);
+			Check(again.Type.n == 1 && Text(again).Contains("이미"), $"asked again: type {again.Type.n}: {Text(again)}");
+			CardInfo plain = catalog.Get(card.SourceIdx);
+			Ma9MPacket.PKS_SC_POPUP notFa = Ask("ma9m:v2:fa:" + plain.Idx);
+			Check(notFa.Type.n == 1 && Text(notFa).Contains("FA 시장에 없는"), $"the source card {plain.Idx}: type {notFa.Type.n}: {Text(notFa)}");
 		}
 
 		private static Dictionary<int, int> Inventory()

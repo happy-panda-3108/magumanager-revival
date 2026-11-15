@@ -133,6 +133,12 @@ namespace Ma9MServer
 		// Whether the coach works for a card of team code `teamCode`.
 		public static bool Serves(int coachIdx, int teamCode) => LineOf(coachIdx) == Line(teamCode);
 
+		// A player card's lineage for the staff (2026-11-15; user 18:3x via the engine session: "FA 선수들은 자팀 효과를 받으니까, 팀컬러,
+		// 코칭스태프 등의 효과를 받게끔"): an FA card is of every line, as in the 팀컬러 (TeamColors.IsMember), so any staff works for it.
+		public static bool ServesCard(int coachIdx, CardInfo card) => card != null && (card.IsFA || Serves(coachIdx, card.TeamCode));
+
+		public static bool InLine(CardInfo card, int line) => card != null && line >= 0 && (card.IsFA || Line(card.TeamCode) == line);
+
 		// The lineages that have coaches, each with its pack clubs (a pack draws a line first, then one of its clubs).
 		private static readonly int[][] Lines = PackClubs.GroupBy(Line).Select(g => g.ToArray()).ToArray();
 

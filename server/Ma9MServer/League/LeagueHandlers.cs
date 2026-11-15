@@ -498,7 +498,8 @@ namespace Ma9MServer
 			List<LeagueClub> ranked = s.Ranked();
 			LeagueClub leader = ranked[0];
 			reply.season.n = (byte)s.Season;
-			reply.season_sponsor.str = LeagueRules.Sponsor(s.Season);
+			// 공인구 of the season before the sponsor (SeasonBall.Tag, systems session 2026-11-15; empty for the standard ball).
+			reply.season_sponsor.str = SeasonBall.Tag(s) + LeagueRules.Sponsor(s.Season);
 			reply.team_record.array = ranked.Select((c, i) =>
 			{
 				ClubTotals k = c.Totals;

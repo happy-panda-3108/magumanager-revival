@@ -36,6 +36,32 @@ try {
     elseif ($e[2] -is [string]) { $cell.Value2 = [string]$e[2] }
     else { $cell.Formula = [string]$e[2] }
   }
+  # 2026-11-15 (FA 추천): "add_sheet": { "name", "values": [[addr, value]...], "fills", "fonts", "bold": [range...],
+  # "widths": [[col, width]...], "wrap": [range...] } adds (or empties and rewrites) a sheet after the last one; the user's
+  # own sheets stay as they are.
+  if ($null -ne $s.add_sheet) {
+    $a = $s.add_sheet
+    $new = $null
+    foreach ($w in $wb.Worksheets) { if ($w.Name -eq $a.name) { $new = $w } }
+    if ($null -eq $new) {
+      $new = $wb.Worksheets.Add([Type]::Missing, $wb.Worksheets.Item($wb.Worksheets.Count))
+      $new.Name = $a.name
+    } else { $new.Cells.Clear() | Out-Null }
+    foreach ($v in $a.values) {
+      $cell = $new.Range($v[0])
+      if ($null -eq $v[1]) { continue }
+      elseif ($v[1] -is [string] -and $v[1].StartsWith('=')) { $cell.Formula = $v[1] }
+      elseif ($v[1] -is [string]) { $cell.Value2 = [string]$v[1] }
+      else { $cell.Formula = [string]$v[1] }
+    }
+    foreach ($w in $a.widths) { $new.Columns.Item($w[0]).ColumnWidth = $w[1] }
+    foreach ($f in $a.fills) { $new.Range($f[0]).Interior.Color = (Ole $f[1]) }
+    foreach ($f in $a.fonts) { $new.Range($f[0]).Font.Color = (Ole $f[1]) }
+    foreach ($b in $a.bold) { $new.Range($b).Font.Bold = $true }
+    foreach ($r in $a.wrap) { $new.Range($r).WrapText = $true }
+    # "formats": [[range, "0.00"], ...] number formats (한셀 turns "7.40" into 7.4; the format keeps two decimals on show).
+    foreach ($nf in $a.formats) { $new.Range($nf[0]).NumberFormat = [string]$nf[1] }
+  }
   foreach ($f in $s.fills) { $ws.Range($f[0]).Interior.Color = (Ole $f[1]) }
   foreach ($f in $s.fonts) { $ws.Range($f[0]).Font.Color = (Ole $f[1]) }
   foreach ($c in $s.comments) {
@@ -64,7 +90,18 @@ try {
       if ($want -is [string] -and $want.StartsWith('=')) { continue }
       if ("$got" -ne "$want") { $bad += "$($v[0]): $got != $want" }
     }
-    "{0}: {1} cells written, {2} differ{3}" -f [IO.Path]::GetFileName($p), $s.values.Count, $bad.Count, $(if ($bad.Count) { ' | ' + ($bad -join '; ') } else { '' })
+    if ($null -ne $s.add_sheet) {
+      $ns = $wb.Worksheets.Item($s.add_sheet.name)
+      foreach ($v in $s.add_sheet.values) {
+        if ($null -eq $v[1] -or ($v[1] -is [string] -and $v[1].StartsWith('='))) { continue }
+        $got = $ns.Range($v[0]).Value2
+        $gn = 0.0; $wn = 0.0
+        if ([double]::TryParse("$got", [ref]$gn) -and [double]::TryParse("$($v[1])", [ref]$wn) -and [math]::Abs($gn - $wn) -lt 1e-9) { continue }
+        if ("$got" -ne "$($v[1])") { $bad += "$($s.add_sheet.name)!$($v[0]): $got != $($v[1])" }
+      }
+    }
+    $n = $s.values.Count + $(if ($null -ne $s.add_sheet) { $s.add_sheet.values.Count } else { 0 })
+    "{0}: {1} cells written, {2} differ{3}" -f [IO.Path]::GetFileName($p), $n, $bad.Count, $(if ($bad.Count) { ' | ' + ($bad -join '; ') } else { '' })
     $wb.Close($false)
   }
 } finally {

@@ -7,9 +7,107 @@ using System.Collections.Generic;
 // (the server's ContractHandlers.BonusPoints; 0–5 still means +3 to that stat).
 public static class Ma9MContractPoints
 {
-	public const int PerRenewal = 3;
+	public const int CardPoints = 3;
 
-	private static readonly List<int> s_picks = new List<int>(PerRenewal);
+	// FA 선수카드 (systems session, 2026-11-15; user 18:3x via the engine session: "계약 연장 시 한 번에 14일씩 증가 … 계약 연장때마다 5의
+	// 보너스 스탯"): an FA card's renewal has five points and 14 days (server ContractHandlers.FaBonusPerRenewal / FaExtendDays). The
+	// screens say which card it is (ForCard) before its points go; its request byte is the index of the five-point split (FaSplits,
+	// the server's order), as a byte cannot hold both kinds of code.
+	public const int FaPoints = 5;
+
+	public const int CardDays = 7;
+
+	public const int FaDays = 14;
+
+	public const int FaTeam = 250;
+
+	public static bool Fa;
+
+	public static int PerRenewal
+	{
+		get
+		{
+			return Fa ? FaPoints : CardPoints;
+		}
+	}
+
+	public static bool IsFa(int cardIdx)
+	{
+		TableReader.TRRow_PlayerCard card = (ResourceManager.g_playerTable != null) ? ResourceManager.g_playerTable.FindPlayer(cardIdx) : null;
+		return card != null && card.teamcode == FaTeam;
+	}
+
+	// Days a renewal adds to this card.
+	public static int ExtendDaysFor(int cardIdx)
+	{
+		return IsFa(cardIdx) ? FaDays : CardDays;
+	}
+
+	// The card whose renewal is being set up: its kind, no points yet.
+	public static void ForCard(int cardIdx)
+	{
+		Fa = IsFa(cardIdx);
+		s_picks.Clear();
+	}
+
+	// Every split of FaPoints over the six stats: a ascending, then b, … each 0..what is left, the last stat the rest (the server's
+	// ContractHandlers.Splits). 252 of them.
+	private static int[][] s_faSplits;
+
+	private static int[][] FaSplits
+	{
+		get
+		{
+			if (s_faSplits == null)
+			{
+				List<int[]> list = new List<int[]>();
+				int[] cur = new int[6];
+				FillSplits(list, cur, 0, FaPoints);
+				s_faSplits = list.ToArray();
+			}
+			return s_faSplits;
+		}
+	}
+
+	private static void FillSplits(List<int[]> list, int[] cur, int k, int left)
+	{
+		if (k == 5)
+		{
+			cur[5] = left;
+			list.Add((int[])cur.Clone());
+			return;
+		}
+		for (int v = 0; v <= left; v++)
+		{
+			cur[k] = v;
+			FillSplits(list, cur, k + 1, left - v);
+		}
+	}
+
+	private static byte FaCode()
+	{
+		int[] counts = new int[6];
+		for (int i = 0; i < s_picks.Count; i++)
+		{
+			counts[s_picks[i]]++;
+		}
+		int[][] splits = FaSplits;
+		for (int s = 0; s < splits.Length; s++)
+		{
+			bool same = true;
+			for (int k = 0; k < 6 && same; k++)
+			{
+				same = splits[s][k] == counts[k];
+			}
+			if (same)
+			{
+				return (byte)s;
+			}
+		}
+		return byte.MaxValue;
+	}
+
+	private static readonly List<int> s_picks = new List<int>(FaPoints);
 
 	// What the last renewal request gave each stat, for the screens to update their copy on success.
 	public static int[] Sent = new int[6];
@@ -67,19 +165,31 @@ public static class Ma9MContractPoints
 		return n;
 	}
 
-	// The request byte (255 until all three are placed).
+	// The request byte (255 until all the points are placed).
 	public static byte Code
 	{
 		get
 		{
-			return Full ? ((byte)(32 + s_picks[0] * 36 + s_picks[1] * 6 + s_picks[2])) : byte.MaxValue;
+			if (!Full)
+			{
+				return byte.MaxValue;
+			}
+			return Fa ? FaCode() : ((byte)(32 + s_picks[0] * 36 + s_picks[1] * 6 + s_picks[2]));
 		}
 	}
 
-	// Points per stat in a request byte: 0–5 = +3 to that stat, 32–247 = the three single points.
+	// Points per stat in a request byte: 0–5 = +3 to that stat, 32–247 = the three single points; for an FA card (Fa) the split's index.
 	public static int[] Decode(byte code)
 	{
 		int[] points = new int[6];
+		if (Fa)
+		{
+			if (code < FaSplits.Length)
+			{
+				points = (int[])FaSplits[code].Clone();
+			}
+			return points;
+		}
 		if (code < 6)
 		{
 			points[code] = PerRenewal;

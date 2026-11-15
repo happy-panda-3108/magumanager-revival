@@ -42,7 +42,27 @@ public static class Ma9MSortMemory
 	}
 
 	// Clubs with cards in this game, for the team picks (1993-2026 since 2026-11-02: OB 10, 빙그레 14 and 태평양 15 joined).
-	public static readonly int[] CardTeams = new int[16] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 19 };
+	// FA 선수카드 (2026-11-15): team 250 (eTeamName.FA) last, so a club pick no longer hides them all and they can be picked.
+	public static readonly int[] CardTeams = new int[17] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 19, 250 };
+
+	// An FA card (team 250, idx 7,000,000 + the source card's) also counts for its source card's club in the team picks and
+	// 제외 (systems session's ask, 2026-11-15: "LG만" shows the LG players' FA cards too); -1 for other cards.
+	public const int FaIdxBase = 7000000;
+
+	public static int FaSourceTeam(int idx)
+	{
+		if (idx < FaIdxBase || idx >= FaIdxBase + 1000000)
+		{
+			return -1;
+		}
+		TRRow_PlayerCard src = ResourceManager.g_playerTable.FindPlayer(idx - FaIdxBase);
+		return (src != null && src.teamcode != (int)eTeamName.FA) ? src.teamcode : -1;
+	}
+
+	public static bool TeamIn(ICollection<int> teams, TRRow_PlayerCard card)
+	{
+		return card != null && (teams.Contains(card.teamcode) || (card.teamcode == (int)eTeamName.FA && teams.Contains(FaSourceTeam(card.idx))));
+	}
 
 	private const string Prefix = "Ma9M_Sort/";
 
@@ -211,7 +231,7 @@ public static class Ma9MSortMemory
 
 		public bool Excluded(TRRow_PlayerCard card)
 		{
-			return card != null && (ExBalls.Contains(card.ball) || ExTeams.Contains(card.teamcode));
+			return card != null && (ExBalls.Contains(card.ball) || TeamIn(ExTeams, card));
 		}
 
 		public static void Toggle(HashSet<int> set, int v)
@@ -445,7 +465,7 @@ public static class Ma9MSortMemory
 		case SortPopup.eSortType.Ball:
 			return v + "볼";
 		case SortPopup.eSortType.Team:
-			return (v >= 0 && v < namestring_KR.teams.Length) ? namestring_KR.teams[v] : v.ToString();
+			return (v == (int)eTeamName.FA) ? "FA" : (v >= 0 && v < namestring_KR.teams.Length) ? namestring_KR.teams[v] : v.ToString();
 		case SortPopup.eSortType.Year:
 			return "'" + (v % 100).ToString("00");
 		case SortPopup.eSortType.Position:

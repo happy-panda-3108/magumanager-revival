@@ -106,7 +106,7 @@ namespace Ma9MServer
 			foreach (int idx in lineup.Batters.Take(9).Concat(lineup.Pitchers).Where(i => i != 0 && !seen.Contains(i) && !expired.Contains(i)))
 			{
 				CardInfo info = s_catalog.Get(idx);
-				if (info == null || CoachCatalog.Line(info.TeamCode) != club || ConsultSteps(user, idx, now) > 0) continue;
+				if (info == null || !CoachCatalog.InLine(info, club) || ConsultSteps(user, idx, now) > 0) continue;
 				int condition = Condition.For(user, idx, now);
 				if (condition < 3) continue;
 				bool slump = league != null && Slumping(user, league.Season, idx);
@@ -117,7 +117,7 @@ namespace Ma9MServer
 				// Test servers (user 11-04: "컨디션 나쁨 또는 매우 나쁨인 선수만 등장하게 합시다"): too few by the rules, so more of the
 				// club's 1군 are made 나쁨 or 매우 나쁨 for a day (TestLow) and come by the rules; never anyone else.
 				List<int> fine = lineup.Batters.Take(9).Concat(lineup.Pitchers).Where(i => i != 0 && !seen.Contains(i) && !expired.Contains(i)
-					&& s_catalog.Get(i) is CardInfo ci && CoachCatalog.Line(ci.TeamCode) == club && ConsultSteps(user, i, now) == 0 && pool.All(p => p.card != i)).Distinct().ToList();
+					&& s_catalog.Get(i) is CardInfo ci && CoachCatalog.InLine(ci, club) && ConsultSteps(user, i, now) == 0 && pool.All(p => p.card != i)).Distinct().ToList();
 				while (pool.Count < room && fine.Count > 0)
 				{
 					int k = s_rng.Next(fine.Count), idx = fine[k];
@@ -216,7 +216,7 @@ namespace Ma9MServer
 			foreach ((string slot, int idx) in slots.Where(s => s.idx != 0))
 			{
 				CardInfo info = s_catalog.Get(idx);
-				int cardLine = info == null ? -1 : CoachCatalog.Line(info.TeamCode);
+				int cardLine = info == null ? -1 : info.IsFA ? line : CoachCatalog.Line(info.TeamCode);
 				bool bench = slot.StartsWith("후보");
 				bool expired = owned.TryGetValue(idx, out TeamCard tc) && tc.RemainContract == 0;
 				int condition = Condition.For(user, idx, now), baseLevel = Condition.Base(user, idx, now);

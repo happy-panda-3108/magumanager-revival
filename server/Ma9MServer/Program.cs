@@ -29,6 +29,7 @@ namespace Ma9MServer
 			GameLoop loop = new GameLoop();
 			LoginHandlers.Register(loop, db, Path.Combine(dataDir, "ma9m.db"));  // + TokenStore: tokens survive a restart
 			LobbyHandlers.Register(loop);
+			AdviceHandlers.Loop = loop;  // 특성 추천: games off the loop, reply posted back (systems session, 2026-11-15)
 			CardCatalog catalog = CardCatalog.Load(Path.Combine(dataDir, "tables"));
 			RosterHandlers.Register(loop, db, catalog);
 			// 선발 5경기 제한 (systems session, 2026-11-09): the roster save and screen read it.
@@ -60,6 +61,11 @@ namespace Ma9MServer
 			{
 				// Dev: the common league calendar through one whole cycle (postseason, close, next league); use a copy.
 				Environment.Exit(PostseasonSelfTest.Run(db, gameData, Path.Combine(dataDir, "ma9m.db")));
+			}
+			if (Array.IndexOf(args, "--balltest") >= 0)
+			{
+				// Dev (systems session, 2026-11-15): 공인구 draws, storage and popup text (SeasonBall); use a copy.
+				Environment.Exit(SeasonBall.SelfTest(Path.Combine(dataDir, "ma9m.db")));
 			}
 			if (Array.IndexOf(args, "--championstest") >= 0)
 			{
@@ -162,6 +168,17 @@ namespace Ma9MServer
 				// Dev (systems session, 2026-11-08): 레전드 1군 limit, 레전드 선수팩, 레전드 조합, on tables holding the 레전드 rows (LegendSelfTest).
 				Environment.Exit(LegendSelfTest.Run(catalog, db, Path.Combine(dataDir, "ma9m.db")));
 			}
+			if (Array.IndexOf(args, "--fatest") >= 0)
+			{
+				// Dev (systems session, 2026-11-15): FA 선수카드 (1군 limits, 팀컬러, album pages, FA 시장) on tables holding the FA rows; signs
+				// for the test team, so a copy only (FaSelfTest).
+				if (Path.GetFullPath(dataDir).TrimEnd('\\', '/').Equals(@"C:\Ma9MProject\server\data", StringComparison.OrdinalIgnoreCase))
+				{
+					ServerLog.Warn("--fatest writes to the DB: run it on a copy of the data directory");
+					Environment.Exit(2);
+				}
+				Environment.Exit(FaSelfTest.Run(catalog, db, Path.Combine(dataDir, "ma9m.db")));
+			}
 			if (Array.IndexOf(args, "--autoexhtest") >= 0)
 			{
 				// Dev (systems session, 2026-11-03): 새벽 자동 시범경기 on a fake clock (ExhibitionAuto.cs); writes, so a copy only.
@@ -205,6 +222,14 @@ namespace Ma9MServer
 				// Dev (engine session, 2026-11-11): 자동 편성 for "<team name>" [keep] (LeagueService.AutoLineup); on a copy of the data.
 				bool keepColour = autoLineup + 2 < args.Length && args[autoLineup + 2] == "keep";
 				Environment.Exit(LeagueService.AutoLineupTest(args[autoLineup + 1], keepColour, Path.Combine(dataDir, "ma9m.db")));
+			}
+			int runEnv = Array.IndexOf(args, "--runenv");
+			if (runEnv >= 0)
+			{
+				// Dev (engine session, 2026-11-15, 챔피언스 타고투저): every league's runs a game, live and with one part changed
+				// (condition, development, traits, the league reference); read-only, use a copy with the live server's settings
+				// (MA9M_COACH=1 …). [rounds] after the flag.
+				Environment.Exit(LeagueService.RunEnvTest(runEnv + 1 < args.Length && int.TryParse(args[runEnv + 1], out int re) ? re : 40));
 			}
 			if (Array.IndexOf(args, "--coachtest") >= 0)
 			{

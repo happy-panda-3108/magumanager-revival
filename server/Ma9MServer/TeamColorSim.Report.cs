@@ -168,7 +168,10 @@ namespace Ma9MServer
 		private static readonly double[] BatWorth = { 1.0, 0.85, 0.15, 0.75, 0.15, 0.1 };
 		private static readonly double[] PitWorth = { 0.1, 0.55, 0.6, 0.7, 1.0, 0.1 };
 
-		private static TeamCard DevelopCard(Cand c, bool catcher)
+		// renewal: the points one 재계약 gives (FA 선수카드: 5, user 2026-11-15 "계약 연장때마다 5의 보너스 스탯", six times as others).
+		// lectureMain / slotGain / stack (FA cards in the books, 2026-11-15): the users' books take 특강 main +5 (행운권·초기화권) and
+		// three 트레이닝 slots of +6 (IV book + coach) that may share a stat (25LG 박해민 컨택 +18).
+		private static TeamCard DevelopCard(Cand c, bool catcher, int renewal = DevRenewal, int lectureMain = DevLectureMain, int slotGain = DevSlotGain, bool stack = false)
 		{
 			TeamCard d = new TeamCard { Idx = c.Info.Idx };
 			for (int k = 0; k < 6; k++) d.TeamColor[k] = DevTeamColour;
@@ -201,7 +204,7 @@ namespace Ma9MServer
 				double bestGain = 0;
 				foreach (LessonHandlers.Coach co in (bat ? LessonHandlers.Batting : LessonHandlers.Pitching).Where(co => LessonHandlers.Eligible(co, c.Info)))
 				{
-					double gain = DevLectureMain * Worth(co.Main, DevLectureMain) + DevLectureSub * (Worth(co.Sub1, DevLectureSub) + Worth(co.Sub2, DevLectureSub));
+					double gain = lectureMain * Worth(co.Main, lectureMain) + DevLectureSub * (Worth(co.Sub1, DevLectureSub) + Worth(co.Sub2, DevLectureSub));
 					if (gain > bestGain)
 					{
 						bestGain = gain;
@@ -210,20 +213,20 @@ namespace Ma9MServer
 				}
 				if (best != null)
 				{
-					d.Educated[best.Main] += DevLectureMain;
+					d.Educated[best.Main] += (sbyte)lectureMain;
 					d.Educated[best.Sub1] += DevLectureSub;
 					d.Educated[best.Sub2] += DevLectureSub;
 				}
 			}
 			for (int r = 0; r < DevRenewals; r++)
 			{
-				int k = Enumerable.Range(0, 6).OrderByDescending(j => Worth(j, DevRenewal)).First();
-				d.Contract[k] += DevRenewal;
+				int k = Enumerable.Range(0, 6).OrderByDescending(j => Worth(j, renewal)).First();
+				d.Contract[k] += (sbyte)renewal;
 			}
 			for (int slot = 0; slot < DevSlots; slot++)
 			{
-				int k = Enumerable.Range(0, 6).Where(j => d.Training[j] == 0).OrderByDescending(j => Worth(j, DevSlotGain)).First();
-				d.Training[k] = DevSlotGain;
+				int k = Enumerable.Range(0, 6).Where(j => stack || d.Training[j] == 0).OrderByDescending(j => Worth(j, slotGain)).First();
+				d.Training[k] += (sbyte)slotGain;
 			}
 			return d;
 		}

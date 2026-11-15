@@ -222,14 +222,15 @@ namespace Ma9MServer
 
 		public static List<AiTeam> Decks(int tier) => s_teams.Values.Where(t => t.Tier == tier && IsDeck(t)).OrderBy(t => t.Slot).ToList();
 
-		// The team-year a deck or a team's 1군 is built from: the most common (year, club) of its cards.
-		public static (int year, int team) TeamYearOf(IEnumerable<int> cards) => cards.Select(s_catalog.Get).Where(x => x != null)
+		// The team-year a deck or a team's 1군 is built from: the most common (year, club) of its cards (FA cards, club 250, left out
+		// since 2026-11-15: they belong to no team-year).
+		public static (int year, int team) TeamYearOf(IEnumerable<int> cards) => cards.Select(s_catalog.Get).Where(x => x != null && !x.IsFA)
 			.GroupBy(x => (x.Year, x.TeamCode)).OrderByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault();
 
 		public static (int year, int team) TeamYearOf(AiTeam deck) => TeamYearOf(Cards(deck).Select(x => x.Idx));
 
 		// Every team-year a team's 1군 leans on (at least min of its cards; a '12/'15 삼성 mix has two).
-		public static HashSet<(int year, int team)> TeamYearsOf(IEnumerable<int> cards, int min = 5) => cards.Select(s_catalog.Get).Where(x => x != null)
+		public static HashSet<(int year, int team)> TeamYearsOf(IEnumerable<int> cards, int min = 5) => cards.Select(s_catalog.Get).Where(x => x != null && !x.IsFA)
 			.GroupBy(x => (x.Year, x.TeamCode)).Where(g => g.Count() >= min).Select(g => g.Key).ToHashSet();
 
 		// Builds a tier's deck pool once (kept in league_ai_team): RuleOf(tier)'s ranks of the team-year decks.

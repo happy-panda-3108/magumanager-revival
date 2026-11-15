@@ -92,6 +92,32 @@ namespace Ma9MServer
 			[140] = new[] { ("필승조전체", 5.4) },
 		};
 
+		// 특성 값 실제 덱 기준 (systems session, 2026-11-15; user 03:2x "특성 수정 이후에는 타자 특성이 되게 유리한 것 같은데 맞나??",
+		// 04:0x "가 추천안으로 한 번 가보자고"): V2 was met on average rosters at neutral tactics; on the real clubs' 1군 with their
+		// own tactics the whole batting tree beat the whole pitching tree by 1.2-3.2%p (docs\특성균형_1115.md): 주력·도루 (102·105·
+		// 111·113) with 도루 적극 played up to 2.5 times their tier, most pitcher traits below it. V3 = V2 × these shares, from
+		// each trait alone at its max on the 9 clubs whose win share with no traits is 30-85% (median, 3,000 games against each
+		// other club, one by one; tools\scripts\systems\trait_rescale.py --base 30:85 --median --keep-batting): the batting tree's
+		// total as it was, each trait at its tier's share of it, the pitching tree 1.1 times it again. On with MA9M_TRAIT_V3=1
+		// (needs V2).
+		// Measured again 11-15 afternoon (engine session's request after the league reference moved to the designed 5.00 R/G,
+		// RefBatDelta 0.5/5/1.5): the same run on 10 clubs. 123 체력 and 132 선발 투구 한계 kept at 1.48: on some clubs they cost
+		// wins whatever the scale (starters left in longer than the bullpen would pitch; the pull logic, engine session). Whole trees
+		// on 5 clubs (SKY마토, SKY승환, 행복한현대, 기댓값레이더스, AI테스터): pitching minus batting +0.31%p on average with the old
+		// shares, +0.04%p with these (기댓값레이더스 left out: −6.3 / −6.9, its 123·132 below zero).
+		public static readonly bool V3 = V2 && Environment.GetEnvironmentVariable("MA9M_TRAIT_V3") == "1";
+
+		private static readonly Dictionary<int, double> ShareV3 = new Dictionary<int, double>
+		{
+			[101] = 0.93, [102] = 0.89, [103] = 1.00, [104] = 1.46, [105] = 0.66, [106] = 1.04, [107] = 1.27, [110] = 1.12,
+			[111] = 0.89, [112] = 1.19, [113] = 1.41, [114] = 0.80, [115] = 1.19, [118] = 0.87, [120] = 1.26,
+			[121] = 1.31, [122] = 1.45, [123] = 1.48, [124] = 1.10, [125] = 0.94, [126] = 1.23, [127] = 0.86, [130] = 1.33,
+			[131] = 1.23, [132] = 1.48, [133] = 1.21, [134] = 1.43, [135] = 1.40, [138] = 1.46, [140] = 1.36,
+		};
+
+		private static readonly Dictionary<int, (string key, double value)[]> PerPointV3 = PerPointV2.ToDictionary(
+			kv => kv.Key, kv => kv.Value.Select(p => (p.key, p.value * ShareV3.GetValueOrDefault(kv.Key, 1.0))).ToArray());
+
 		// Dev (engine session, 2026-11-11, 특성 세기 다시 맞추기): MA9M_TRAIT_SCALE="103:0.29,124:0.3" plays those traits' per-point
 		// amounts times the share (tests on data copies only).
 		private static readonly Dictionary<byte, double> s_scale = (Environment.GetEnvironmentVariable("MA9M_TRAIT_SCALE") ?? string.Empty)
@@ -113,7 +139,7 @@ namespace Ma9MServer
 			Effect e = new Effect();
 			foreach ((byte index, byte p) in points)
 			{
-				if (!(V2 ? PerPointV2 : PerPoint).TryGetValue(index, out (string key, double value)[] parts))
+				if (!(V3 ? PerPointV3 : V2 ? PerPointV2 : PerPoint).TryGetValue(index, out (string key, double value)[] parts))
 				{
 					continue;
 				}

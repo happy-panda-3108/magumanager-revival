@@ -74,7 +74,7 @@ namespace Ma9MServer
 				}
 				HashSet<int> owned = s_db.GetCards(code).Select(c => c.Idx).ToHashSet();
 				Lineup lineup = s_db.GetLineup(code);
-				if (lineup == null || !lineup.IsValid(owned))
+				if (lineup == null || !lineup.IsValid(owned) || FaProblem(lineup) != null)
 				{
 					s_db.SaveLineup(code, LineupBuilder.Build(LegendLimited(owned), s_catalog));
 					ServerLog.Info($"team {code}: lineup rebuilt");
@@ -262,6 +262,17 @@ namespace Ma9MServer
 				popup.Messages.array = new[] { new PLongString { str = "레전드 카드" }, new PLongString { str = legendProblem } };
 				session.Send(popup);
 			}
+			// FA 선수카드 (systems session, 2026-11-15; FaProblem): one FA card and one card of a player. The batter step (the app saves
+			// batters, then pitchers) checks the batters alone, so an FA batter can take an FA pitcher's place in one edit.
+			string faProblem = ok ? FaProblem(candidate, reply is Ma9MPacket.PKS_SC_APPLY_ROSTER_BATTER) : null;
+			if (faProblem != null)
+			{
+				ok = false;
+				Ma9MPacket.PKS_SC_POPUP popup = new Ma9MPacket.PKS_SC_POPUP();
+				popup.Type.n = 1;
+				popup.Messages.array = new[] { new PLongString { str = faProblem.StartsWith(SamePlayerHead, StringComparison.Ordinal) ? "같은 선수" : "FA 선수" }, new PLongString { str = faProblem } };
+				session.Send(popup);
+			}
 			// 선발 5경기 제한 (SpBlock, user 2026-11-09): a pitcher taken out of the starters may not go back for 5 league games.
 			// The client keeps him out already (sp_blocked); this is for a stale screen.
 			Lineup stored = s_db.GetLineup(session.Team.UserCode);
@@ -324,7 +335,7 @@ namespace Ma9MServer
 			{
 				return "특별수강 중인 선수가 들어 있어 쓸 수 없습니다. 다시 계산해 주세요.";
 			}
-			string legend = LegendProblem(lineup);
+			string legend = LegendProblem(lineup) ?? FaProblem(lineup);
 			if (legend != null)
 			{
 				return legend;
@@ -361,17 +372,63 @@ namespace Ma9MServer
 				+ string.Join(", ", (bats.Count > MaxLegendBatters ? bats : new List<CardInfo>()).Concat(arms.Count > MaxLegendPitchers ? arms : new List<CardInfo>()).Select(c => c.Name));
 		}
 
-		// The cards with any 레전드 over the limit left out (the higher ball, then Overall, kept), for lineups the server builds.
+		// The cards with any 레전드 over the limit left out (the higher ball, then Overall, kept), for lineups the server builds; since
+		// 2026-11-15 also an FA over its limit and a second card of a player (FaLimited).
 		public static IEnumerable<int> LegendLimited(IEnumerable<int> cards)
 		{
 			List<int> list = cards.ToList();
 			List<CardInfo> legends = list.Select(i => s_catalog?.Get(i)).Where(c => c != null && c.IsLegend).ToList();
-			if (legends.Count == 0) return list;
+			if (legends.Count == 0) return FaLimited(list);
 			HashSet<int> keep = legends.Where(c => c.IsBatter).OrderByDescending(c => c.Ball).ThenByDescending(c => c.Overall).Take(MaxLegendBatters)
 				.Concat(legends.Where(c => !c.IsBatter).OrderByDescending(c => c.Ball).ThenByDescending(c => c.Overall).Take(MaxLegendPitchers))
 				.Select(c => c.Idx).ToHashSet();
 			HashSet<int> drop = legends.Select(c => c.Idx).Where(i => !keep.Contains(i)).ToHashSet();
-			return list.Where(i => !drop.Contains(i)).ToList();
+			return FaLimited(list.Where(i => !drop.Contains(i)).ToList());
+		}
+
+		// FA 선수카드 (user, 2026-11-15 via the engine session: "팀마다 1명 영입해 쓰고"; the original client's Roster_Regist_ErrorMsg_FAOver
+		// "FA카드는 최대 한장까지 등록 가능합니다"): at most CardInfo.MaxFaInFirstTeam FA cards in the 1군 (all 25), and one card of a player
+		// (batter or pitcher by sidx; an FA card has its source card's sidx). The app checked the player only on its own screen
+		// (Roster_PlayerMap_Change_DuplicatePlayer), so a lineup the server builds or a stale screen could hold him twice; no live
+		// 1군 did on 11-15. battersOnly: the roster's batter step, checked against the batters alone (see Save).
+		public const string SamePlayerHead = "같은 선수의 카드는";
+
+		public static string FaProblem(Lineup l, bool battersOnly = false)
+		{
+			List<CardInfo> cards = (battersOnly ? l.Batters : l.Batters.Concat(l.Pitchers)).Where(i => i != 0).Distinct()
+				.Select(i => s_catalog?.Get(i)).Where(c => c != null).ToList();
+			List<CardInfo> fa = cards.Where(c => c.IsFA).ToList();
+			if (fa.Count > CardInfo.MaxFaInFirstTeam)
+			{
+				return $"1군에는 FA 선수를 {CardInfo.MaxFaInFirstTeam}명까지 넣을 수 있습니다.\n" + string.Join(", ", fa.Select(c => c.Name));
+			}
+			List<CardInfo> twice = cards.GroupBy(c => (c.IsBatter, c.Sidx)).Where(g => g.Count() > 1).SelectMany(g => g).ToList();
+			if (twice.Count > 0)
+			{
+				return $"{SamePlayerHead} 1군에 한 장만 넣을 수 있습니다.\n" + string.Join(", ", twice.Select(c => $"'{c.Year % 100:00} {c.Name}{(c.IsFA ? "(FA)" : string.Empty)}"));
+			}
+			return null;
+		}
+
+		// The cards with an FA over the limit and a second card of a player left out (for lineups the server builds): of one player
+		// the original card before its FA copy (the same stats; the FA place stays free), then the higher ball, then Overall; of
+		// the FA cards the higher ball, then Overall.
+		private static List<int> FaLimited(List<int> list)
+		{
+			List<CardInfo> infos = list.Select(i => s_catalog?.Get(i)).Where(c => c != null).ToList();
+			HashSet<int> drop = new HashSet<int>();
+			foreach (IGrouping<(bool, int), CardInfo> g in infos.GroupBy(c => (c.IsBatter, c.Sidx)).Where(g => g.Count() > 1))
+			{
+				foreach (CardInfo c in g.OrderBy(c => c.IsFA).ThenByDescending(c => c.Ball).ThenByDescending(c => c.Overall).Skip(1))
+				{
+					drop.Add(c.Idx);
+				}
+			}
+			foreach (CardInfo c in infos.Where(c => c.IsFA && !drop.Contains(c.Idx)).OrderByDescending(c => c.Ball).ThenByDescending(c => c.Overall).Skip(CardInfo.MaxFaInFirstTeam))
+			{
+				drop.Add(c.Idx);
+			}
+			return drop.Count == 0 ? list : list.Where(i => !drop.Contains(i)).ToList();
 		}
 
 		private static void ConditionItemAmount(GameSession session, Ma9MPacket.PKS_CS_CONDITION_SHUFFLE_GET_ITEM_AMOUNT packet)

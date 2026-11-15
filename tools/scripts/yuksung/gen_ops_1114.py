@@ -16,13 +16,19 @@ exec(open(os.path.join(HERE, "book_dev.py"), encoding="utf-8").read().split('if 
 DB = "file:C:/Ma9MProject/server/data/ma9m.db?mode=ro"
 TABLES = r"C:\Ma9MProject\server\data\tables"
 N = "50.50.50.50.50"
-LEGEND = {"이대호": "800201", "최동원": "800101", "조규제": "800108"}
+LEGEND = {"이대호": "800201", "최동원": "800101", "조규제": "800108", "박용택": "800203", "김용수": "800103"}
 ROLE = {"선발": "SP", "중계": "RP", "셋업": "SU", "마무리": "CP"}
 DECKS = {
     "2024 롯데": (r"C:\Ma9MProject\docs\육성표\한셀_1113_24롯데\육성표_1113_24롯데.cell", 9),
     "2001 롯데": (r"C:\Ma9MProject\docs\육성표\한셀_1110_레전드\육성표_1110_01롯데_레전드.cell", 7),
     "1997 쌍방울": (r"C:\Ma9MProject\docs\육성표\한셀_1110_레전드\육성표_1110_97쌍방울_레전드.cell", 16),
+    # 2026-11-15 (user 03:2x "지금 25LG 최종 육성표를 저장했으니 25LG의 작전실 및 개인 작전도 알려줘"): SKY해민.
+    "2025 LG": (r"C:\Ma9MProject\docs\육성표\한셀_1110_레전드\육성표_1110_25LG_레전드.cell", 11),
 }
+# OPS_DECKS="2025 LG,…" picks the decks to write (all when unset); OPS_TAG names the env file (ops<TAG>A_env.txt / ops<TAG>B_env.txt).
+if os.environ.get("OPS_DECKS"):
+    DECKS = {k: v for k, v in DECKS.items() if k in os.environ["OPS_DECKS"].split(",")}
+TAG = os.environ.get("OPS_TAG", "1114")
 
 
 def fnum(x):
@@ -86,8 +92,12 @@ def read_deck(deck):
     off, dfn = db.execute("SELECT offense, defense FROM team_operation WHERE user_code = ?", (user,)).fetchone() or (None, None)
     saved = [f"B={'.'.join(str(v) for v in off)}" if off else f"B={N}", f"P={'.'.join(str(v) for v in dfn)}" if dfn else f"P={N}"]
     # Only the 1군's own cards (by card number: an old 조규제 card's setting is not the 레전드 조규제's).
+    # 2026-11-15: also the book's non-레전드 players who are not in the saved 1군 yet (25LG RP4 이정용), by name.
+    booked = {x["token"] for x in bats + pits if not x["token"].split("@")[0].isdigit()}
+    booked = {t.split("@")[0] for t in booked}
     for i, ops in db.execute("SELECT card_idx, ops FROM card_operation WHERE user_code = ?", (user,)):
-        if i in first:
+        if i in first or (not 800000 <= i < 900000 and names.get(i) in booked and i not in first and
+                          not any(names.get(j) == names.get(i) for j in first)):
             saved.append(f"O{token_of(i)}={'.'.join(str(v) for v in ops)}")
     return {"bats": bats, "pits": pits, "bench": bench, "saved": "|".join(saved)}
 
@@ -185,9 +195,9 @@ if __name__ == "__main__":
         print("  묶음", {k: v for k, v in g.items() if k not in ("sp", "rp")})
     mode = sys.argv[1] if len(sys.argv) > 1 else "A"
     if mode == "A":
-        write(os.path.join(HERE, "ops1114A_env.txt"), {deck: round_a(d) for deck, d in data.items()},
+        write(os.path.join(HERE, f"ops{TAG}A_env.txt"), {deck: round_a(d) for deck, d in data.items()},
               "2026-11-14 round A: saved, neutral, two bases, groups, team 도루 steps on the edited books (gen_ops_1114.py A)", data)
     else:
         scope = {"data": data, "groups": groups, "own": own, "N": N}
         exec(open(sys.argv[2], encoding="utf-8").read(), scope)
-        write(os.path.join(HERE, "ops1114B_env.txt"), scope["ROUND"], scope.get("NOTE", "round B"), data)
+        write(os.path.join(HERE, f"ops{TAG}B_env.txt"), scope["ROUND"], scope.get("NOTE", "round B"), data)

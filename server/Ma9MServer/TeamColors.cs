@@ -318,6 +318,15 @@ namespace Ma9MServer
 		private static (int group, int count) BestGroup(Kind kind, List<CardInfo> cards)
 		{
 			if (cards.Count == 0) return (0, 0);
+			// FA 선수카드 (user, 2026-11-15 via the engine session: "팀컬러를 깨지 않고", a key card to cover a weak spot; 19:4x, this
+			// session: "해당 년도 세트덱을 사용할 때 해당 년도의 FA선수를 쓸 수 있고, 20년대 롯데 << 이런 세트덱에는 20년대 FA 다 사용 가능 …
+			// 년도 조건을 타는 조커 카드다"): an FA card is of any club but its own season (IsMember), so the groups come from the other
+			// cards and each counts the FA cards that meet its season (FaGroup).
+			if (cards.Any(c => c.IsFA))
+			{
+				List<CardInfo> rest = cards.Where(c => !c.IsFA).ToList();
+				return rest.Count == 0 ? (0, 0) : FaGroup(kind, rest, cards.Where(c => c.IsFA).ToList());
+			}
 			// 레전드 카드 (user, 2026-11-08: "레전드 카드는 같은 팀 구단 팀컬러에서 년도 영향을 안 받으니, 01롯데 세트덱에 선발 1명을 빼고
 			// 최동원을 넣는다던가"; lineages asked the same evening: "계보로 묶기"): a 레전드 joins any season's group of its club's
 			// lineage, so the groups come from the other cards and each takes the 레전드 of its line (LegendGroup).
@@ -376,6 +385,50 @@ namespace Ma9MServer
 			}
 		}
 
+		// BestGroup with FA cards: every group the other cards make (a 레전드 with its line, IsMember), each scored with every card
+		// that is its member, the FA cards of its season among them; the most members, then the later season / the lower line.
+		// The dual kinds keep the other cards' pair (DualReach does their grades).
+		private static (int group, int count) FaGroup(Kind kind, List<CardInfo> rest, List<CardInfo> fa)
+		{
+			(int group, int count) plain = BestGroup(kind, rest);
+			int Joining(int group) => fa.Count(f => IsMember(kind, group, f));
+			List<CardInfo> normal = rest.Where(c => !c.IsLegend).ToList();
+			if (IsDual(kind) || normal.Count == 0)
+			{
+				return plain.count == 0 ? (0, 0) : (plain.group, plain.count + Joining(plain.group));
+			}
+			int Yy(int year) => year % 100;
+			IEnumerable<(int id, int tie)> ids;
+			switch (kind)
+			{
+				case Kind.SingleYearTeam:
+					ids = normal.Select(c => (c.TeamCode * 100 + Yy(c.Year), c.Year));
+					break;
+				case Kind.DualYearTeam:
+					ids = normal.GroupBy(c => Lineage(c.TeamCode)).SelectMany(t =>
+					{
+						List<int> years = t.Select(c => c.Year).Distinct().OrderBy(y => y).ToList();
+						return from i in Enumerable.Range(0, years.Count)
+							from j in Enumerable.Range(i + 1, years.Count - i - 1)
+							select (t.Key * 10000 + Yy(years[i]) * 100 + Yy(years[j]), -t.Key * 10000 + years[j]);
+					});
+					break;
+				case Kind.DecadeTeam:
+					ids = normal.Select(c => (Lineage(c.TeamCode) * 100 + c.Year / 10 % 100, c.Year / 10));
+					break;
+				case Kind.YearAllStar:
+					ids = normal.Select(c => (Yy(c.Year), c.Year));
+					break;
+				default:   // 단일 팀 올스타: no season, every FA card joins
+					ids = rest.Select(c => (Lineage(c.TeamCode), -Lineage(c.TeamCode)));
+					break;
+			}
+			List<CardInfo> all = rest.Concat(fa).ToList();
+			var best = ids.Distinct().Select(x => (x.id, x.tie, n: all.Count(c => IsMember(kind, x.id, c))))
+				.OrderByDescending(x => x.n).ThenByDescending(x => x.tie).ThenByDescending(x => x.id).FirstOrDefault();
+			return best.n > 0 ? (best.id, best.n) : (0, 0);
+		}
+
 		// BestGroup with 레전드 cards: the groups of the other cards (as BestGroup makes them, same tie rules), each counting the
 		// 레전드 of its club's lineage too (단일 년도 올스타: every 레전드, a season of its own not counting).
 		private static (int group, int count) LegendGroup(Kind kind, List<CardInfo> normal, List<CardInfo> legends)
@@ -427,6 +480,21 @@ namespace Ma9MServer
 		private static bool IsMember(Kind kind, int group, CardInfo c)
 		{
 			if (c == null) return false;
+			// An FA card: a joker of any club with its season's condition (BestGroup, user 19:4x): the season's teams, a pair of
+			// seasons with it, its decade, its season's all-stars; the club kinds without a season (team all-stars) take any.
+			if (c.IsFA)
+			{
+				int fyy = c.Year % 100;
+				return kind switch
+				{
+					Kind.SingleYearTeam => fyy == group % 100,
+					Kind.SingleYearDualTeam => fyy == group / 10000,
+					Kind.DualYearTeam => fyy == group / 100 % 100 || fyy == group % 100,
+					Kind.DecadeTeam => c.Year / 10 % 100 == group % 100,
+					Kind.YearAllStar => fyy == group,
+					_ => true
+				};
+			}
 			// A 레전드 card: any season of its club's lineage (LegendGroup).
 			if (c.IsLegend)
 			{
@@ -484,9 +552,12 @@ namespace Ma9MServer
 		private static (int group, int grade, int members) DualReach(int k, int slot, List<CardInfo> cards)
 		{
 			Kind kind = Kinds[k].kind;
-			List<CardInfo> normal = cards.Where(c => !c.IsLegend).ToList();
+			// FA cards (2026-11-15) make no team of their own: counted once, on the smaller side of the pair (GradeOf); for 단일 년도
+			// 듀얼 팀 only those of the pair's season (user 19:4x, a joker with its season's condition).
+			List<CardInfo> fas = cards.Where(c => c.IsFA).ToList();
+			List<CardInfo> normal = cards.Where(c => !c.IsLegend && !c.IsFA).ToList();
 			if (normal.Count == 0) return (0, -1, 0);
-			List<(int group, int a, int b)> pairs = new List<(int, int, int)>();
+			List<(int group, int a, int b, int w)> pairs = new List<(int, int, int, int)>();
 			// Seasons too small even for a hint (a third of the lowest grade since 2026-11-13, Hints) are skipped: 자동 편성 asks
 			// this thousands of times.
 			int floor = (Need(k, slot, 3) + 2) / 3 - (cards.Count - normal.Count);
@@ -496,34 +567,37 @@ namespace Ma9MServer
 				{
 					int yy = season.Key % 100;
 					List<int> teams = season.GroupBy(c => c.TeamCode).OrderByDescending(t => t.Count()).ThenBy(t => t.Key).Take(4).Select(t => t.Key).ToList();
-					Dictionary<int, int> n = teams.ToDictionary(t => t, t => cards.Count(c => IsMember(Kind.SingleYearTeam, t * 100 + yy, c)));
+					Dictionary<int, int> n = teams.ToDictionary(t => t, t => cards.Count(c => !c.IsFA && IsMember(Kind.SingleYearTeam, t * 100 + yy, c)));
+					int w = fas.Count(f => f.Year % 100 == yy);
 					for (int i = 0; i < teams.Count; i++)
 					{
 						for (int j = i + 1; j < teams.Count; j++)
 						{
 							int lo = Math.Min(teams[i], teams[j]), hi = Math.Max(teams[i], teams[j]);
-							pairs.Add((yy * 10000 + lo * 100 + hi, n[lo], n[hi]));
+							pairs.Add((yy * 10000 + lo * 100 + hi, n[lo], n[hi], w));
 						}
 					}
 				}
 			}
 			else
 			{
-				List<int> lines = cards.GroupBy(c => Lineage(c.TeamCode)).OrderByDescending(t => t.Count()).ThenBy(t => t.Key).Take(5).Select(t => t.Key).ToList();
-				Dictionary<int, int> n = lines.ToDictionary(t => t, t => cards.Count(c => IsMember(Kind.TeamAllStar, t, c)));
+				List<int> lines = cards.Where(c => !c.IsFA).GroupBy(c => Lineage(c.TeamCode)).OrderByDescending(t => t.Count()).ThenBy(t => t.Key).Take(5).Select(t => t.Key).ToList();
+				Dictionary<int, int> n = lines.ToDictionary(t => t, t => cards.Count(c => !c.IsFA && IsMember(Kind.TeamAllStar, t, c)));
 				for (int i = 0; i < lines.Count; i++)
 				{
 					for (int j = i + 1; j < lines.Count; j++)
 					{
 						int lo = Math.Min(lines[i], lines[j]), hi = Math.Max(lines[i], lines[j]);
-						pairs.Add((lo * 100 + hi, n[lo], n[hi]));
+						pairs.Add((lo * 100 + hi, n[lo], n[hi], fas.Count));
 					}
 				}
 			}
 			if (pairs.Count == 0) return (0, -1, 0);
-			int GradeOf((int group, int a, int b) p) => Enumerable.Range(0, 4)
-				.Where(g => p.a + p.b >= Need(k, slot, g) && Math.Min(p.a, p.b) >= DualEach(Need(k, slot, g)) && Value(k, slot, g) > 0).DefaultIfEmpty(-1).First();
-			var best = pairs.Select(p => (p.group, grade: GradeOf(p), members: p.a + p.b))
+			// The FA cards go to the smaller side first (then split): the pair's smaller side at most half of all.
+			int Smaller((int group, int a, int b, int w) p) => Math.Min((p.a + p.b + p.w) / 2, Math.Min(p.a, p.b) + p.w);
+			int GradeOf((int group, int a, int b, int w) p) => Enumerable.Range(0, 4)
+				.Where(g => p.a + p.b + p.w >= Need(k, slot, g) && Smaller(p) >= DualEach(Need(k, slot, g)) && Value(k, slot, g) > 0).DefaultIfEmpty(-1).First();
+			var best = pairs.Select(p => (p.group, grade: GradeOf(p), members: p.a + p.b + p.w))
 				.OrderBy(p => p.grade < 0 ? 9 : p.grade).ThenByDescending(p => p.members).ThenByDescending(p => p.group).First();
 			return best;
 		}
@@ -668,6 +742,11 @@ namespace Ma9MServer
 		public static int DualEachFor(int kindIndex, int slot, int grade) => IsDual(Kinds[kindIndex].kind) ? DualEach(Need(kindIndex, slot, grade)) : 0;
 
 		public static int InstanceOf(int kindIndex, int slot, int grade, int group) => Instance(Kinds[kindIndex].kind, slot, grade, group);
+
+		// FaSelfTest: by kind number (1 단일 년도 팀 … 7 듀얼 팀 올스타) and BestGroup's group numbers.
+		internal static bool JoinsForTest(int kind, int group, CardInfo c) => IsMember((Kind)kind, group, c);
+
+		internal static (int group, int count) BestGroupForTest(int kind, List<CardInfo> cards) => BestGroup((Kind)kind, cards);
 
 		public static bool IsMemberOf(int instance, CardInfo c) => instance >= InstanceBase && Parse(instance) is { } e && IsMember(e.kind, instance % 1_000_000, c);
 

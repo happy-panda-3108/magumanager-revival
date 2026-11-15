@@ -42,8 +42,9 @@ public class Ma9MHelp : MonoBehaviour
 			// 2026-11-14 (user: 더블A 140, 트리플A부터 +5; server LeagueRules.BallCap7 from the 11-16 season).
 			"상한: 비기너 120 · 루키 130 · 더블A 140\n트리플A 145 · 메이저 150 · 레전드 155 · 챔피언스 160",
 			"선발에서 뺀 투수는 리그 5경기 동안\n다시 선발로 넣을 수 없습니다.\n" +
-			"레전드 카드는 1군에 타자 1장, 투수 1장까지입니다.\n" +
-			"같은 선수의 카드(레전드 포함)는 1군에 한 장만 됩니다.\n" +
+			// 2026-11-15 FA (server RosterHandlers.FaProblem: one FA card, one card of a player).
+			"레전드는 1군에 타자·투수 1장씩, FA는 1장까지입니다.\n" +
+			"같은 선수의 카드(레전드·FA)는 1군에 한 장만 됩니다.\n" +
 			"수비할 수 없는 자리의 타자는 능력치가 10%,\n보직이 아닌 자리의 투수는 15% 낮아집니다.",
 			// AI 테스터 불편 6·61 (타순 바꾸는 법을 1~5회차에 못 찾음).
 			"타순 바꾸기: 타순 줄을 1초쯤 꾹 누른 채\n다른 줄로 끌면 두 줄의 타순이 맞바뀝니다\n(수비 자리는 그대로).\n" +
@@ -71,7 +72,11 @@ public class Ma9MHelp : MonoBehaviour
 			"7번째부터는 능력치는 오르지 않고\n계약일만 늘어납니다.\n" +
 			"스탯재분배권으로 보너스 점수를 다시 나눌 수 있습니다.",
 			"계약이 끝난 선수는 1군에 있어도\n컨디션 매우 나쁨으로 뜁니다.\n연장하면 보통부터 다시 시작합니다.\n" +
-			"방출하면 볼 × 5천 MP를 돌려받습니다.\n(보관함에 25장은 남아야 합니다.)"
+			"방출하면 볼 × 5천 MP를 돌려받습니다.\n(보관함에 25장은 남아야 합니다.)",
+			// 2026-11-15 FA (user 18:3x·18:46 via the engine session; server ContractHandlers.FaCost / FaBonusPerRenewal).
+			"FA 선수: 영입하면 계약 14일, 연장도 14일씩.\n연장마다 보너스 5점(처음 6번).\n" +
+			"계약금: 1·2·3번째 연장은 영입가의 110·120·130%,\n4번째부터 영입가의 52%로 고정.\n" +
+			"(8볼 1,650만 · 1,800만 · 1,950만 → 780만 MP)"
 		},
 		["Scene_PositionChange"] = () => new[]
 		{
@@ -139,7 +144,9 @@ public class Ma9MHelp : MonoBehaviour
 			"듀얼 년도: 한 구단의 두 해\n연대: 한 구단의 같은 연대(예: 2000~2009)",
 			"등급(S·A·B·C)은 조건에 맞는 인원으로 정해집니다.\n" +
 			"전체: S 25명 · A 19 · B 14 · C 11\n타자진: S 14 · A 11 · B 8 · C 6\n투수진: S 11 · A 8 · B 6 · C 5\n" +
-			"레전드는 연도와 상관없이 자기 구단(계보)에 들어갑니다.",
+			// 2026-11-15 19:4x (user: "년도 조건을 타는 조커 카드"): an FA card joins any club's colour of its own season or decade
+			// (server TeamColors.IsMember), and gets its bonus.
+			"레전드는 자기 구단 모든 해, FA는 자기 해 모든 구단.",
 			"연대 단일 팀만 단계가 따로입니다.\n" +
 			"전체: S 25명 · A 22 · B 19 · C 14\n타자진: S 14 · A 12 · B 11 · C 8\n투수진: S 11 · A 10 · B 8 · C 6\n" +
 			"효과는 A가 S의 70%, B 50%, C 30%입니다.",
@@ -172,7 +179,21 @@ public class Ma9MHelp : MonoBehaviour
 			"레어에서 엘리트는 재료가 많을수록 잘 나옵니다.",
 			"레전드 조합: 레전드 1장 + 다른 카드 7장까지.\n" +
 			"다른 카드 볼 합계 60볼이면 100% 성공(1볼에 1.67%).\n성공하면 아직 없는 레전드 한 장으로 바뀝니다.\n" +
-			"실패하면 같은 쪽 10볼 엘리트가 나옵니다.\n레전드 보호 아이템을 쓰면 실패해도 레전드가 남습니다."
+			"실패하면 같은 쪽 10볼 엘리트가 나옵니다.\n레전드 보호 아이템을 쓰면 실패해도 레전드가 남습니다.",
+			// 2026-11-15 (server FusionHandlers: lesson_players = 특별수강 + FA; the app leaves out the 1군 itself).
+			"1군 선수, 특별수강 중인 선수,\nFA 선수는 조합 목록에 나오지 않습니다.\n(FA 카드는 조합할 수 없습니다.)"
+		},
+		// 2026-11-15 FA 시장 (user 15:4x via the engine session; server FaMarket, AlbumHandlers, RosterHandlers.FaProblem,
+		// TeamColors, coach lines by HomeTeam). The album is a page of 구단정보 ("기록실>구단정보", TitleHints).
+		["Scene_TeamInfo"] = () => new[]
+		{
+			"앨범: 가져 본 적 있는 카드는 색으로,\n아직 없는 카드는 흑백으로 보입니다.\n" +
+			"연도 버튼 > 등급별: 10볼 엘리트 · 9볼 엘리트 ·\n9볼 레어 · 8볼 레어 · 레전드 · FA를\n시즌·구단 없이 한 번에 봅니다(정렬·거르기).",
+			"FA 선수: 8·9볼 레어 카드의 FA 판입니다.\n능력치는 원래 카드와 같고, 팀컬러는\n구단 상관없이 자기 해·연대 묶음에 듭니다.\n" +
+			"1군에는 FA 1장까지, 원래 카드와 함께는 안 됩니다.\n카드팩·조합·시범경기 보상에는 나오지 않습니다.",
+			"FA 영입: 등급별 > FA나 시즌별 FA 구단에서\n카드를 누르면 계약금과 남는 MP가 나오고,\n" +
+			"[영입]이면 계약 14일로 들어옵니다(같은 FA는 한 장).\n꾹 누르면 선수 정보를 봅니다.\n" +
+			"코치 계보는 원래 카드의 구단으로 칩니다."
 		},
 		// AI 테스터 불편 59 (2026-11-11): 특별강좌·코치카드조합에 도움말이 없음. LessonHandlers, CoachCatalog (MixCards), ShopHandlers 가격.
 		["Scene_SpecialLecture"] = () => new[]
@@ -225,7 +246,15 @@ public class Ma9MHelp : MonoBehaviour
 			"비기너: 1~4위 승격(포스트시즌 없음)\n" +
 			"루키·더블A·트리플A·메이저: 포스트시즌 최종 1~4위\n승격, 정규 8~10위 강등\n" +
 			"레전드: 최종 1~3위 챔피언스, 4~6위 잔류, 7~10위 강등\n" +
-			"챔피언스: 최종 1~3위 잔류, 나머지는 레전드로"
+			"챔피언스: 최종 1~3위 잔류, 나머지는 레전드로",
+			// 2026-11-15 공인구 (user 11:29~12:1x via the engine session; server SeasonBall / BallEffect, badge Ma9MBallBadge).
+			"공인구: 트리플A·메이저·레전드·챔피언스는\n시즌마다 새 공을 씁니다(한 시즌은 모든 리그가 같은 공).\n" +
+			"비기너·루키·더블A는 늘 노말볼(N)입니다.\n" +
+			"B 빅볼(고반발) · N 노말볼 · S 스몰볼(저반발)이\n3분의 1씩 나오고, 순위표 제목과 로비 VS 아래에 보입니다.",
+			"공이 바꾸는 것: 홈런, 안타, 2루타·3루타\n(삼진과 볼넷은 그대로).\n" +
+			"빅볼(팀당 약 6점): 파워 타자와 홈런을 덜 맞는 투수가 유리.\n" +
+			"스몰볼(팀당 약 4점): 출루·주루·수비, 투수진의 한 점이 귀함.\n" +
+			"자동 편성과 특성 추천은 이번 시즌 공으로 계산합니다."
 		},
 		// 2026-11-11 빠른조합·목표교환 (Ma9MBookQuick; server TrainingHandlers TryMix/TryExchange/TryQuickMix/TryTargetExchange).
 		["Scene_CombineTraining"] = () => CombineTraining_Main.Ma9MExchange ? new[]
@@ -322,9 +351,12 @@ public class Ma9MHelp : MonoBehaviour
 	// 2026-11-14 (engine tester_x: no "(?)" on 기록실 > 리그순위표): the ranking chart is five pages side by side (DragPage, x 0 …
 	// 4800), each with its own "기록실 > 리그순위표" label, so the one highest label could be another page's or some other " > "
 	// text. A scene listed here takes only titles holding its words, and every page's copy of the title gets a button.
+	// 2026-11-15: 구단정보's title is "기록실>구단정보" (Korean.txt TeamInfo_LeftTitle, no spaces), so a scene with a hint takes ">" with
+	// or without them.
 	private static readonly Dictionary<string, string> TitleHints = new Dictionary<string, string>
 	{
-		["Scene_LeagueRankingChart"] = "순위표"
+		["Scene_LeagueRankingChart"] = "순위표",
+		["Scene_TeamInfo"] = "구단정보"
 	};
 
 	private static List<UILabel> FindTitles(string scene)
@@ -367,7 +399,7 @@ public class Ma9MHelp : MonoBehaviour
 		UILabel best = null;
 		foreach (UILabel label in UnityEngine.Object.FindObjectsByType<UILabel>(FindObjectsSortMode.None))
 		{
-			if (!label.gameObject.activeInHierarchy || string.IsNullOrEmpty(label.text) || !label.text.Contains(" > ") || label.text.Contains("\n"))
+			if (!label.gameObject.activeInHierarchy || string.IsNullOrEmpty(label.text) || !label.text.Contains(string.IsNullOrEmpty(hint) ? " > " : ">") || label.text.Contains("\n"))
 			{
 				continue;
 			}

@@ -72,6 +72,37 @@ namespace Ma9MServer
 
 		private static double[] s_refBat, s_refPit;
 
+		// (engine session, 2026-11-15, user: "선택지 가에 공인구 시스템을 얹어보자. 일단 지금 챔피언스 평균득점이 너무 높고 내가 최초에
+		// 설계한 득점보다 많이 나오고 있어") A league brought to the regulars plays above the designed environment (game_env, the
+		// 1999–2025 league: R/G 5.00, AVG .271, K 16.7%): regulars hit better than the league's average batter, and the
+		// reference world played 5.9 (docs\득점환경_1115.md; 챔피언스 K 14.4%, AVG .282). The batters' reference for 컨택 파워
+		// 선구 is set this much under the regulars' mean so a league at the reference plays the designed environment.
+		// Fitted 11-15 with --runenv on a copy of the live leagues (every card at 보통 condition, the standard ball): 컨택 0.5 파워 5
+		// 선구 1.5 → 트리플A 4.99, 메이저 5.11, 레전드 4.96, 챔피언스 5.06 R/G, AVG .267-.268, K 16.5-17.0%, SLG .398-.403
+		// (before: 5.74-5.98, .277-.282, 15.2-15.8%, .439-.449; 4/4/4 sank them to 4.2-4.4 with K 19-20%: the excess was mostly
+		// power). Dev: MA9M_REF_BAT_DELTA = one number or "컨택,파워,선구" overrides it on a data copy.
+		public static double[] RefBatDelta = ParseDelta(Environment.GetEnvironmentVariable("MA9M_REF_BAT_DELTA"), new double[] { 0.5, 5, 1.5 });
+
+		// The fielding reference: the regulars' defence at their own position (Defs[MainPos − 1], one mean per position as the
+		// lineup has one fielder each). The old one compared Defs[pos] with the 수비 rating (R[5]) and took back about 2 points
+		// more than the league was over (docs\득점환경_1115.md finding 2). Dev: MA9M_REF_DEF=old for the old one.
+		public static bool RefDefByPosition = Environment.GetEnvironmentVariable("MA9M_REF_DEF") != "old";
+
+		private static double s_refDef = double.NaN;
+
+		private static double[] ParseDelta(string text, double[] fallback)
+		{
+			if (string.IsNullOrWhiteSpace(text)) return fallback;
+			string[] parts = text.Split(',');
+			double[] d = new double[3];
+			for (int j = 0; j < 3; j++)
+			{
+				string p = parts[Math.Min(j, parts.Length - 1)].Trim();
+				if (!double.TryParse(p, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out d[j])) return fallback;
+			}
+			return d;
+		}
+
 		// How the reference moves a league: Full = both ways, Down = only a league above the
 		// reference is brought back (development), None = off (tests: --refmode). Down is the rule:
 		// lifting a low-ball league (비기너, ~85-ball clubs) to the reference inflated its offence
@@ -101,7 +132,16 @@ namespace Ma9MServer
 			s_refBat = Enumerable.Range(0, 6).Select(j => byPos.Average(m => m[j])).ToArray();
 			double[] sp = Mean(regulars.Where(r => r.Kind == 'P' && r.Role == "SP")), rp = Mean(regulars.Where(r => r.Kind == 'P' && r.Role != "SP"));
 			s_refPit = sp.Zip(rp, (a, b) => 0.59 * a + 0.41 * b).ToArray();
-			ServerLog.Info($"league reference: batters {string.Join(" ", s_refBat.Select(x => x.ToString("F1")))}, pitchers {string.Join(" ", s_refPit.Select(x => x.ToString("F1")))}");
+			double oldDef = s_refBat[5];
+			List<double> posDef = new List<double>();
+			for (int p = 1; p <= 8; p++)
+			{
+				List<CardRow> at = bats.Where(r => r.MainPos == p && r.Defs != null && r.Defs.Length > p - 1 && r.Defs[p - 1] > 20).ToList();
+				if (at.Count > 0) posDef.Add(at.Average(r => r.Defs[p - 1]));
+			}
+			s_refDef = posDef.Count > 0 ? posDef.Average() : oldDef;
+			for (int j = 0; j < 3; j++) s_refBat[j] -= RefBatDelta[j];
+			ServerLog.Info($"league reference: batters {string.Join(" ", s_refBat.Select(x => x.ToString("F1")))} (컨택 파워 선구 {string.Join("/", RefBatDelta.Select(x => x.ToString("0.0")))} under the regulars), pitchers {string.Join(" ", s_refPit.Select(x => x.ToString("F1")))}, fielding {(RefDefByPosition ? s_refDef : oldDef):F1} ({(RefDefByPosition ? "regulars at their position" : "old: the 수비 rating")}; by position {s_refDef:F1}, rating {oldDef:F1})");
 		}
 
 		// TeamCard bonus order → CardRow.R index. Batter: con, pow, spd, eye, def, mental → 컨택 파워
@@ -215,7 +255,7 @@ namespace Ma9MServer
 				pit[j] = wp > 0 ? pit[j] / wp - s_refPit[j] : 0;
 			}
 			pit[0] = 0;  // 체력 = pitch limit: not relative
-			double defShift = wd > 0 ? def / wd - s_refBat[5] : 0;
+			double defShift = wd > 0 ? def / wd - (RefDefByPosition && !double.IsNaN(s_refDef) ? s_refDef : s_refBat[5]) : 0;
 			if (Mode == RefMode.Down)
 			{
 				for (int j = 0; j < 6; j++)

@@ -1,5 +1,6 @@
 ﻿# 2026-11-07: staff variants (entry_env.txt) against the 11-02 deck league, one process on logical 2-11 (0-1 stay free), idle.
-param([string]$Env = 'entry_env.txt', [string]$Log = 'entry.log', [int]$Games = 4000, [Parameter(Mandatory = $true)][string]$Work, [string]$Build = 'build3')
+# 2026-11-15: -Affinity (hex mask) to use fewer cores while the AI testers run (FC0 = logical 6-11).
+param([string]$Env = 'entry_env.txt', [string]$Log = 'entry.log', [int]$Games = 4000, [Parameter(Mandatory = $true)][string]$Work, [string]$Build = 'build3', [string]$Affinity = 'FFC')
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 foreach ($line in Get-Content (Join-Path $Here $Env) -Encoding UTF8) {
   if ($line -match '^([A-Z0-9_]+)=(.*)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') }
@@ -8,5 +9,5 @@ foreach ($line in Get-Content (Join-Path $Here $Env) -Encoding UTF8) {
 [Environment]::SetEnvironmentVariable('DOTNET_GCHeapCount', '6', 'Process')
 [Environment]::SetEnvironmentVariable('DOTNET_GCConserveMemory', '5', 'Process')
 Set-Location $Work
-cmd /c "start """" /b /wait /low /affinity FFC dotnet $Build\Ma9MServer.dll data --tcsim 150 $Games entry > $Log 2>&1"
+cmd /c "start """" /b /wait /low /affinity $Affinity dotnet $Build\Ma9MServer.dll data --tcsim 150 $Games entry > $Log 2>&1"
 "entry done $(Get-Date -Format s)" | Out-File (Join-Path $Work "$Log.exit.txt") -Encoding ascii

@@ -386,12 +386,12 @@ namespace Ma9MServer
 				CardInfo info = s_catalog.Get(card.Idx);
 				if (info == null) continue;
 				sbyte[] bonus = new sbyte[6];
-				if (CoachCatalog.Line(info.TeamCode) == setClub)
+				if (setBonus > 0 && CoachCatalog.InLine(info, setClub))
 				{
 					for (int j = 0; j < 6; j++) bonus[j] += (sbyte)setBonus;
 				}
 				int own = info.IsBatter ? hitter : pitcher;
-				if (own != 0 && CoachCatalog.Serves(own, info.TeamCode) && CoachCatalog.Stat(own) > 0)
+				if (own != 0 && CoachCatalog.ServesCard(own, info) && CoachCatalog.Stat(own) > 0)
 				{
 					bonus[CoachCatalog.Stat(own) - 1] += (sbyte)CoachCatalog.StatBonus(CoachCatalog.Grade(own));
 				}
@@ -620,8 +620,9 @@ namespace Ma9MServer
 		{
 			Lineup lineup = s_db?.GetLineup(user);
 			if (lineup == null || s_catalog == null) return -1;
+			// An FA card is of every line (CoachCatalog.InLine), so it adds to none here.
 			var lines = lineup.Batters.Concat(lineup.Pitchers).Where(i => i != 0).Distinct()
-				.Select(i => s_catalog.Get(i)).Where(c => c != null)
+				.Select(i => s_catalog.Get(i)).Where(c => c != null && !c.IsFA)
 				.GroupBy(c => CoachCatalog.Line(c.TeamCode))
 				.Select(g => (line: g.Key, cards: g.Count(), balls: g.Sum(c => c.Ball)))
 				.OrderByDescending(x => x.cards).ThenByDescending(x => x.balls).ThenBy(x => x.line).ToList();

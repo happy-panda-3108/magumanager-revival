@@ -177,19 +177,30 @@ namespace Ma9MServer
 				int fieldBuild = fieldList.FindIndex(f => f.label == baseLabel);
 				int[] tries = buildPick == "all" ? new[] { 0, 1, 2 } : int.TryParse(buildPick, out int bp) ? new[] { bp } : new[] { fieldBuild >= 0 ? fieldList[fieldBuild].build : 2 };
 				int[] bonuses = (Environment.GetEnvironmentVariable("TCSIM_ENTRY_BONUS") ?? "0").Split(',').Select(int.Parse).ToArray();
+				// FA 선수카드 (TeamColorSim.Fa.cs): the deck's FA variants play after it, with the same builds and bonuses.
+				List<(string label, Deck deck, DevDeck dev, string line)> runs = new List<(string, Deck, DevDeck, string)> { (label, own, y, staffLine) };
+				if (FaMode)
+				{
+					y.Traits = effects[Math.Min(tries[0], effects.Length - 1)];
+					y.Build = tries[0];
+					runs.AddRange(FaVariants(label, own, y, opponents.Select(o => o.deck).Where(o => o.D.Label != baseLabel).ToList()));
+				}
+				foreach (var run in runs)
 				foreach (int b in tries)
 				{
-					y.Traits = effects[Math.Min(b, effects.Length - 1)];
-					y.Build = b;
+					run.dev.Traits = effects[Math.Min(b, effects.Length - 1)];
+					run.dev.Build = b;
 					foreach (int extra in bonuses)
 					{
-						DevDeck z = y;
+						DevDeck z = run.dev;
 						if (extra != 0)
 						{
-							z = new DevDeck { D = y.D, Traits = y.Traits, Build = y.Build, Order = y.Order, Lineup = y.Lineup, Tactics = y.Tactics, Own = y.Own };
+							DevDeck y0 = run.dev;
+							z = new DevDeck { D = y0.D, Traits = y0.Traits, Build = y0.Build, Order = y0.Order, Lineup = y0.Lineup, Tactics = y0.Tactics, Own = y0.Own };
 							for (int s = 0; s < Slots; s++)
 							{
-								TeamCard t = y.Dev[s];
+								TeamCard t = y0.Dev[s];
+								if (t == null) continue;
 								z.Dev[s] = new TeamCard { Idx = t.Idx, PositionTrainingInfo = t.PositionTrainingInfo };
 								for (int k = 0; k < 6; k++)
 								{
@@ -211,7 +222,7 @@ namespace Ma9MServer
 							ra += res.ra;
 							n++;
 						}
-						ServerLog.Info($"tcsim entry: {label}{(extra != 0 ? $" (모든 카드 육성 +{extra})" : string.Empty)} {own.Balls}볼{(own.Balls > cap ? $" (상한 {cap} 넘음)" : string.Empty)} 특성 {buildNames[Math.Min(b, 2)]}: 리그 평균 {100 * win / n:F2}% (득 {rf / n:F2} 실 {ra / n:F2}, {n}덱) | {staffLine}");
+						ServerLog.Info($"tcsim entry: {run.label}{(extra != 0 ? $" (모든 카드 육성 +{extra})" : string.Empty)} {run.deck.Balls}볼{(run.deck.Balls > cap ? $" (상한 {cap} 넘음)" : string.Empty)} 특성 {buildNames[Math.Min(b, 2)]}: 리그 평균 {100 * win / n:F2}% (득 {rf / n:F2} 실 {ra / n:F2}, {n}덱) | {run.line}");
 					}
 				}
 			}

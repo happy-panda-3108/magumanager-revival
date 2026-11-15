@@ -61,6 +61,20 @@ namespace Ma9MServer
 		// (any season of the club's lineage, TeamColors) and the random draws (CardCatalog.Drawable) go by this instead.
 		public bool IsLegend => Grade == 5 || Idx >= 800101 && Idx <= 800299;
 
+		// FA 선수카드 (user, 2026-11-15; rows by the engine session's tools/scripts/fa_cards.py): a copy of a 8- or 9-ball 레어 card in
+		// the FA team (teamcode 250, the original client's eTeamName.FA), idx FaIdxBase + the source idx, the same year, sidx and
+		// stats, so it plays as its source (GameData.Row goes by sidx and year). At most one in the 1군; it counts for any
+		// 팀컬러 group; random draws never give it (Drawable). HomeTeam = the source card's club (coaches' lineage and the like).
+		public const int FaTeam = 250, FaIdxBase = 7_000_000, MaxFaInFirstTeam = 1;
+
+		public bool IsFA => TeamCode == FaTeam;
+
+		public int SourceIdx => IsFA && Idx >= FaIdxBase ? Idx - FaIdxBase : Idx;
+
+		public int HomeTeam { get => m_homeTeam ?? TeamCode; set => m_homeTeam = value; }
+
+		private int? m_homeTeam;
+
 		public bool CanField(int rosterPos)
 		{
 			return IsBatter && Defence[rosterPos] > 20;
@@ -79,6 +93,16 @@ namespace Ma9MServer
 			CardCatalog catalog = new CardCatalog();
 			catalog.ReadRows(Path.Combine(tablesDir, "P_BatterTable.txt"), true);
 			catalog.ReadRows(Path.Combine(tablesDir, "P_PItcherTable.txt"), false);
+			int fa = 0, orphans = 0;
+			foreach (CardInfo c in catalog.m_cards.Values)
+			{
+				if (!c.IsFA) continue;
+				fa++;
+				CardInfo source = catalog.Get(c.SourceIdx);
+				if (source != null && !source.IsFA) c.HomeTeam = source.TeamCode;
+				else orphans++;
+			}
+			if (fa > 0) ServerLog.Info($"FA cards: {fa}" + (orphans > 0 ? $", {orphans} without a source card" : ""));
 			string basic = Path.Combine(tablesDir, "BasicCard_list.txt");
 			if (File.Exists(basic))
 			{
@@ -104,7 +128,7 @@ namespace Ma9MServer
 			List<int> picks = new List<int>();
 			void Take(Func<CardInfo, bool> want, int count)
 			{
-				List<CardInfo> pool = m_cards.Values.Where(c => !taken.Contains(c.Idx) && c.Ball >= 3 && c.Ball <= 4 && c.Year >= 2015 && want(c)).OrderBy(c => c.Idx).ToList();
+				List<CardInfo> pool = m_cards.Values.Where(c => !taken.Contains(c.Idx) && !c.IsFA && c.Ball >= 3 && c.Ball <= 4 && c.Year >= 2015 && want(c)).OrderBy(c => c.Idx).ToList();
 				for (int i = 0; i < count && pool.Count > 0; i++)
 				{
 					CardInfo c = pool[rnd.Next(pool.Count)];
@@ -134,8 +158,9 @@ namespace Ma9MServer
 		public IEnumerable<CardInfo> All => m_cards.Values;
 
 		// The cards random draws may give (packs, 조합 results, starter and AI clubs, team-year decks): every card but the 레전드
-		// ones, until the user decides how those are won (2026-11-08).
-		public IEnumerable<CardInfo> Drawable => m_cards.Values.Where(c => !c.IsLegend);
+		// ones, until the user decides how those are won (2026-11-08), and the FA ones (signed in the FA 시장 only; AI clubs never
+		// use them, user 2026-11-15).
+		public IEnumerable<CardInfo> Drawable => m_cards.Values.Where(c => !c.IsLegend && !c.IsFA);
 
 		private void ReadRows(string path, bool batters)
 		{

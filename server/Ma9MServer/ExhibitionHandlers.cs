@@ -461,6 +461,7 @@ namespace Ma9MServer
 			// 팀 특성: stat gains now (outside the league reference), rate effects on each model below.
 			TraitEffects.Effect traits = TraitEffects.Of(code);
 			TraitEffects.Raise(home, traits);
+			double cor = LeagueService.SeasonCor(code);   // 공인구: the club's league season's ball (engine 11-15)
 			BroadcastRecorder rec;
 			LeagueRecorder line;
 			SeasonModel model;
@@ -471,6 +472,7 @@ namespace Ma9MServer
 				int seed = s_rnd.Next();
 				model = CardGame.Build(home, away, s_data.Env);
 				TraitEffects.Apply(model, 0, traits);
+				BallEffect.Apply(model, cor);
 				rec = new BroadcastRecorder(s_data.Presets, seed);
 				rec.Attach(model, home, away);
 				SeasonSimulator sim = new SeasonSimulator(model, new EngineParams { RunEnvironment = s_data.Env.RunEnvironment, ReachOnError = s_data.Env.ReachOnError, MaxInnings = LeagueRules.MaxInnings }, (ulong)seed);

@@ -262,6 +262,14 @@ namespace Ma9MServer
 			string[] noticeLines = notice?.Split('\n') ?? Array.Empty<string>();
 			Check(noticeLines.Length is > 0 and <= 5 && noticeLines.All(l => PopupText.Px(l) <= PopupText.Limit),
 				$"notice {noticeLines.Length} lines, widest {(noticeLines.Length > 0 ? noticeLines.Max(PopupText.Px) : 0):F0} px: {string.Join(" / ", noticeLines)}");
+			// 4. 새 시즌 CP notice (2026-11-15): with no traits every CP is left; both wordings fit the popup.
+			Save(user, new Dictionary<byte, byte>());
+			NoteSpareCp(user, "챔피언스");
+			NoteSpareCp(user, null);
+			string spare = TakeTrimNotice(user);
+			string[] spareLines = spare?.Split('\n') ?? Array.Empty<string>();
+			Check(spare != null && spareLines.Length == 4 && spare.Contains($"남은 {AvailableCp(user)}CP") && spareLines.All(l => PopupText.Px(l) <= PopupText.Limit),
+				$"spare CP notice, widest {(spareLines.Length > 0 ? spareLines.Max(PopupText.Px) : 0):F0} px: {string.Join(" / ", spareLines)}");
 			Execute("DELETE FROM team_property_order WHERE user_code = $code", c => c.Parameters.AddWithValue("$code", (long)user));
 			Save(user, new Dictionary<byte, byte>());
 			ServerLog.Info($"[traitorder] {problems} problem(s)");
@@ -278,6 +286,21 @@ namespace Ma9MServer
 			command.CommandText = "DELETE FROM team_property_notice WHERE user_code = $code RETURNING text";
 			command.Parameters.AddWithValue("$code", userCode);
 			return command.ExecuteScalar() as string;
+		}
+
+		// 새 시즌 (systems session, 2026-11-15; AI testers kt 65 and autotest7: the CP a promotion gave sat unused for two days, the
+		// lobby showing only the "팀관리 N" dot): when a team's next league is formed and it has CP some trait can still take, the
+		// lobby says so once, in the 팀 특성 조정 popup (TakeTrimNotice). promotedTo is the new league's name when it went up, else
+		// null (the seven tiers also add CP to 트리플A and up: 20 / 22 / 24 / 26).
+		public static void NoteSpareCp(uint userCode, string promotedTo)
+		{
+			if (s_connectionString == null || !CanSpend(userCode)) return;
+			int cp = AvailableCp(userCode), left = cp - Points(userCode).Values.Sum(v => v);
+			string text = (promotedTo != null ? $"{promotedTo} 리그로 올라 팀 특성이 {cp}CP가 되었습니다." : $"이번 시즌 팀 특성은 {cp}CP입니다.")
+				+ $"\n남은 {left}CP는 팀 관리 > 특성관리에서 쓸 수 있습니다.";
+			Execute("INSERT INTO team_property_notice (user_code, text) VALUES ($code, $text) ON CONFLICT(user_code) DO UPDATE SET text = text || char(10) || $text",
+				c => { c.Parameters.AddWithValue("$code", userCode); c.Parameters.AddWithValue("$text", text); });
+			ServerLog.Info($"team traits of {userCode}: {left} of {cp} CP left at the new season, noted for the lobby");
 		}
 
 		// 특성 추천 배분 (AdviceHandlers, 2026-11-11): the points as an 적용 from the screen would save them; the refusal or null.

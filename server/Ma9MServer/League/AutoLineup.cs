@@ -80,6 +80,8 @@ namespace Ma9MServer
 			public Dictionary<(int idx, int colour), CardValue> ValueCache = new Dictionary<(int, int), CardValue>();
 			public double BaseBat = double.NaN, BasePit;
 			public double LastLambda;   // the ball price of the last Greedy under the cap
+			// The season's 공인구 (SeasonBall; engine 11-15): every evaluation plays it, as the league does (BallEffect).
+			public double Cor = SeasonBall.StandardCor;
 		}
 
 		private static LineupContext Context(uint userCode)
@@ -89,7 +91,7 @@ namespace Ma9MServer
 			int me = s.MyIndex;
 			int game = Math.Clamp(s.NextGame, 1, 144);
 			var (raw, lineups, traits) = Teams(s, game, _ => game, raw: true);
-			LineupContext x = new LineupContext { S = s, Me = me, Other = Enumerable.Range(0, raw.Length).First(i => i != me), Traits = traits[me] };
+			LineupContext x = new LineupContext { S = s, Me = me, Other = Enumerable.Range(0, raw.Length).First(i => i != me), Traits = traits[me], Cor = BallEffect.CorOf(s) };
 			x.Shift = TeamStrength.LeagueShift(raw);
 			x.Teams = raw.Select(CopyTeam).ToArray();
 			for (int i = 0; i < x.Teams.Length; i++)
@@ -97,7 +99,7 @@ namespace Ma9MServer
 				TeamStrength.ApplyShift(x.Teams[i], x.Shift);
 				TraitEffects.Raise(x.Teams[i], traits[i]);
 			}
-			(x.OppBat, x.OppPit) = TypicalOpponents(x.Teams, traits, me);
+			(x.OppBat, x.OppPit) = TypicalOpponents(x.Teams, traits, me, x.Cor);
 			x.Current = lineups[me];
 			LeagueClub club = s.Clubs[me];
 			List<TeamCard> owned = s_db.GetCards(userCode);
@@ -127,7 +129,7 @@ namespace Ma9MServer
 		}
 
 		// The league's typical batter and pitcher as one club meets them (each club's traits on its own side).
-		private static (BatterTalent bat, PitcherTalent pit) TypicalOpponents(GameTeam[] teams, TraitEffects.Effect[] traits, int me)
+		private static (BatterTalent bat, PitcherTalent pit) TypicalOpponents(GameTeam[] teams, TraitEffects.Effect[] traits, int me, double cor)
 		{
 			GameEnv env = s_data.Env;
 			List<BatterTalent> bats = new List<BatterTalent>();
@@ -137,6 +139,7 @@ namespace Ma9MServer
 				if (j == me) continue;
 				SeasonModel mj = CardGame.Build(teams[me], teams[j], env);
 				TraitEffects.Apply(mj, 1, traits[j]);
+				BallEffect.Apply(mj, cor);
 				bats.Add(TeamValue.TypicalBatter(mj, 1));
 				PitcherTalent p = TeamValue.TypicalPitcher(mj, 1);
 				if (traits[j] != null) p.Xbh *= traits[j].PXBH;
@@ -207,6 +210,7 @@ namespace Ma9MServer
 			SeasonModel m = CardGame.Build(t, x.Teams[x.Other], s_data.Env);
 			TraitEffects.Effect e = x.Traits ?? new TraitEffects.Effect();
 			TraitEffects.Apply(m, 0, new TraitEffects.Effect { HR = e.HR, K = e.K, BB = e.BB, XBH = e.XBH, PK = e.PK, PBabip = e.PBabip, PHR = e.PHR, StartLimit = e.StartLimit });
+			BallEffect.Apply(m, x.Cor);   // x.OppBat / x.OppPit carry it already (TypicalOpponents)
 			BatterTalent ob = new BatterTalent
 			{
 				K = x.OppBat.K, BB = x.OppBat.BB, HBP = x.OppBat.HBP, HR = x.OppBat.HR, Babip = x.OppBat.Babip, Steal = x.OppBat.Steal, Speed = x.OppBat.Speed,
@@ -258,6 +262,8 @@ namespace Ma9MServer
 			{
 				BatterTalent lgB = new BatterTalent { K = lg.K, BB = lg.BB, HBP = lg.HBP, HR = lg.HR, Babip = lg.Babip, Double = lg.Double, Triple = lg.Triple };
 				PitcherTalent lgP = new PitcherTalent { K = lg.K, BB = lg.BB, HBP = lg.HBP, HR = lg.HR, Babip = lg.Babip };
+				BallEffect.Scale(lgB, x.Cor);
+				BallEffect.Scale(lgP, x.Cor);
 				x.BaseBat = TeamValue.MatchupRuns(lgB, x.OppPit, lg);
 				x.BasePit = TeamValue.MatchupRuns(x.OppBat, lgP, lg);
 			}
@@ -290,6 +296,7 @@ namespace Ma9MServer
 				{
 					BatterTalent bt = CardGame.BatterTalentOf(r, s_data.Env);
 					bt.Speed = Math.Clamp(Math.Exp(s_data.Env.Rules.SpeedPer10 * CardRules.X(r.R[3])), 0.7, 1.35);
+					BallEffect.Scale(bt, x.Cor);   // a power hitter is worth more with a lively ball
 					cv.Off = pa * (TeamValue.MatchupRuns(bt, x.OppPit, lg) - baseBat) + pa * TeamValue.SpeedPerPa * (r.R[3] - 65)
 						+ TeamValue.ClutchWeight * pa * TeamValue.MentalPerPa * (r.R[4] - 65);
 					for (int p = 0; p < 8; p++) cv.Def[p] = info.CanField(p) ? TeamValue.DefPerPoint[p] * (r.Defs[p] - 65) : double.NaN;
@@ -297,6 +304,7 @@ namespace Ma9MServer
 				else
 				{
 					PitcherTalent pt = CardGame.PitcherTalentOf(r, s_data.Env);
+					BallEffect.Scale(pt, x.Cor);
 					cv.PerBf = basePit - TeamValue.MatchupRuns(x.OppBat, pt, lg) + TeamValue.PitClutchWeight * TeamValue.PitMentalPerBf * (r.R[5] - 65);
 					cv.Stamina = TeamValue.LimitRuns / 5 * (Math.Min(TeamValue.LimitUseful, CardGame.Rules.Limit(r.R[0])) - 110);
 					// The role effect in the card's own value too (AI testers 두산 29·쌍방울 11-14: 자동 편성 put RP cards in 3 of the 5
@@ -318,6 +326,7 @@ namespace Ma9MServer
 						for (int j = 0; j < 6; j++) rr.R[j] *= fr;
 						rr.Pitches = rr.Pitches?.Select(q => (q.code, q.rating * fr)).ToList();
 						PitcherTalent prt = CardGame.PitcherTalentOf(rr, s_data.Env);
+						BallEffect.Scale(prt, x.Cor);
 						cv.PerBfRole[role] = basePit - TeamValue.MatchupRuns(x.OppBat, prt, lg) + TeamValue.PitClutchWeight * TeamValue.PitMentalPerBf * (rr.R[5] - 65);
 						if (role == 0) cv.Stamina = TeamValue.LimitRuns / 5 * (Math.Min(TeamValue.LimitUseful, CardGame.Rules.Limit(rr.R[0])) - 110);
 					}
@@ -354,6 +363,7 @@ namespace Ma9MServer
 			if (all.Select(i => PersonOf(x.Info[i])).Distinct().Count() != all.Count) return false;
 			if (all.Count(i => x.Info[i].IsLegend && x.Info[i].IsBatter) > RosterHandlers.MaxLegendBatters) return false;
 			if (all.Count(i => x.Info[i].IsLegend && !x.Info[i].IsBatter) > RosterHandlers.MaxLegendPitchers) return false;
+			if (all.Count(i => x.Info[i].IsFA) > CardInfo.MaxFaInFirstTeam) return false;   // FA 선수카드: one in the 1군 (user 2026-11-15)
 			if (l.Batters.Take(9).Any(i => i == 0 || !x.Info[i].IsBatter) || l.Batters.Skip(9).Any(i => i != 0 && !x.Info[i].IsBatter)) return false;
 			if (l.Pitchers.Take(5).Any(i => i == 0) || l.Pitchers.Any(i => i != 0 && x.Info[i].IsBatter)) return false;
 			if (l.Pitchers.Take(5).Any(i => x.Blocked.Contains(i))) return false;
@@ -405,11 +415,12 @@ namespace Ma9MServer
 				Array.Clear(l.Batters);
 				Array.Clear(l.Pitchers);
 				HashSet<int> people = new HashSet<int>();
-				int legendBat = 0, legendPit = 0;
+				int legendBat = 0, legendPit = 0, fa = 0;
 				bool Take(CardValue c, bool pit)
 				{
 					if (people.Contains(PersonOf(c.Info))) return false;
 					if (c.Info.IsLegend && (pit ? legendPit : legendBat) >= 1) return false;
+					if (c.Info.IsFA && fa >= CardInfo.MaxFaInFirstTeam) return false;
 					return true;
 				}
 				void Took(CardValue c, bool pit) => TookInfo(c.Info, pit);
@@ -417,11 +428,13 @@ namespace Ma9MServer
 				{
 					people.Add(PersonOf(info));
 					if (info.IsLegend) { if (pit) legendPit++; else legendBat++; }
+					if (info.IsFA) fa++;
 				}
 				void Untook(CardInfo info, bool pit)
 				{
 					people.Remove(PersonOf(info));
 					if (info.IsLegend) { if (pit) legendPit--; else legendBat--; }
+					if (info.IsFA) fa--;
 				}
 				// The plan's count on one side: while short, the change of a non-member (or an empty bench slot) for a member that
 				// loses the least value less λ·balls.
@@ -450,6 +463,7 @@ namespace Ma9MServer
 								int person = PersonOf(c.Info);
 								if (person != curPerson && people.Contains(person)) continue;
 								if (c.Info.IsLegend && (pit ? legendPit : legendBat) - (now != null && now.Info.IsLegend ? 1 : 0) >= 1) continue;
+								if (c.Info.IsFA && fa - (now != null && now.Info.IsFA ? 1 : 0) >= CardInfo.MaxFaInFirstTeam) continue;
 								if (pit && k < 5 && x.Blocked.Contains(c.Info.Idx)) continue;
 								if (Array.IndexOf(row, c.Info.Idx) >= 0) continue;
 								double d = V(c, l, k, pit) - lambda * c.Info.Ball - was;
@@ -603,6 +617,14 @@ namespace Ma9MServer
 			{
 				CardInfo m = s_data.Catalog.Get(idx);
 				if (m == null) continue;
+				// FA 선수카드: a joker of its own season (user 2026-11-15 19:4x: "해당 년도 세트덱을 사용할 때 해당 년도의 FA선수를 쓸 수 있고,
+				// 20년대 롯데 << 이런 세트덱에는 20년대 FA 다 사용 가능 … 년도 조건을 타는 조커 카드다"): any club, the member's season or decade.
+				if (m.IsFA) continue;
+				if (c.IsFA)
+				{
+					if (m.Year == c.Year || m.Year / 10 == c.Year / 10) return true;
+					continue;
+				}
 				if (m.TeamCode == c.TeamCode && m.Year == c.Year) return true;
 				if (TeamColors.Lineage(m.TeamCode) == TeamColors.Lineage(c.TeamCode) && m.Year / 10 == c.Year / 10) return true;
 			}
@@ -780,15 +802,24 @@ namespace Ma9MServer
 			string Pitchers(Lineup l) => string.Join("  ", Enumerable.Range(0, 11).Select(k =>
 			{
 				CardInfo c = s_data.Catalog.Get(l.Pitchers[k]);
-				return c == null ? $"{roles[k]} -" : $"{roles[k]} {c.Year % 100:00}{c.Name}({c.MainPosition},{c.Ball}볼,체{s_data.Card(c.Idx, 2)?.Row?.R[0]:F0})";
+				return c == null ? $"{roles[k]} -" : $"{roles[k]} {c.Year % 100:00}{c.Name}{(c.IsFA ? "[FA]" : "")}({c.MainPosition},{c.Ball}볼,체{s_data.Card(c.Idx, 2)?.Row?.R[0]:F0})";
 			}));
 			string Batters(Lineup l) => string.Join("  ", Enumerable.Range(0, 14).Select(k =>
 			{
 				CardInfo c = s_data.Catalog.Get(l.Batters[k]);
 				int pos = PositionOf(l, k);
 				string at = pos < 0 ? "벤치" : new[] { "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH" }[pos];
-				return c == null ? $"{at} -" : $"{at} {c.Year % 100:00}{c.Name}({c.Ball})";
+				return c == null ? $"{at} -" : $"{at} {c.Year % 100:00}{c.Name}{(c.IsFA ? "[FA]" : "")}({c.Ball})";
 			}));
+			// FA 선수카드 (2026-11-15): the advice holds at most one FA and never one player twice (FA and its own card).
+			string FaCheck(Lineup l)
+			{
+				List<CardInfo> on = l.Batters.Concat(l.Pitchers).Select(i => s_data.Catalog.Get(i)).Where(c => c != null).ToList();
+				int fa = on.Count(c => c.IsFA);
+				int twice = on.GroupBy(c => (c.IsBatter, c.Sidx)).Count(g => g.Count() > 1);
+				return $"FA {fa}장, 같은 선수 두 번 {twice}{(fa <= CardInfo.MaxFaInFirstTeam && twice == 0 ? "" : " ← 규칙 위반")}";
+			}
+			ServerLog.Info($"[autolineup]   now    {FaCheck(a.Current)} | advice {FaCheck(a.Lineup)}");
 			ServerLog.Info($"[autolineup]   now    투수 {Pitchers(a.Current)}");
 			ServerLog.Info($"[autolineup]   advice 투수 {Pitchers(a.Lineup)}");
 			ServerLog.Info($"[autolineup]   now    타자 {Batters(a.Current)}");
@@ -859,6 +890,7 @@ namespace Ma9MServer
 					SeasonModel m = CardGame.Build(home, away, env);
 					TraitEffects.Apply(m, 0, x.Traits);
 					TraitEffects.Apply(m, 1, traits[j]);
+					BallEffect.Apply(m, x.Cor);
 					SeasonSimulator sim = new SeasonSimulator(m, new EngineParams { RunEnvironment = env.RunEnvironment, ReachOnError = env.ReachOnError }, (ulong)(n + 1) * 7919);
 					SimStats st = sim.PlayOne(0, 1, null);
 					long r0 = m.TeamBatters[0].Sum(i => st.Bat(i, BS.R)), r1 = m.TeamBatters[1].Sum(i => st.Bat(i, BS.R));
@@ -908,6 +940,7 @@ namespace Ma9MServer
 					SeasonModel m = CardGame.Build(home, away, env);
 					TraitEffects.Apply(m, 0, x.Traits);
 					TraitEffects.Apply(m, 1, traits[j]);
+					BallEffect.Apply(m, x.Cor);
 					for (int t = 0; t < 2 && m.Tac != null; t++)
 					{
 						for (int slot = 0; slot < 11 && slot < m.Decks[t].Pitchers.Length; slot++)

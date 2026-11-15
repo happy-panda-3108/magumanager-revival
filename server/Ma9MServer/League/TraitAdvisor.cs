@@ -27,14 +27,113 @@ namespace Ma9MServer
 			public double SavedWin => SavedRuns * TeamValue.WinPerRun;
 			public List<(byte index, byte points, double runs)> Singles = new List<(byte, byte, double)>();
 			public TeamValue.Parts AdviceParts, SavedParts;
+			// 2026-11-15 (systems session): the best allocation of each split between the trees (TeamValue), checked in games.
+			public List<Dictionary<byte, byte>> Candidates = new List<Dictionary<byte, byte>>();
+			public int SimGames;                       // 0 = not checked in games
+			public double SimSaved, SimAdvice, SimSe;  // win shares in TraitSimSeries; SimSe of advice − saved
+			public bool SimClear => SimGames > 0 && SimAdvice - SimSaved > 2 * SimSe;
+			// 11-15 05:2x: the saved points kept because no other was clearly better in games; OtherGain = the best other's
+			// difference (SimSe its error).
+			public bool KeptSaved;
+			public double OtherGain;
+			public Action GamesJob;   // AdviseTraits(deferGames: true): the games check, to run on another thread
 		}
 
-		public static TraitAdvice AdviseTraits(uint userCode)
+		// 특성 추천을 실제 경기로 고르기 (systems session, 2026-11-15; user 04:0x "가 추천안으로 한 번 가보자고"): TeamValue counted the
+		// batting tree's lead over the pitching tree two to five times as big as the games (docs\특성균형_1115.md) and advised the
+		// whole batting tree to all 12 clubs. Now the best allocation of each split (by TeamValue) and the saved one are played
+		// MA9M_TRAITADVICE_GAMES home games a club (default 300; 0 = TeamValue alone as before) and the best in the games is the
+		// advice.
+		public static readonly int TraitAdviceGames = int.TryParse(Environment.GetEnvironmentVariable("MA9M_TRAITADVICE_GAMES"), out int tag) ? tag : 300;
+		// Games one by one (TraitSimCheck, closely paired) unless MA9M_TRAITADVICE_SERIES=1 (chains with fatigue, noisier).
+		public static readonly bool TraitAdviceSeries = Environment.GetEnvironmentVariable("MA9M_TRAITADVICE_SERIES") == "1";
+		// Stage 2 of the check: the saved points against the best other, this many home games a club (MA9M_TRAITADVICE_MORE).
+		public static readonly int TraitAdviceMore = int.TryParse(Environment.GetEnvironmentVariable("MA9M_TRAITADVICE_MORE"), out int tam) ? tam : 1200;
+
+		// deferGames (11-15 05:2x): the games check is left in advice.GamesJob for the caller to run on another thread (it takes
+		// 5-12 s on the user's PC; AdviceHandlers runs it off the loop and replies when it is done). Everything that reads the
+		// database is done here, on the calling (loop) thread.
+		public static TraitAdvice AdviseTraits(uint userCode, bool deferGames = false)
 		{
 			Func<Dictionary<byte, byte>, TeamValue.Parts> Value = TraitValuer(userCode);
 			if (Value == null) return null;
 			TraitAdvice advice = new TraitAdvice { Cp = TeamPropertyHandlers.AvailableCp(userCode), Saved = TeamPropertyHandlers.Points(userCode) };
-			return Advise(advice, Value);
+			Advise(advice, Value);
+			if (TraitAdviceGames > 0)
+			{
+				TraitLeague league = TraitLeagueOf(userCode);
+				void Games() => CheckAdviceInGames(league, advice, Value, TraitAdviceGames);
+				if (deferGames) advice.GamesJob = Games;
+				else Games();
+			}
+			return advice;
+		}
+
+		private static bool SamePoints(Dictionary<byte, byte> a, Dictionary<byte, byte> b)
+		{
+			var x = a.Where(p => p.Value > 0).ToDictionary(p => p.Key, p => p.Value);
+			var y = b.Where(p => p.Value > 0).ToDictionary(p => p.Key, p => p.Value);
+			return x.Count == y.Count && x.All(p => y.TryGetValue(p.Key, out byte v) && v == p.Value);
+		}
+
+		private static void CheckAdviceInGames(TraitLeague league, TraitAdvice advice, Func<Dictionary<byte, byte>, TeamValue.Parts> Value, int games)
+		{
+			List<Dictionary<byte, byte>> sets = new List<Dictionary<byte, byte>> { advice.Saved };
+			foreach (Dictionary<byte, byte> c in new[] { advice.Points }.Concat(advice.Candidates))
+			{
+				if (c.Count > 0 && !sets.Any(x => SamePoints(x, c))) sets.Add(c);
+			}
+			if (sets.Count < 2) return;
+			double[] Play(List<Dictionary<byte, byte>> list, int n, out double[] err) =>
+				TraitAdviceSeries ? TraitSimSeries(league, list, n, out err, threads: 4) : TraitSimCheck(league, list, n, out err, threads: 4);
+			string Show(Dictionary<byte, byte> d) => string.Join(" ", d.Where(p => p.Value > 0).OrderBy(p => p.Key).Select(p => $"{p.Key}:{p.Value}"));
+			// Stage 1: every set, `games` a club.
+			double[] w = Play(sets, games, out double[] se);
+			int other = Enumerable.Range(1, sets.Count - 1).OrderByDescending(k => w[k]).First();
+			bool savedValid = TeamPropertyHandlers.Validate(advice.Saved, advice.Cp) == null;
+			string log = $"[traitadvice] games ({games} a club, {sets.Count} sets): saved {100 * w[0]:F1}%, " +
+				string.Join(", ", Enumerable.Range(1, sets.Count - 1).Select(k => $"{Show(sets[k])} {100 * w[k]:F1}%±{100 * se[k]:F1}"));
+			advice.SimGames = games;
+			Dictionary<byte, byte> chosen;
+			if (!savedValid)
+			{
+				// The saved points are over this league's CP (a club moved down): the best valid one.
+				chosen = sets[other];
+				(advice.SimSaved, advice.SimAdvice, advice.SimSe) = (w[0], w[other], se[other]);
+				log += " → over CP, set " + other;
+			}
+			else if (w[other] < w[0] - 2 * se[other])
+			{
+				chosen = advice.Saved;
+				(advice.KeptSaved, advice.OtherGain, advice.SimSe, advice.SimSaved, advice.SimAdvice) = (true, w[other] - w[0], se[other], w[0], w[0]);
+				log += " → saved (the rest clearly lower)";
+			}
+			else
+			{
+				// Stage 2 (11-15 05:2x; user 05:2x "서버 재시작 했는데도 여전히 타자 특성을 추천해주는데??" — SKY해민 was advised a
+				// batting set at +0.2%p ±0.8 and applied it): the saved points against the best other, TraitAdviceMore a club, and a
+				// change only when it is clearly better (over 2 standard errors). Otherwise the saved points stay.
+				int more = Math.Max(games, TraitAdviceMore);
+				double[] w2 = Play(new List<Dictionary<byte, byte>> { advice.Saved, sets[other] }, more, out double[] se2);
+				advice.SimGames = more;
+				double gain = w2[1] - w2[0];
+				if (gain > 2 * se2[1])
+				{
+					chosen = sets[other];
+					(advice.SimSaved, advice.SimAdvice, advice.SimSe) = (w2[0], w2[1], se2[1]);
+				}
+				else
+				{
+					chosen = advice.Saved;
+					(advice.KeptSaved, advice.OtherGain, advice.SimSe, advice.SimSaved, advice.SimAdvice) = (true, gain, se2[1], w2[0], w2[0]);
+				}
+				log += $" | {more} a club: saved {100 * w2[0]:F1}% vs {Show(sets[other])} {100 * w2[1]:F1}% ({100 * gain:+0.0;-0.0}±{100 * se2[1]:F1}) → {(chosen == advice.Saved ? "saved" : "set " + other)}";
+			}
+			advice.Points = chosen;
+			double bare = Value(new Dictionary<byte, byte>()).Runs;
+			advice.AdviceParts = Value(advice.Points);
+			advice.Runs = advice.AdviceParts.Runs - bare;
+			ServerLog.Info(log);
 		}
 
 		// TeamValue of the club with a set of trait points, runs a game over none (the clubs as they are now).
@@ -51,9 +150,11 @@ namespace Ma9MServer
 			if (s == null || s.Clubs.Count == 0) return null;
 			int me = s.MyIndex;
 			int game = Math.Clamp(s.NextGame, 1, 144);
-			var (teams, _, traits) = Teams(s, game, _ => game, bareClub: me);
+			var (teams, _, traits) = Teams(s, game, _ => game, bareClub: me, neutral: TraitNeutral);
 			GameEnv env = s_data.Env;
 			int other = Enumerable.Range(0, teams.Length).First(i => i != me);
+			// The season's 공인구 (SeasonBall / BallEffect, engine session 11-15), as the league plays it (트리플A and up only).
+			double cor = BallEffect.CorOf(s);
 
 			// The league's typical batter and pitcher as our club meets them (their traits on).
 			List<BatterTalent> bats = new List<BatterTalent>();
@@ -63,6 +164,7 @@ namespace Ma9MServer
 				if (j == me) continue;
 				SeasonModel mj = CardGame.Build(teams[me], teams[j], env);
 				TraitEffects.Apply(mj, 1, traits[j]);
+				BallEffect.Apply(mj, cor);
 				bats.Add(TeamValue.TypicalBatter(mj, 1));
 				PitcherTalent p = TeamValue.TypicalPitcher(mj, 1);
 				if (traits[j] != null) p.Xbh *= traits[j].PXBH;
@@ -88,6 +190,7 @@ namespace Ma9MServer
 				// move the catchers' defence for the caught share, which TeamValue would count as fielding).
 				TraitEffects.Effect rates = new TraitEffects.Effect { HR = e.HR, K = e.K, BB = e.BB, XBH = e.XBH, PK = e.PK, PBabip = e.PBabip, PHR = e.PHR, StartLimit = e.StartLimit };
 				TraitEffects.Apply(m, 0, rates);
+				BallEffect.Apply(m, cor);   // oppBat / oppPit carry it already (built from models with the ball)
 				BatterTalent ob = new BatterTalent
 				{
 					K = oppBat.K, BB = oppBat.BB, HBP = oppBat.HBP, HR = oppBat.HR, Babip = oppBat.Babip, Steal = oppBat.Steal, Speed = oppBat.Speed,
@@ -182,6 +285,30 @@ namespace Ma9MServer
 					advice.AdviceParts = parts;
 				}
 			}
+			// 2026-11-15 (systems session): the best of each side (the batting tree with at most half the points, or more), valued
+			// whole, as candidates for the games check (CheckAdviceInGames). Two sides, not more: the check runs on the server's
+			// loop and every set costs about 1.5 s (four splits took 8-9 s with the AI testers on).
+			int Bucket(Dictionary<byte, byte> d)
+			{
+				int h = d.Where(p => p.Key < 121).Sum(p => p.Value), all = d.Values.Sum(v => v);
+				return all > 0 && 2 * h > all ? 1 : 0;
+			}
+			foreach (IGrouping<int, (Dictionary<byte, byte> pts, double v)> g in combos.GroupBy(c => Bucket(c.pts)).OrderBy(g => g.Key))
+			{
+				Dictionary<byte, byte> top = null;
+				double topRuns = double.MinValue;
+				foreach (var (pts, _) in g.OrderByDescending(c => c.v).Take(12))
+				{
+					if (TeamPropertyHandlers.Validate(pts, advice.Cp) != null) continue;
+					double r = Value(pts).Runs - bare;
+					if (r > topRuns)
+					{
+						topRuns = r;
+						top = pts;
+					}
+				}
+				if (top != null) advice.Candidates.Add(top);
+			}
 			advice.Runs = bestRuns;
 			advice.SavedParts = Value(advice.Saved);
 			advice.SavedRuns = advice.SavedParts.Runs - bare;
@@ -194,7 +321,7 @@ namespace Ma9MServer
 		// of its per-point amounts that would meet it.
 		public static int TraitBalanceTest(int pairs)
 		{
-			List<CardInfo> cards = s_data.Catalog.All.Where(c => !c.IsLegend && s_data.Card(c.Idx, 2)?.Row is { } r && r.Share >= 0.9).ToList();
+			List<CardInfo> cards = s_data.Catalog.All.Where(c => !c.IsLegend && !c.IsFA && s_data.Card(c.Idx, 2)?.Row is { } r && r.Share >= 0.9).ToList();
 			Random rnd = new Random(7);
 			GameTeam Make()
 			{
@@ -259,7 +386,7 @@ namespace Ma9MServer
 		// rosters against another, `games` home games a pair with the same seeds with and without it (starters rotating).
 		public static int TraitBalanceSim(int pairs, int games, int threads = 4)
 		{
-			List<CardInfo> cards = s_data.Catalog.All.Where(c => !c.IsLegend && s_data.Card(c.Idx, 2)?.Row is { } r && r.Share >= 0.9).ToList();
+			List<CardInfo> cards = s_data.Catalog.All.Where(c => !c.IsLegend && !c.IsFA && s_data.Card(c.Idx, 2)?.Row is { } r && r.Share >= 0.9).ToList();
 			Random rnd = new Random(7);
 			GameTeam Make()
 			{
@@ -336,12 +463,44 @@ namespace Ma9MServer
 
 		// Dev check in full games: the club with each set of points against every other club of its league, `games` games each
 		// at home with the same seeds for every set (so the differences are paired); win share per set.
-		public static double[] TraitSimCheck(uint userCode, List<Dictionary<byte, byte>> sets, int games, int threads = 4)
+		public static double[] TraitSimCheck(uint userCode, List<Dictionary<byte, byte>> sets, int games, int threads = 4) => TraitSimCheck(userCode, sets, games, out _, threads);
+
+		// The same with each set's standard error of its difference from the first (systems session, 2026-11-15: games one by one
+		// pair closely, so this is the advice check's way; chains with fatigue (TraitSimSeries) drift apart and are about 1.6 times
+		// as noisy for the same games).
+		public static double[] TraitSimCheck(uint userCode, List<Dictionary<byte, byte>> sets, int games, out double[] seVsFirst, int threads = 4) =>
+			TraitSimCheck(TraitLeagueOf(userCode), sets, games, out seVsFirst, threads);
+
+		// The league the trait checks play in, built on the loop thread (it reads the database); the games themselves only use
+		// these copies, so they can run on another thread (AdviceHandlers, 11-15).
+		public sealed class TraitLeague
+		{
+			public GameTeam[] Teams;
+			public TraitEffects.Effect[] Traits;
+			public int Me;
+			// The season's 공인구 (SeasonBall, 11-15).
+			public double Cor = SeasonBall.StandardCor;
+		}
+
+		// Every card at 보통 condition (11-15 05:2x: today's condition moved the advice from day to day; 자동 편성 counts 보통 since
+		// 11-13); MA9M_TRAITADVICE_TODAY=1 = today's condition as before.
+		public static readonly bool TraitNeutral = Environment.GetEnvironmentVariable("MA9M_TRAITADVICE_TODAY") != "1";
+
+		public static TraitLeague TraitLeagueOf(uint userCode)
 		{
 			LeagueState s = s_store.Load(userCode);
 			int me = s.MyIndex;
 			int game = Math.Clamp(s.NextGame, 1, 144);
-			var (teams, _, traits) = Teams(s, game, _ => game, bareClub: me);
+			var (teams, _, traits) = Teams(s, game, _ => game, bareClub: me, neutral: TraitNeutral);
+			return new TraitLeague { Teams = teams, Traits = traits, Me = me, Cor = BallEffect.CorOf(s) };
+		}
+
+		public static double[] TraitSimCheck(TraitLeague league, List<Dictionary<byte, byte>> sets, int games, out double[] seVsFirst, int threads = 4)
+		{
+			double[][] each = new double[sets.Count][];
+			int me = league.Me;
+			GameTeam[] teams = league.Teams;
+			TraitEffects.Effect[] traits = league.Traits;
 			GameEnv env = s_data.Env;
 			int[] opps = Enumerable.Range(0, teams.Length).Where(j => j != me).ToArray();
 			double[] wins = new double[sets.Count];
@@ -352,6 +511,7 @@ namespace Ma9MServer
 				TraitEffects.Raise(mine, e);
 				double w = 0;
 				object gate = new object();
+				double[] one = each[k] = new double[opps.Length * games];
 				System.Threading.Tasks.Parallel.For(0, opps.Length * games, new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = threads }, n =>
 				{
 					int j = opps[n / games];
@@ -362,13 +522,105 @@ namespace Ma9MServer
 					SeasonModel m = CardGame.Build(home, away, env);
 					TraitEffects.Apply(m, 0, e);
 					TraitEffects.Apply(m, 1, traits[j]);
+					BallEffect.Apply(m, league.Cor);
 					SeasonSimulator sim = new SeasonSimulator(m, new EngineParams { RunEnvironment = env.RunEnvironment, ReachOnError = env.ReachOnError }, (ulong)(n + 1) * 7919);
 					SimStats st = sim.PlayOne(0, 1, null);
 					long r0 = m.TeamBatters[0].Sum(i => st.Bat(i, BS.R)), r1 = m.TeamBatters[1].Sum(i => st.Bat(i, BS.R));
 					double x = r0 > r1 ? 1 : r0 == r1 ? 0.5 : 0;
+					one[n] = x;
 					lock (gate) w += x;
 				});
 				wins[k] = w / (opps.Length * games);
+			}
+			seVsFirst = new double[sets.Count];
+			for (int k = 1; k < sets.Count; k++)
+			{
+				double[] d = each[k].Zip(each[0], (a, b) => a - b).ToArray();
+				double mean = d.Average();
+				seVsFirst[k] = d.Length > 1 ? Math.Sqrt(d.Sum(v => (v - mean) * (v - mean)) / (d.Length - 1) / d.Length) : 0;
+			}
+			return wins;
+		}
+
+		// TraitSimCheck as league games play (systems session, 2026-11-15; user 04:0x "가 추천안으로 한 번 가보자고" — 특성 값을 실제
+		// 덱 기준으로 다시 맞추기): chains of LineupSimSeries games in a row with the pitchers' fatigue carried between them, the
+		// way AutoLineup.PlaySeries plays them, so 체력·선발 투구 한계·필승조 count as in the league. Paired: the same seeds for every
+		// set; seVsFirst = each set's standard error of its difference from the first.
+		public static double[] TraitSimSeries(uint userCode, List<Dictionary<byte, byte>> sets, int games, out double[] seVsFirst, int threads = 4) =>
+			TraitSimSeries(TraitLeagueOf(userCode), sets, games, out seVsFirst, threads);
+
+		public static double[] TraitSimSeries(TraitLeague league, List<Dictionary<byte, byte>> sets, int games, out double[] seVsFirst, int threads = 4)
+		{
+			int me = league.Me;
+			GameTeam[] teams = league.Teams;
+			TraitEffects.Effect[] traits = league.Traits;
+			GameEnv env = s_data.Env;
+			int[] opps = Enumerable.Range(0, teams.Length).Where(j => j != me).ToArray();
+			int total = opps.Length * games, len = Math.Max(1, LineupSimSeries), chains = (total + len - 1) / len;
+			double[] wins = new double[sets.Count];
+			double[][] each = new double[sets.Count][];
+			for (int k = 0; k < sets.Count; k++)
+			{
+				TraitEffects.Effect e = TraitEffects.FromPoints(sets[k]);
+				GameTeam mine = CopyTeam(teams[me]);
+				TraitEffects.Raise(mine, e);
+				double[] one = each[k] = new double[total];
+				System.Threading.Tasks.Parallel.For(0, chains, new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = threads }, c =>
+				{
+					double[] units = new double[11];
+					int[] days = new int[11], last1 = new int[11], last2 = new int[11];
+					Dictionary<int, (double[] u, int[] d, int[] l1, int[] l2)> opp = new Dictionary<int, (double[], int[], int[], int[])>();
+					for (int n = c * len; n < Math.Min(total, (c + 1) * len); n++)
+					{
+						int j = opps[n % opps.Length];
+						if (!opp.TryGetValue(j, out var os)) opp[j] = os = (new double[11], new int[11], new int[11], new int[11]);
+						GameTeam home = CopyTeam(mine), away = CopyTeam(teams[j]);
+						home.StarterSlot = n % 5;
+						away.StarterSlot = (n / opps.Length) % 5;
+						SeasonModel m = CardGame.Build(home, away, env);
+						TraitEffects.Apply(m, 0, e);
+						TraitEffects.Apply(m, 1, traits[j]);
+						BallEffect.Apply(m, league.Cor);
+						for (int t = 0; t < 2 && m.Tac != null; t++)
+						{
+							for (int slot = 0; slot < 11 && slot < m.Decks[t].Pitchers.Length; slot++)
+							{
+								int p = m.Decks[t].Pitchers[slot];
+								if (p < 0) continue;
+								m.Tac.CarryIn[p] = t == 0 ? units[slot] : os.u[slot];
+								m.Tac.DaysInRow[p] = t == 0 ? days[slot] : os.d[slot];
+								m.Tac.Last1[p] = t == 0 ? last1[slot] : os.l1[slot];
+								m.Tac.Last2[p] = t == 0 ? last2[slot] : os.l2[slot];
+							}
+						}
+						SimStats st = new SeasonSimulator(m, new EngineParams { RunEnvironment = env.RunEnvironment, ReachOnError = env.ReachOnError }, (ulong)(n + 1) * 7919).PlayOne(0, 1, null);
+						for (int t = 0; t < 2 && m.Tac != null; t++)
+						{
+							double[] u = t == 0 ? units : os.u;
+							int[] d = t == 0 ? days : os.d, l1 = t == 0 ? last1 : os.l1, l2 = t == 0 ? last2 : os.l2;
+							for (int slot = 0; slot < 11 && slot < m.Decks[t].Pitchers.Length; slot++)
+							{
+								int p = m.Decks[t].Pitchers[slot];
+								if (p < 0) continue;
+								int np = (int)st.Pit(p, PS.NP);
+								u[slot] = m.Tac.R.CarryOut(m.Tac.CarryIn[p], m.Tac.Units(p, np), m.Tac.Limit[p]);
+								d[slot] = st.Pit(p, PS.G) > 0 ? d[slot] + 1 : 0;
+								l2[slot] = l1[slot];
+								l1[slot] = np;
+							}
+						}
+						long r0 = m.TeamBatters[0].Sum(i => st.Bat(i, BS.R)), r1 = m.TeamBatters[1].Sum(i => st.Bat(i, BS.R));
+						one[n] = r0 > r1 ? 1 : r0 == r1 ? 0.5 : 0;
+					}
+				});
+				wins[k] = one.Average();
+			}
+			seVsFirst = new double[sets.Count];
+			for (int k = 1; k < sets.Count; k++)
+			{
+				double[] d = each[k].Zip(each[0], (a, b) => a - b).ToArray();
+				double mean = d.Average();
+				seVsFirst[k] = d.Length > 1 ? Math.Sqrt(d.Sum(v => (v - mean) * (v - mean)) / (d.Length - 1) / d.Length) : 0;
 			}
 			return wins;
 		}
@@ -417,14 +669,19 @@ namespace Ma9MServer
 					sets.Add((kv[0], kv[1].Split(',', StringSplitOptions.RemoveEmptyEntries).Select(x => x.Split(':')).ToDictionary(x => byte.Parse(x[0]), x => byte.Parse(x[1]))));
 				}
 				watch.Restart();
-				double[] w = TraitSimCheck(user, sets.Select(x => x.pts).ToList(), simGames);
+				// TRAITADVICE_SERIES=1: chains with fatigue (TraitSimSeries); otherwise games one by one, closely paired (TraitSimCheck).
+				// Each trait alone against one shared "none" in chains drifts by that run's luck as a whole (11-15, SKY해민: every
+				// single about 0.3%p low), so the trait table is measured one by one.
+				bool series = Environment.GetEnvironmentVariable("TRAITADVICE_SERIES") == "1";
+				double[] se = new double[sets.Count];
+				double[] w = series ? TraitSimSeries(user, sets.Select(x => x.pts).ToList(), simGames, out se) : TraitSimCheck(user, sets.Select(x => x.pts).ToList(), simGames, out se);
 				for (int k = 0; k < sets.Count; k++)
 				{
 					string est = "";
 					est = $", TeamValue {100 * TraitRuns(user, sets[k].pts) * TeamValue.WinPerRun:+0.00;-0.00}%p over none";
-					ServerLog.Info($"[traitadvice] sim {sets[k].name,-8} {Show(sets[k].pts)}: win {100 * w[k]:F2}% ({100 * (w[k] - w[0]):+0.00;-0.00}%p over none){est}");
+					ServerLog.Info($"[traitadvice] sim {sets[k].name,-8} {Show(sets[k].pts)}: win {100 * w[k]:F2}% ({100 * (w[k] - w[0]):+0.00;-0.00}%p over none ±{100 * se[k]:F2}){est}");
 				}
-				ServerLog.Info($"[traitadvice] sim: {simGames} games against each of the other clubs a set, {watch.Elapsed.TotalSeconds:F0} s");
+				ServerLog.Info($"[traitadvice] sim: {simGames} games against each of the other clubs a set{(series ? $", in chains of {LineupSimSeries} with fatigue" : string.Empty)}, {watch.Elapsed.TotalSeconds:F0} s");
 			}
 			return 0;
 		}

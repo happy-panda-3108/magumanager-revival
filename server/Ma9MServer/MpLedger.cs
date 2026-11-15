@@ -15,7 +15,7 @@ namespace Ma9MServer
 		public const string League = "리그 경기", Exhibition = "시범경기", Mission = "미션", Achievement = "업적",
 			Pouch = "홈런볼·MP주머니", Season = "시즌 보상", Coupon = "쿠폰",
 			PlayerPack = "선수팩 구매", Training = "트레이닝·충전권", Coach = "코치", Contract = "계약연장", Release = "선수 방출",
-			Lesson = "특강", Roster = "로스터 확장", PositionChange = "포지션 변경", Reclaim = "회수",
+			Lesson = "특강", Roster = "로스터 확장", PositionChange = "포지션 변경", Reclaim = "회수", FaSigning = "FA 영입",
 			Test = "시험", Start = "장부 시작", Other = "기타";
 
 		// The table, once per database file; the first time, a 장부 시작 row with each team's balance (amount 0), so the first

@@ -28,7 +28,8 @@ namespace Ma9MServer
 		// The biggest groups per kind (0 단일 년도 팀 … 6 듀얼 팀 올스타) as TeamColors numbers them.
 		private static List<(int kind, int group)> ColourGroups(List<CardInfo> cards)
 		{
-			List<CardInfo> normal = cards.Where(c => !c.IsLegend).ToList();
+			// FA cards (team 250) form no group of their own; TeamColors.IsMemberOf counts them in any group (user 2026-11-15).
+			List<CardInfo> normal = cards.Where(c => !c.IsLegend && !c.IsFA).ToList();
 			List<(int, int)> r = new List<(int, int)>();
 			int Yy(int year) => year % 100;
 			void Top(int kind, IEnumerable<(int group, int n)> groups, int count)

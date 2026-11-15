@@ -80,7 +80,7 @@ namespace Ma9MServer
 		// Neighbours' clubs: same club ×1.05, rivals ×0.9 (codes 6 apart, KIA-롯데, 현대-SK), else ×0.95.
 		private static double Team(int a, int b)
 		{
-			if (a == b) return 1.05;
+			if (a == b) return a == CardInfo.FaTeam ? 0.95 : 1.05;   // two FA cards are no club (the app's graph alike, Roster_Analysis)
 			if (Math.Abs(a - b) == 6 || (a == 5 && b == 7) || (a == 7 && b == 5) || (a == 4 && b == 9) || (a == 9 && b == 4)) return 0.9;
 			return 0.95;
 		}

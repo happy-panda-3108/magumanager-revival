@@ -152,9 +152,16 @@ public class Ma9MCardSpread : MonoBehaviour
 
 	private static readonly List<KeyValuePair<int, Action>> s_heldMissions = new List<KeyValuePair<int, Action>>();
 
+	// (11-15, AI tester LG 13회차: "첫 레전드" came after the first 20 of 100 and covered the next row) They wait for the last
+	// page: a page all turned with more to come still holds them.
+	private static bool Holding()
+	{
+		return s_current != null && s_current.root != null && (!s_current.AllTurned() || s_current.pending.Count > 0);
+	}
+
 	public static bool HoldMission(int missionIndex, Action endCallBack)
 	{
-		if (s_current == null || s_current.root == null || s_current.AllTurned())
+		if (!Holding())
 		{
 			return false;
 		}
@@ -168,7 +175,7 @@ public class Ma9MCardSpread : MonoBehaviour
 
 	public static bool HoldPopup(string title, string message, Action confirm)
 	{
-		if (s_current == null || s_current.root == null || s_current.AllTurned() || title == null || !title.StartsWith("도전과제"))
+		if (!Holding() || title == null || !title.StartsWith("도전과제"))
 		{
 			return false;
 		}
@@ -176,7 +183,26 @@ public class Ma9MCardSpread : MonoBehaviour
 		return true;
 	}
 
-	private static void ReleaseMissions()
+	// (11-15, AI tester NC 10회차) A 도전과제 window that came just before the cards (the pack's 업적 are paid with the purchase)
+	// goes back to wait with the others; it covered the spread and took the spread's back-key entry when it was closed.
+	private static void TakeBackOpenPopups()
+	{
+		foreach (Popup1 popup in UnityEngine.Object.FindObjectsOfType<Popup1>())
+		{
+			string title = popup.Ma9MTitle;
+			if (title != null && title.StartsWith("도전과제"))
+			{
+				string content;
+				Action confirm;
+				popup.Ma9MTakeBack(out title, out content, out confirm);
+				s_heldPopups.Add(new KeyValuePair<string[], Action>(new string[2] { title, content }, confirm));
+				Debug.Log("[Ma9MMission] spread: took back the open window \"" + title + "\" until the cards are turned");
+			}
+		}
+	}
+
+	// sceneGoing: the spread went with its screen (OnDisable), so the windows wait in PopupManager for the next screen.
+	private static void ReleaseMissions(bool sceneGoing = false)
 	{
 		if (s_heldPopups.Count > 0)
 		{
@@ -184,7 +210,14 @@ public class Ma9MCardSpread : MonoBehaviour
 			s_heldPopups.Clear();
 			foreach (KeyValuePair<string[], Action> p in popups)
 			{
-				PopupManager.ViewPopup1(p.Key[0], p.Key[1], Localization.instance.Get("OK"), p.Value);
+				if (sceneGoing)
+				{
+					PopupManager.Ma9MHoldForNextScreen(p.Key[0], p.Key[1], p.Value);
+				}
+				else
+				{
+					PopupManager.ViewPopup1(p.Key[0], p.Key[1], Localization.instance.Get("OK"), p.Value);
+				}
 			}
 		}
 		if (s_heldMissions.Count == 0)
@@ -252,6 +285,7 @@ public class Ma9MCardSpread : MonoBehaviour
 		// "더 열기 / 더 사기" is made when it is first needed: a widget switched off in the frame it was made keeps
 		// its picture on this NGUI's panel (an empty grey button stayed on screen).
 		btnMore = null;
+		TakeBackOpenPopups();
 		AndroidManager.Instance.PushEscapeAction(OnEscape);
 		escapePushed = true;
 	}
@@ -729,7 +763,10 @@ public class Ma9MCardSpread : MonoBehaviour
 	private void PageDone()
 	{
 		turnQueue.Clear();
-		ReleaseMissions();
+		if (pending.Count == 0)
+		{
+			ReleaseMissions();
+		}
 		btnMode.gameObject.SetActive(false);
 		if (pending.Count > 0)
 		{
@@ -920,13 +957,14 @@ public class Ma9MCardSpread : MonoBehaviour
 		turnQueue.Clear();
 	}
 
-	private void Teardown()
+	private void Teardown(bool sceneGoing = false)
 	{
 		ClearCards();
 		if (escapePushed)
 		{
 			escapePushed = false;
-			AndroidManager.Instance.PopEscapeAction();
+			// (11-15) Its own entry only: a plain Pop took another screen's, and threw on a stack the scene change had cleared.
+			AndroidManager.Instance.Ma9MRemoveEscapeAction(OnEscape);
 			AndroidManager.Instance.EscapeEnable = true;
 		}
 		if (root != null)
@@ -939,7 +977,7 @@ public class Ma9MCardSpread : MonoBehaviour
 		{
 			s_current = null;
 		}
-		ReleaseMissions();
+		ReleaseMissions(sceneGoing);
 	}
 
 	private void Finish()
@@ -949,12 +987,14 @@ public class Ma9MCardSpread : MonoBehaviour
 		owner.Ma9MSpreadDone();
 	}
 
+	// The spread goes with its screen (back key to the lobby, a scene change). (11-15) Also when the scene took the root
+	// first: the held 업적 boxes and windows wait for the next screen (AI tester NC 10회차: paid, never shown).
 	private void OnDisable()
 	{
-		if (root != null)
+		if (root != null || s_current == this || escapePushed)
 		{
 			pending.Clear();
-			Teardown();
+			Teardown(true);
 		}
 	}
 }

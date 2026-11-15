@@ -187,7 +187,10 @@ namespace Ma9MServer
 			// Cards in the 1군 lineup are left out of the list (the client hides them).
 			reply.deck.array = Deck(user).Select(i => new PInteger { n = i }).ToArray();
 			// Cards in 특별수강 (LessonHandlers): the client leaves them out of the list.
-			reply.lesson_players.array = LessonHandlers.InLesson(user).Select(i => new PInteger { n = i }).ToArray();
+			// FA 선수카드 too (user 2026-11-15 via the engine session; engine's proposal: an expensive signing must not go into a combine by
+			// mistake): sent with them, so every app leaves them out without an update.
+			reply.lesson_players.array = LessonHandlers.InLesson(user).Concat(cards.Where(c => s_catalog.Get(c.Idx)?.IsFA == true).Select(c => c.Idx))
+				.Distinct().Select(i => new PInteger { n = i }).ToArray();
 			reply._max_possess_count.n = (byte)Math.Min(255, (int)RosterHandlers.MaxPossessOf(user));
 			List<(int item, int amount)> items = new[] { RareProtect, EliteProtect, LegendProtect }
 				.Select(i => (i, InventoryHandlers.ItemAmount(user, i))).Where(x => x.Item2 > 0).ToList();
@@ -215,6 +218,7 @@ namespace Ma9MServer
 				picked.Any(i => byIdx[i].IsLock) ? "locked card" :
 				picked.Any(deck.Contains) ? "lineup card" :
 				picked.Any(i => LockedForLesson(user, i)) ? "card in 특별수강" :
+				inputs.Any(c => c.IsFA) ? "FA card" :
 				owned.Count - picked.Count < MinKeep ? "too few players left" : null;
 			if (inputs.Count(c => c.IsLegend) > 1)
 			{

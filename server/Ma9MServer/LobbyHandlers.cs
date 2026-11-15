@@ -104,6 +104,8 @@ namespace Ma9MServer
 			{
 				// 시즌 완주 보너스 due (SeasonBonus): MP and a popup.
 				SeasonBonus.Deliver(session);
+				// 공인구 of this season (and the next one's from the postseason) once (SeasonBall; nothing until MA9M_BALL_FROM is set).
+				SeasonBall.Deliver(session);
 				// 리그 시상식 not yet shown (LeagueAwards; the client opens it once the lobby is free of other popups).
 				LeagueAwards.Deliver(session);
 				// 특별수강 results since the last visit (the lobby's LessonResultPopup; not while the client is

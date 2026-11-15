@@ -113,6 +113,8 @@ namespace Ma9MServer
 			AiTeams.Init(dbPath, data.Catalog, data);
 			if (Environment.GetEnvironmentVariable("MA9M_TIERS6") == "1" || Environment.GetEnvironmentVariable("MA9M_TIERS7") == "1") AiTeams.RenewNow(data);
 			SeasonBonus.Init(db, dbPath);
+			// 공인구 (systems session, 2026-11-15): the season's ball; standard everywhere until MA9M_BALL_FROM is set.
+			SeasonBall.Init(dbPath);
 		}
 
 		private static System.Threading.Timer s_timer;
@@ -536,6 +538,8 @@ namespace Ma9MServer
 				}
 				s_store.Save(next);
 				s_store.SetTeamGrade(m.s.UserCode, LeagueRules.TierGrade[LeagueRules.ChampionsTier]);
+				// CP left to spend in the new league: the lobby says so once (systems session, 2026-11-15).
+				TeamPropertyHandlers.NoteSpareCp(m.s.UserCode, m.s.Tier < LeagueRules.ChampionsTier ? LeagueRules.TierNames[LeagueRules.ChampionsTier] : null);
 			}
 			ServerLog.Info($"league: 챔피언스 {share} formed from {start:MM-dd HH:mm}: {string.Join(", ", clubs.Select(c => $"{c.Index}:{c.Name}{(c.IsHuman ? "(계정)" : string.Empty)}"))}");
 		}
@@ -639,6 +643,8 @@ namespace Ma9MServer
 			LeagueState next = NewLeague(s.UserCode, name, emblem, s.NextTier, s.Season + 1, s.Start + LeagueCalendar.Cycle, 1);
 			next.Clubs[next.MyIndex].LastRank = s.RankOf(s.MyIndex);
 			s_store.Save(next);
+			// CP left to spend in the new league: the lobby says so once (systems session, 2026-11-15).
+			TeamPropertyHandlers.NoteSpareCp(s.UserCode, s.NextTier > s.Tier ? LeagueRules.TierNames[s.NextTier] : null);
 			return next;
 		}
 
@@ -756,7 +762,7 @@ namespace Ma9MServer
 					Lineup mine = s_db.GetLineup(c.Owner);
 					HashSet<int> have = cards.Select(x => x.Idx).ToHashSet();
 					// A lineup over the 레전드 limit (RosterHandlers.LegendProblem) is built again too, without the extra 레전드.
-					if (mine == null || !mine.IsValid(have) || RosterHandlers.LegendProblem(mine) != null) mine = LineupBuilder.Build(RosterHandlers.LegendLimited(have), s_data.Catalog);
+					if (mine == null || !mine.IsValid(have) || RosterHandlers.LegendProblem(mine) != null || RosterHandlers.FaProblem(mine) != null) mine = LineupBuilder.Build(RosterHandlers.LegendLimited(have), s_data.Catalog);
 					return mine;
 				}
 			}
@@ -866,7 +872,9 @@ namespace Ma9MServer
 		// bareClub (engine session, 2026-11-11, 특성 자동 배분): that club's 팀 특성 are left off its team (still in traits).
 		// raw (자동 편성): the teams before the league reference and the traits (TeamStrength.LeagueShift of them), every card at
 		// 보통 condition (Team's neutral, 11-13).
-		private static (GameTeam[] teams, Lineup[] lineups, TraitEffects.Effect[] traits) Teams(LeagueState s, int game, Func<int, int> rotation, int bareClub = -1, bool raw = false)
+		// neutral (systems session, 2026-11-15, 특성 추천): every card at 보통 condition like raw, but with the league reference and
+		// the traits as usual — an allocation for days to come should not follow today's condition.
+		private static (GameTeam[] teams, Lineup[] lineups, TraitEffects.Effect[] traits) Teams(LeagueState s, int game, Func<int, int> rotation, int bareClub = -1, bool raw = false, bool neutral = false)
 		{
 			DateTime day = s.SlotTime(game);  // the slot's time: a 컨디션 회복제 counts by the hour (Condition.For)
 			GameTeam[] teams = new GameTeam[LeagueRules.Clubs];
@@ -878,7 +886,7 @@ namespace Ma9MServer
 				lineups[i] = LineupOf(s, c, out List<TeamCard> owned);
 				AiTeam ai = owned == null ? AiTeamOf(s, c) : null;
 				int aiCoach = ai != null && c.AiKey >= 0 && LeagueRules.NewStructure && AiTeams.HasDecks(s.Tier) ? AiTeams.RuleOf(s.Tier).Coach : 0;
-				teams[i] = Team(c, lineups[i], day, rotation(i), owned, ai?.Development.Values, aiCoach, neutral: raw);
+				teams[i] = Team(c, lineups[i], day, rotation(i), owned, ai?.Development.Values, aiCoach, neutral: raw || neutral);
 				if (owned != null) TeamStrength.AddBonuses(teams[i], lineups[i], owned);
 				else if (ai != null && ai.Development.Count > 0)
 				{
@@ -1089,6 +1097,7 @@ namespace Ma9MServer
 				m = CardGame.Build(teams[home], teams[away], env);
 				TraitEffects.Apply(m, 0, traits[home]);
 				TraitEffects.Apply(m, 1, traits[away]);
+				BallEffect.Apply(m, BallEffect.CorOf(s));   // 공인구 (engine session 11-15; 트리플A and up; the standard ball changes nothing)
 				// Each pitcher starts at the fatigue left from earlier games; tired or overused relievers sit out.
 				for (int t = 0; t < 2 && m.Tac != null; t++)
 				{

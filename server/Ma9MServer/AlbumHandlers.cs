@@ -19,13 +19,18 @@ namespace Ma9MServer
 
 		// 등급별 pages (user, 2026-10-20): year byte 254, team byte = page — 0 10볼 엘리트, 1 9볼 엘리트,
 		// 2 9볼 레어, 3 8볼 레어 (FusionRules rungs 10, 9, 8, 7), every season and club.
-		private const byte GradePageYear = 254;
+		internal const byte GradePageYear = 254;
 
 		private static readonly int[] GradePageRungs = { 10, 9, 8, 7 };
 
 		// 등급별 page 4 = 레전드 (engine session, 2026-11-08; user: "앨범에서도 레전드 카드가 보이게"): every legend card (grade 5),
 		// any ball. Clients before 1.0.35 have four pages and never ask for it.
 		private const int LegendPage = 4;
+
+		// FA 시장 (systems session, 2026-11-15; user via the engine: "FA 명단도 괜찮고, FA시장도 나쁘지 않을 것 같음"): 등급별 page 5 = every FA
+		// card, and a season's club 20 (the original's FA page, the app shows the FA team 250's cards of that season). Every card of
+		// those pages comes as seen (in colour: the list to sign from); a tap signs (FaMarket).
+		public const int FaPage = 5, FaAlbumTeam = 20;
 
 		private static Database s_db;
 
@@ -65,20 +70,30 @@ namespace Ma9MServer
 			int year = yy == LegendYear ? 0 : (yy >= 80 ? 1900 + yy : 2000 + yy);
 			HashSet<int> seen = Seen(user);
 			HashSet<int> owned = s_db.GetCards(user).Select(c => c.Idx).ToHashSet();
-			List<int> page = yy == GradePageYear && team == LegendPage
-				? s_catalog.All.Where(c => c.IsLegend).Select(c => c.Idx).ToList()
-				: yy == GradePageYear
-				? s_catalog.All.Where(c => FusionRules.RungOf(c) == GradePageRungs[Math.Clamp(team, 0, GradePageRungs.Length - 1)]).Select(c => c.Idx).ToList()
-				: s_catalog.All.Where(c => c.Year == year && c.TeamCode == team).Select(c => c.Idx).ToList();
+			bool faPage = yy == GradePageYear ? team == FaPage : team == FaAlbumTeam;
+			List<int> page = Page(s_catalog, yy, team, year);
 			Ma9MPacket.PKS_SC_ENTER_ALBUM reply = new Ma9MPacket.PKS_SC_ENTER_ALBUM();
 			reply.year.n = packet.year.n;
 			reply.team.n = packet.team.n;
-			reply.index.array = page.Where(seen.Contains).Select(i => new PInteger { n = i }).ToArray();
-			reply.total_count.n = (short)Math.Min(short.MaxValue, seen.Count(i => s_catalog.Get(i) != null));
+			reply.index.array = page.Where(i => faPage || seen.Contains(i)).Select(i => new PInteger { n = i }).ToArray();
+			// The FA cards are copies to sign, not to collect: out of the count (the app's total leaves them out too, 2026-11-15).
+			reply.total_count.n = (short)Math.Min(short.MaxValue, seen.Count(i => s_catalog.Get(i) is CardInfo c && !c.IsFA));
 			reply.possess_player.array = page.Where(owned.Contains).Select(i => new PInteger { n = i }).ToArray();
 			session.Send(reply);
 			ServerLog.Info($"[{session.Id}] album {year} team {team}: {reply.index.array.Length} of {page.Count} seen, {reply.possess_player.array.Length} owned; {reply.total_count.n} seen in all");
 		}
+
+		// The cards of a page (yy = the request's year byte, year = the season it means).
+		internal static List<int> Page(CardCatalog catalog, int yy, int team, int year) =>
+			yy == GradePageYear && team == LegendPage
+				? catalog.All.Where(c => c.IsLegend).Select(c => c.Idx).ToList()
+				: yy == GradePageYear && team == FaPage
+				? catalog.All.Where(c => c.IsFA).Select(c => c.Idx).ToList()
+				: yy == GradePageYear
+				? catalog.All.Where(c => !c.IsFA && FusionRules.RungOf(c) == GradePageRungs[Math.Clamp(team, 0, GradePageRungs.Length - 1)]).Select(c => c.Idx).ToList()
+				: team == FaAlbumTeam
+				? catalog.All.Where(c => c.IsFA && c.Year == year).Select(c => c.Idx).ToList()
+				: catalog.All.Where(c => c.Year == year && c.TeamCode == team).Select(c => c.Idx).ToList();
 
 		public static HashSet<int> Seen(uint userCode)
 		{

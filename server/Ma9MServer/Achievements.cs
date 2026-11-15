@@ -357,9 +357,11 @@ namespace Ma9MServer
 					values[Roster] = cards.Count;
 					// 레전드 (grade 5, the season '81) count neither as 엘리트 nor as a season (2026-11-09).
 					values[Elite] = infos.Count(c => c.Grade >= 4 && !c.IsLegend);
-					values[Rare] = infos.Count(c => c.Grade == 3);
+					// FA cards (2026-11-15, signed for MP in the FA 시장) count neither as 레어 nor as a season: those are for what packs and
+					// combines bring.
+					values[Rare] = infos.Count(c => c.Grade == 3 && !c.IsFA);
 					values[TenBall] = infos.Count(c => c.Ball >= 10);
-					values[Years] = infos.Where(c => !c.IsLegend && c.Year > 0).Select(c => c.Year).Distinct().Count();
+					values[Years] = infos.Where(c => !c.IsLegend && !c.IsFA && c.Year > 0).Select(c => c.Year).Distinct().Count();
 					values[Legend] = infos.Count(c => c.IsLegend);
 					values[LegendPair] = Math.Min(infos.Count(c => c.IsLegend && c.IsBatter), infos.Count(c => c.IsLegend && !c.IsBatter));
 					return values[key];

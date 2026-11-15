@@ -65,6 +65,11 @@ namespace Ma9MServer
 				{
 					Lineup(session, user, what.EndsWith(":keep", StringComparison.Ordinal), v2);
 				}
+				else if (what.StartsWith(FaMarket.Request, StringComparison.Ordinal))
+				{
+					// FA 시장 (2026-11-15): the album's FA pages.
+					FaMarket.Ask(session, user, what.Substring(FaMarket.Request.Length), v2);
+				}
 				else
 				{
 					Say(session, 1, "알림", "알 수 없는 요청입니다.");
@@ -106,6 +111,16 @@ namespace Ma9MServer
 			}
 			Say(session, p.v2 ? DoneType2 : DoneType, p.title, done);
 		}
+
+		// Another feature's question in this window (FaMarket, 2026-11-15): apply runs on the ok button; "!" + text = refused there.
+		public static void Offer(GameSession session, bool v2, string title, string text, string ok, Func<string> apply)
+		{
+			s_pending[session.Team.UserCode] = (DateTime.UtcNow, title, apply, v2);
+			Say(session, v2 ? AskType2 : AskType, title, text, ok);
+		}
+
+		// A plain message (type 1; the app's loading goes).
+		public static void Tell(GameSession session, string title, string text) => Say(session, 1, title, text);
 
 		// more: further pages after [title, text, ok] (1.0.46 app: a 자세히 button pages through them; only for v2 requests).
 		private static void Say(GameSession session, byte type, string title, string text, string ok = null, IEnumerable<string> more = null)
@@ -153,31 +168,86 @@ namespace Ma9MServer
 			return string.Concat(list.Select((x, i) => (i == 0 ? string.Empty : i % per == 0 ? "\n" : " · ") + x));
 		}
 
+		// The server loop (Program sets it): the trait advice's games run on another thread and the reply is posted back here
+		// (11-15 05:2x: 5-12 s on the loop held every other player up).
+		public static GameLoop Loop;
+
+		private static readonly HashSet<uint> s_traitsBusy = new HashSet<uint>();
+
 		private static void Traits(GameSession session, uint user, bool v2)
 		{
 			const string Title = "특성 추천 배분";
-			LeagueService.TraitAdvice a = LeagueService.AdviseTraits(user);
+			if (s_traitsBusy.Contains(user))
+			{
+				ServerLog.Info($"[{session.Id}] trait advice: still working on the last one");
+				return;
+			}
+			LeagueService.TraitAdvice a = LeagueService.AdviseTraits(user, deferGames: Loop != null);
 			if (a == null)
 			{
 				Say(session, 1, Title, "리그에 들어간 뒤에 계산할 수 있습니다.");
 				return;
 			}
+			if (a.GamesJob == null)
+			{
+				TraitsReply(session, user, v2, a);
+				return;
+			}
+			s_traitsBusy.Add(user);
+			Action games = a.GamesJob;
+			System.Threading.Tasks.Task.Run(() =>
+			{
+				DateTime t0 = DateTime.UtcNow;
+				Exception error = null;
+				try
+				{
+					games();
+				}
+				catch (Exception e)
+				{
+					error = e;
+				}
+				Loop.Post(() =>
+				{
+					s_traitsBusy.Remove(user);
+					ServerLog.Info($"[{session.Id}] traitadvice games: {(DateTime.UtcNow - t0).TotalMilliseconds:F0} ms");
+					if (error != null)
+					{
+						ServerLog.Warn($"[{session.Id}] traitadvice games failed: {error.GetType().Name}: {error.Message}");
+						Say(session, 1, "알림", "계산하지 못했습니다. 잠시 뒤 다시 해 주세요.");
+						return;
+					}
+					TraitsReply(session, user, v2, a);
+				});
+			});
+		}
+
+		private static void TraitsReply(GameSession session, uint user, bool v2, LeagueService.TraitAdvice a)
+		{
+			const string Title = "특성 추천 배분";
 			Dictionary<byte, byte> advice = a.Points.Where(p => p.Value > 0).ToDictionary(p => p.Key, p => p.Value);
 			Dictionary<byte, byte> saved = a.Saved.Where(p => p.Value > 0).ToDictionary(p => p.Key, p => p.Value);
 			if (advice.Count == saved.Count && advice.All(p => saved.TryGetValue(p.Key, out byte v) && v == p.Value))
 			{
-				Say(session, 1, Title, "지금 배분이 추천 배분과 같습니다.");
+				// 11-15 05:2x: kept because no other allocation was clearly better in games (AdviseTraits stage 2).
+				Say(session, 1, Title, a.KeptSaved
+					? $"지금 배분을 그대로 두는 것이 좋습니다.\n가장 나은 다른 배분과 차이 {a.OtherGain * 100:+0.0;-0.0;0.0}%p,\n경기 {a.SimGames}판씩 치른 오차(±{a.SimSe * 100:0.0}) 안입니다."
+					: "지금 배분이 추천 배분과 같습니다.");
+				ServerLog.Info($"[{session.Id}] trait advice: keep{(a.KeptSaved ? $" (other {a.OtherGain * 100:+0.0;-0.0} ±{a.SimSe * 100:0.0})" : string.Empty)}");
 				return;
 			}
-			double gain = (a.Win - a.SavedWin) * 100;
+			// Since 11-15 the advice is picked in games (AdviseTraits → CheckAdviceInGames) and the window shows their difference.
+			bool sim = a.SimGames > 0;
+			double gain = sim ? (a.SimAdvice - a.SimSaved) * 100 : (a.Win - a.SavedWin) * 100;
 			// The advice by tree, then what it takes away from the points of now (AI testers 11-12 night, LG 67 · NC: "창에 새 배분만
 			// 있고 빠지는 것이 없다"), each wrapped to the box.
 			IEnumerable<string> Names(char type, Dictionary<byte, byte> points) => TeamPropertyHandlers.Traits.Where(t => t.Type == type && points.ContainsKey(t.Index)).Select(t => $"{t.Name} {points[t.Index]}");
 			Dictionary<byte, byte> removed = saved.Where(p => p.Value > advice.GetValueOrDefault(p.Key)).ToDictionary(p => p.Key, p => (byte)(p.Value - advice.GetValueOrDefault(p.Key)));
 			List<string> lines = new List<string>
 			{
-				$"1군 선수와 같은 리그 상대들로 계산한 추천입니다(CP {advice.Values.Sum(v => v)}/{a.Cp}).",
-				$"지금 배분보다 승률 약 {gain:+0.0;-0.0;0.0}%p"
+				sim ? $"1군으로 같은 리그 상대들과 경기해 고른 추천입니다(CP {advice.Values.Sum(v => v)}/{a.Cp})."
+					: $"1군 선수와 같은 리그 상대들로 계산한 추천입니다(CP {advice.Values.Sum(v => v)}/{a.Cp}).",
+				$"지금 배분보다 승률 약 {gain:+0.0;-0.0;0.0}%p" + (sim && !a.SimClear ? " (차이가 작아 지금도 괜찮음)" : string.Empty)
 			};
 			lines.AddRange(Wrapped("타자: ", Names('H', advice)));
 			lines.AddRange(Wrapped("투수: ", Names('P', advice)));
@@ -190,7 +260,7 @@ namespace Ma9MServer
 				return problem != null ? "!" + problem : "추천대로 특성을 배분했습니다.\n특성관리 화면을 다시 엽니다.";
 			}, v2);
 			Say(session, v2 ? AskType2 : AskType, Title, text.TrimEnd('\n'), "적용");
-			ServerLog.Info($"[{session.Id}] trait advice: {gain:+0.0;-0.0}%p, {string.Join(" ", advice.Select(p => $"{p.Key}:{p.Value}"))}");
+			ServerLog.Info($"[{session.Id}] trait advice: {gain:+0.0;-0.0}%p{(sim ? $" in games ±{a.SimSe * 100:0.0} (TeamValue {(a.Win - a.SavedWin) * 100:+0.0;-0.0})" : string.Empty)}, {string.Join(" ", advice.Select(p => $"{p.Key}:{p.Value}"))}");
 		}
 
 		private static string CardName(int idx)

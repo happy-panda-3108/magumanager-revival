@@ -104,6 +104,17 @@ public static class Ma9MRosterPicks
 			if (picks != null && picks.Count > 0 && dict != null)
 			{
 				HashSet<int> keep = Members(dict, picks.Select(v => Key(type, v, batter)), idx);
+				if (type == SortPopup.eSortType.Team)
+				{
+					// FA 선수카드 (2026-11-15): an FA card also under its source card's club (Ma9MSortMemory.FaSourceTeam).
+					foreach (T c in cards)
+					{
+						if (picks.Contains(Ma9MSortMemory.FaSourceTeam(idx(c))))
+						{
+							keep.Add(idx(c));
+						}
+					}
+				}
 				result = result.Where(c => keep.Contains(idx(c)));
 			}
 		}

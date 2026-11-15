@@ -25,7 +25,7 @@ namespace Ma9MServer
 		{
 			if (!CoachCatalog.Enabled || s_cs == null || info == null) return null;
 			int coach = Staff(user)[CoachCatalog.SC];
-			return coach != 0 && CoachCatalog.Serves(coach, info.TeamCode) ? CoachCatalog.ResultOdds[CoachCatalog.Grade(coach)] : null;
+			return coach != 0 && CoachCatalog.ServesCard(coach, info) ? CoachCatalog.ResultOdds[CoachCatalog.Grade(coach)] : null;
 		}
 
 		public static int RollResult(uint user, CardInfo info, Random rng)
@@ -55,7 +55,7 @@ namespace Ma9MServer
 			if (!CoachCatalog.Enabled || s_cs == null || info == null) return;
 			rng ??= s_rng;
 			int coach = Staff(user)[info.IsBatter ? CoachCatalog.HC : CoachCatalog.PC];
-			if (coach == 0 || !CoachCatalog.Serves(coach, info.TeamCode)) return;
+			if (coach == 0 || !CoachCatalog.ServesCard(coach, info)) return;
 			// Not on the lowest square (user 2026-11-12: "트레이닝하다가 젤 낮은 단계에서 코치가 등장하는거 살짝 역겨운데 그 때는 코치가 등장하지
 			// 않는걸로 합시다").
 			if (result == 0 || result > TopResult) return;

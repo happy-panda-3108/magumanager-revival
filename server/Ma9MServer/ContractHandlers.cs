@@ -32,6 +32,23 @@ namespace Ma9MServer
 
 		public const int CostPerBall = 40_000;
 
+		// FA 선수카드 (user 2026-11-15 18:3x via the engine session: "계약일수가 처음부터 14일(3.5일 1시즌 x 4바퀴) … 4년 계약 … 계약 연장 시 한
+		// 번에 14일씩 증가되고, 가격은 기존 FA 영입 가격에 10%씩 계속 추가로 붙는걸로 … 계약 연장때마다 5의 보너스 스탯 … 스탯을 증가시킬 수
+		// 있는 계약연장은 동일하게 6회 … 1500만, 1650만, 1800만, ... 단리계산"): 14 days at signing (FaMarket) and per renewal; +5 to share
+		// for the first six. 18:46 (via the engine session): "보통은 FA 영입 선수들이 최대 8~10년정도 더 뛰니까 3번까지만 받읍시다. 4번째부터는
+		// 마지막 3번째 금액에서 60% 할인되고, 이 금액으로 고정되어서 계약 연장을 하는걸로 합시다" — renewals 1-3 cost FaMarket.Price × 1.1 /
+		// 1.2 / 1.3, every later one 40% of the third (× 0.52); the early-renewal surcharge as the other cards ("다른 카드와 같이 웃돈"),
+		// the 99-day cap too.
+		public const byte FaStartDays = 14;
+
+		public const int FaExtendDays = 14;
+
+		public const int FaBonusPerRenewal = 5;
+
+		public static int ExtendDaysOf(CardInfo c) => c != null && c.IsFA ? FaExtendDays : ExtendDays;
+
+		public static int BonusPerRenewalOf(CardInfo c) => c != null && c.IsFA ? FaBonusPerRenewal : BonusPerRenewal;
+
 		// Renewing with more days left than this costs more, × (1 + 0.2 × (days − this)). 10 as the original; 2 with
 		// MA9M_CONTRACT_FROM2=1 (user, 2026-11-10 02:2x: "그럼 우리는 2일 초과로 남아있을 시 비싸지게 만듭시다"). The switch
 		// goes on in run_server.bat once the phone has APK 1.0.41, which reads this number from the cost table's 12th column
@@ -83,6 +100,9 @@ namespace Ma9MServer
 			{
 				lines.Add(count + "\t" + string.Join("\t", Enumerable.Range(1, 10).Select(b => (b * CostPerBall).ToString(CultureInfo.InvariantCulture))) + after);
 			}
+			// 2026-11-15: the FA 계약금 by ball (FaMarket.Price), the base of FaCost. Apps up to 1.0.52 take it as a 7th count row and use
+			// rows 0-5 only; later apps read the row named "fa" (ContractCost.Ma9MFaCost).
+			lines.Add("fa\t" + string.Join("\t", Enumerable.Range(1, 10).Select(b => FaMarket.Price(new CardInfo { Ball = b }).ToString(CultureInfo.InvariantCulture))) + after);
 			string text = string.Join("\r\n", lines) + "\r\n";
 			if (!File.Exists(path) || File.ReadAllText(path) != text)
 			{
@@ -99,6 +119,41 @@ namespace Ma9MServer
 				cost *= 1f + (daysLeft - (float)SurchargeAfter) * 0.2f;
 			}
 			return (int)(cost / 100f) * 100;
+		}
+
+		// A card's next renewal: count = renewals so far.
+		public static int Cost(int count, CardInfo info, int daysLeft) =>
+			info != null && info.IsFA ? FaCost(count, FaMarket.Price(info), daysLeft) : Cost(count, info?.Ball ?? 1, daysLeft);
+
+		// An FA card's renewal after `count` renewals: price × (11 + count) / 10 for the first three, price × 13 / 10 × 40% after,
+		// then the same surcharge as the others ((5 + days over) / 5), whole numbers on both sides (the app's ContractCost.Ma9MFaCost),
+		// down to the 100.
+		public const int FaRisingRenewals = 3;
+
+		public static int FaCost(int count, int price, int daysLeft)
+		{
+			count = Math.Max(0, count);
+			long cost = count < FaRisingRenewals ? (long)price * (11 + count) / 10 : (long)price * (10 + FaRisingRenewals) * 4 / 100;
+			if (daysLeft > SurchargeAfter)
+			{
+				cost = cost * (5 + daysLeft - SurchargeAfter) / 5;
+			}
+			return (int)Math.Min(int.MaxValue, cost / 100 * 100);
+		}
+
+		// An FA card's end at signing (team_card.contract_until; other cards leave it empty for acquired + StartDays).
+		public static void StartFa(uint user, int idx, DateTime today)
+		{
+			using (SqliteConnection c = Open())
+			using (SqliteCommand cmd = c.CreateCommand())
+			{
+				cmd.CommandText = "UPDATE team_card SET contract_until = $until WHERE user_code = $u AND card_idx = $i";
+				cmd.Parameters.AddWithValue("$until", today.Date.AddDays(FaStartDays).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+				cmd.Parameters.AddWithValue("$u", (long)user);
+				cmd.Parameters.AddWithValue("$i", idx);
+				cmd.ExecuteNonQuery();
+			}
+			Invalidate(user);
 		}
 
 		// The first day a contract is expired: its stored end, or the acquisition day + StartDays.
@@ -232,18 +287,18 @@ namespace Ma9MServer
 				return "already 99 days";
 			}
 			bool bonus = card.ContractCount < BonusRenewals;
-			int[] points = BonusPoints(bonusStat);
+			int[] points = info.IsFA ? FaBonusPoints(bonusStat) : BonusPoints(bonusStat);
 			if (bonus && points == null)
 			{
 				return "no bonus stat chosen";
 			}
-			int cost = Cost(card.ContractCount, info.Ball, card.RemainContract);
+			int cost = Cost(card.ContractCount, info, card.RemainContract);
 			if (mp < cost)
 			{
 				return $"MP short ({cost:N0})";
 			}
 			bool expired = card.ContractUntil <= today;
-			DateTime until = (expired ? today : card.ContractUntil).AddDays(ExtendDays);
+			DateTime until = (expired ? today : card.ContractUntil).AddDays(ExtendDaysOf(info));
 			if (until > today.AddDays(MaxDays))
 			{
 				until = today.AddDays(MaxDays);
@@ -273,6 +328,37 @@ namespace Ma9MServer
 			Missions.Add(user, Missions.Contracts);  // 업적
 			return null;
 		}
+
+		// An FA card's renewal bonus: the byte is the index (0-251) of a split of FaBonusPerRenewal points over the six stats, in the
+		// order of FaSplits (a ascending, then b, … each 0..what is left; the app's Ma9MContractPoints the same). A byte cannot hold the
+		// 3-point codes and these together; FA cards come with an app that knows them, so the card tells which one it is.
+		private static readonly int[][] FaSplits = Splits(FaBonusPerRenewal);
+
+		private static int[][] Splits(int total)
+		{
+			List<int[]> list = new List<int[]>();
+			int[] cur = new int[6];
+			void Go(int k, int left)
+			{
+				if (k == 5)
+				{
+					cur[5] = left;
+					list.Add((int[])cur.Clone());
+					return;
+				}
+				for (int v = 0; v <= left; v++)
+				{
+					cur[k] = v;
+					Go(k + 1, left - v);
+				}
+			}
+			Go(0, total);
+			return list.ToArray();
+		}
+
+		public static int[] FaBonusPoints(int code) => code >= 0 && code < FaSplits.Length ? (int[])FaSplits[code].Clone() : null;
+
+		public static int FaBonusCode(int[] points) => Array.FindIndex(FaSplits, s => s.SequenceEqual(points));
 
 		// A renewal's bonus by stat (null = none chosen). 0–5: +3 to that stat (the 1.0.5 client); 32 + a·36 +
 		// b·6 + c: +1 each to a, b and c (user, 2026-10-20: "보너스 스탯 3을 주고 원하는대로 찍을 수 있게 … 컨택1,
@@ -410,8 +496,10 @@ namespace Ma9MServer
 			}
 			string[] rows = File.ReadAllLines(Path.Combine(dataDir, "tables", "ma9_contract-cost.txt"));
 			int columns = SurchargeAfter != 10 ? 12 : 11;
-			bool tableOk = rows.Length == 1 + BonusRenewals && rows.All(r => r.Split('\t').Length == columns)
-				&& rows.Skip(1).All(r => columns == 11 || r.Split('\t')[11] == SurchargeAfter.ToString(CultureInfo.InvariantCulture));
+			// The header, a row per renewal count and the FA row (2026-11-15).
+			bool tableOk = rows.Length == 2 + BonusRenewals && rows.All(r => r.Split('\t').Length == columns)
+				&& rows.Skip(1).All(r => columns == 11 || r.Split('\t')[11] == SurchargeAfter.ToString(CultureInfo.InvariantCulture))
+				&& rows[^1].StartsWith("fa\t", StringComparison.Ordinal) && rows[^1].Split('\t')[8] == FaMarket.PriceByBall[8].ToString(CultureInfo.InvariantCulture);
 			ServerLog.Info($"contract self-test: {(tableOk ? "ok" : "FAIL")} cost table {rows.Length} rows of {columns} columns, surcharge after {SurchargeAfter} days; row 1: {rows.ElementAtOrDefault(1)}");
 			if (user == 0) ServerLog.Info("contract self-test: FAIL no autotest team");
 			int problems = (tableOk ? 0 : 1) + (user == 0 ? 1 : SelfTest(user));

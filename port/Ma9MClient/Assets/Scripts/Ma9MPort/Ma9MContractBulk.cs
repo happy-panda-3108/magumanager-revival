@@ -71,7 +71,7 @@ public class Ma9MContractBulk : MonoBehaviour
 			return;
 		}
 		m_current = m_queue.Dequeue();
-		m_cost = TableReader.ContractCost.GetCost((byte)m_current.contract_count, m_current.card_info.ball, m_current.ui_card.remain_contract.n);
+		m_cost = TableReader.ContractCost.Ma9MCost(m_current.ui_card.index.n, (byte)m_current.contract_count, m_current.card_info.ball, m_current.ui_card.remain_contract.n);
 		Ma9MPacket.PKS_CS_EXTEND_CONTRACT packet = new Ma9MPacket.PKS_CS_EXTEND_CONTRACT();
 		packet.target_card.n = m_current.ui_card.index.n;
 		packet.bonus_stat.n = byte.MaxValue;
