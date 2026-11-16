@@ -222,6 +222,24 @@ namespace Ma9MServer
 			});
 		}
 
+		// The kept-allocation text by the sign of the best other allocation's difference (AI tester LG 95, 11-16: "차이 -0.6%p,
+		// 오차(±0.4) 안" read as a contradiction: the other allocation was worse, outside the error). The rule itself is unchanged:
+		// switch only when the other is better by more than twice the error (LeagueService.CheckAdviceInGames).
+		private static string KeptText(LeagueService.TraitAdvice a)
+		{
+			double diff = Math.Round(a.OtherGain * 100, 1);
+			string games = $"경기 {a.SimGames}판씩 치른 오차 ±{a.SimSe * 100:0.0}%p";
+			if (diff < 0)
+			{
+				return $"지금 배분이 가장 좋습니다.\n가장 나은 다른 배분보다 승률이 {-diff:0.0}%p 높습니다.\n({games})";
+			}
+			if (diff == 0)
+			{
+				return $"지금 배분을 그대로 두는 것이 좋습니다.\n가장 나은 다른 배분과 승률 차이가 없습니다.\n({games})";
+			}
+			return $"지금 배분을 그대로 두는 것이 좋습니다.\n가장 나은 다른 배분이 승률 {diff:0.0}%p 높지만,\n오차에 비해 작아 바꿀 만하지 않습니다.\n({games})";
+		}
+
 		private static void TraitsReply(GameSession session, uint user, bool v2, LeagueService.TraitAdvice a)
 		{
 			const string Title = "특성 추천 배분";
@@ -230,9 +248,7 @@ namespace Ma9MServer
 			if (advice.Count == saved.Count && advice.All(p => saved.TryGetValue(p.Key, out byte v) && v == p.Value))
 			{
 				// 11-15 05:2x: kept because no other allocation was clearly better in games (AdviseTraits stage 2).
-				Say(session, 1, Title, a.KeptSaved
-					? $"지금 배분을 그대로 두는 것이 좋습니다.\n가장 나은 다른 배분과 차이 {a.OtherGain * 100:+0.0;-0.0;0.0}%p,\n경기 {a.SimGames}판씩 치른 오차(±{a.SimSe * 100:0.0}) 안입니다."
-					: "지금 배분이 추천 배분과 같습니다.");
+				Say(session, 1, Title, a.KeptSaved ? KeptText(a) : "지금 배분이 추천 배분과 같습니다.");
 				ServerLog.Info($"[{session.Id}] trait advice: keep{(a.KeptSaved ? $" (other {a.OtherGain * 100:+0.0;-0.0} ±{a.SimSe * 100:0.0})" : string.Empty)}");
 				return;
 			}
@@ -278,6 +294,14 @@ namespace Ma9MServer
 				Say(session, 1, title, "리그에 들어간 뒤에 계산할 수 있습니다.");
 				return;
 			}
+			// 포지션 엄수 (engine 2026-11-16): no 1군 in position could be built from the cards owned (Lineup is the 1군 of now).
+			if (r.NoFit != null)
+			{
+				Say(session, 1, title, "맞는 포지션으로 1군을 짤 수 없습니다.\n" + r.NoFit
+					+ (r.CurrentMisplaced.Count > 0 ? $"\n지금 1군에서 포지션이 맞지 않는 선수 {r.CurrentMisplaced.Count}명" : string.Empty));
+				ServerLog.Info($"[{session.Id}] auto lineup{(keepColour ? " keep" : string.Empty)}: no fit ({r.NoFit.Replace('\n', ' ')}), misplaced {r.CurrentMisplaced.Count}");
+				return;
+			}
 			IEnumerable<int> Cards(Lineup l) => l.Batters.Concat(l.Pitchers).Where(i => i != 0);
 			HashSet<int> now = Cards(r.Current).ToHashSet(), next = Cards(r.Lineup).ToHashSet();
 			List<int> comes = next.Where(i => !now.Contains(i)).ToList(), goes = now.Where(i => !next.Contains(i)).ToList();
@@ -307,6 +331,24 @@ namespace Ma9MServer
 			}, v2);
 			Say(session, v2 ? AskType2 : AskType, title, text.TrimEnd('\n'), "적용", more);
 			ServerLog.Info($"[{session.Id}] auto lineup{(keepColour ? " keep" : string.Empty)}: {r.Balls}/{r.Cap}, TeamValue +{r.Gain * 100:0.0}%p, games {r.SimNow:P1} → {r.SimAdvice:P1} ±{r.SimSe:P1} (clear {r.SimClear}), kept {r.SimKept:P1}, in {comes.Count}, out {goes.Count}, {r.Evaluations} evals, start {r.Start}");
+		}
+
+		// 포지션 엄수 (user 2026-11-16 18:3x 7번, engine AutoLineup.StrictPositions): the cards of now out of their position that the
+		// advice puts right, and a note when that costs win share (the games may rate the 1군 in position lower).
+		private static List<string> MisplacedLines(LeagueService.AutoLineupResult r)
+		{
+			List<string> lines = new List<string>();
+			if (r.CurrentMisplaced == null || r.CurrentMisplaced.Count == 0)
+			{
+				return lines;
+			}
+			lines.AddRange(Wrapped($"포지션이 맞지 않던 {r.CurrentMisplaced.Count}명을 제자리로: ", r.CurrentMisplaced.Take(4).Select(CardName)
+				.Concat(r.CurrentMisplaced.Count > 4 ? new[] { $"외 {r.CurrentMisplaced.Count - 4}명" } : Array.Empty<string>())));
+			if (HasSim(r) && r.SimAdvice < r.SimNow)
+			{
+				lines.Add("(자리를 맞추면 예상 승률이 지금보다 낮게 나올 수 있음)");
+			}
+			return lines;
 		}
 
 		// AutoLineup's paired games (engine session 11-12): SimGames 0 (the advice is the 1군 of now) leaves them NaN.
@@ -352,6 +394,7 @@ namespace Ma9MServer
 			List<string> s = Wrapped(string.Empty, new[] { $"볼 {r.Balls}/{r.Cap}" }.Concat(WinItems(r)));
 			s.Add(comes.Count == 0 ? "같은 선수로 자리·타순만 바뀝니다."
 				: $"바뀌는 선수 {comes.Count}명 (타자 {comes.Count(batters.Contains)} · 투수 {comes.Count(i => !batters.Contains(i))})");
+			s.AddRange(MisplacedLines(r));
 			List<int> starts = Enumerable.Range(0, 5).Where(k => was.Pitchers[k] != now.Pitchers[k]).ToList();
 			if (starts.Count <= 2)
 			{

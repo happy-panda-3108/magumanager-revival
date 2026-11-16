@@ -28,6 +28,13 @@ public class Ma9MHelp : MonoBehaviour
 	// 2026-11-13 (user 16:5x 결정 5: "TP는 최초 6개 있고, TP 충전권을 상점에서 10만 MP로 사야한다는 것도 도움말로 적어야겠네"; server
 	// TrainingStore.TpCharges 6, ShopHandlers 202 트레이닝 횟수 충전권 100,000 MP). The training tab is a panel of the player window,
 	// which has no path title of its own, so the page goes on the screens that lead there.
+	// 2026-11-16 (user 18:3x 9번): 전력강화 > 트레이닝북 조합&교환 is one screen with two pages (CombineTraining_Main.Ma9MSetMode).
+	private static readonly string TrainingPages =
+		"트레이닝북 조합&교환: 한 화면에 두 쪽이 있습니다.\n" +
+		"화면을 왼쪽으로 밀면 교환, 오른쪽으로 밀면 조합으로 넘어가고,\n" +
+		"위 [트레이닝북 조합] [트레이닝북 교환]을 눌러도 됩니다.\n" +
+		"넘어갈 때 칸에 올린 책은 목록으로 돌아갑니다.";
+
 	private static readonly string TrainingPoint =
 		"트레이닝(선수 정보 > 트레이닝)은 카드마다\nTRAINING POINT 6칸으로 시작해 한 번에 1칸씩 씁니다.\n" +
 		"다 쓰면 저절로 다시 차지 않습니다.\n" +
@@ -185,15 +192,28 @@ public class Ma9MHelp : MonoBehaviour
 		},
 		// 2026-11-15 FA 시장 (user 15:4x via the engine session; server FaMarket, AlbumHandlers, RosterHandlers.FaProblem,
 		// TeamColors, coach lines by HomeTeam). The album is a page of 구단정보 ("기록실>구단정보", TitleHints).
-		["Scene_TeamInfo"] = () => new[]
+		// 2026-11-16 (user 18:3x 8·9번): the album shows the FA cards as every other card (a tap opens the player window); signing is
+		// 전력강화 > FA 시장, the same scene with TeamInfo_Album.Ma9MInMarket.
+		["Scene_TeamInfo"] = () => TeamInfo_Album.Ma9MInMarket ? new[]
+		{
+			// 2026-11-17 (user 00:0x: "시즌마다 바뀌는 명단에 우리 1군 팀컬러에 맞는 FA 3명, 전체 무작위 7명 해서 총 10명"; server FaMarket.MarketList).
+			"FA 시장: 이번 시즌에 나온 FA 10명입니다.\n우리 1군 팀컬러에 드는 3명과 무작위 7명이고,\n시즌이 바뀌면 새 명단이 나옵니다.\n" +
+			"카드를 한 번 누르면 금색 테두리로 고르고,\n꾹 누르면 선수 정보를 봅니다.",
+			"[FA 영입]을 누르면 고른 선수의 계약금과\n남는 MP·1군 볼 상한이 나오고, [영입]이면 들어옵니다.\n" +
+			"명단은 시즌 처음 들어왔을 때의 1군으로 정해지고\n이미 가진 FA는 나오지 않습니다.",
+			"계약금: 8볼 1,500만 · 9볼 3,000만 MP, 계약 14일.\n연장도 14일씩: 1~3번째는 계약금의 1.1·1.2·1.3배,\n" +
+			"4번째부터는 3번째 값의 40%로 고정입니다.\n연장 보너스는 처음 6번까지 5점씩입니다.\n" +
+			"남은 날이 2일을 넘을 때 연장하면 웃돈이 붙습니다.",
+			"FA 선수: 8·9볼 레어 카드의 FA 판입니다.\n능력치는 원래 카드와 같고, 팀컬러는\n구단 상관없이 자기 해·연대 묶음에 듭니다.\n" +
+			"1군에는 FA 1장까지, 원래 카드와 함께는 안 됩니다.\n코치 계보는 어느 구단 코칭스태프에게서든 받습니다."
+		} : new[]
 		{
 			"앨범: 가져 본 적 있는 카드는 색으로,\n아직 없는 카드는 흑백으로 보입니다.\n" +
 			"연도 버튼 > 등급별: 10볼 엘리트 · 9볼 엘리트 ·\n9볼 레어 · 8볼 레어 · 레전드 · FA를\n시즌·구단 없이 한 번에 봅니다(정렬·거르기).",
 			"FA 선수: 8·9볼 레어 카드의 FA 판입니다.\n능력치는 원래 카드와 같고, 팀컬러는\n구단 상관없이 자기 해·연대 묶음에 듭니다.\n" +
 			"1군에는 FA 1장까지, 원래 카드와 함께는 안 됩니다.\n카드팩·조합·시범경기 보상에는 나오지 않습니다.",
-			"FA 영입: 등급별 > FA나 시즌별 FA 구단에서\n카드를 누르면 계약금과 남는 MP가 나오고,\n" +
-			"[영입]이면 계약 14일로 들어옵니다(같은 FA는 한 장).\n꾹 누르면 선수 정보를 봅니다.\n" +
-			"코치 계보는 원래 카드의 구단으로 칩니다."
+			"앨범의 FA 카드도 누르면 선수 정보를 봅니다.\n" +
+			"FA 영입은 전력강화 > FA 시장에서 합니다\n(계약금 8볼 1,500만 · 9볼 3,000만, 계약 14일)."
 		},
 		// AI 테스터 불편 59 (2026-11-11): 특별강좌·코치카드조합에 도움말이 없음. LessonHandlers, CoachCatalog (MixCards), ShopHandlers 가격.
 		["Scene_SpecialLecture"] = () => new[]
@@ -217,7 +237,11 @@ public class Ma9MHelp : MonoBehaviour
 			// 2026-11-13 (user): three 엘리트 타격코치 (투수코치) of one line → the same coach, its stat drawn again (CoachMix).
 			// 2026-11-14 (user: 정신·정신·스피드 gave 스피드 again): the new stat is one the three did not have (CoachCatalog.RollOtherStat).
 			"엘리트는 3장으로 새 엘리트 1장을 받습니다\n(같은 계보 3장이면 그 계보의 엘리트,\n같은 계보 타격·투수코치 3장은 넣은 카드에 없던 능력치로).\n" +
-			"계보는 이름이 바뀐 구단을 한 구단으로 봅니다\n(예: 해태·KIA, OB·두산, 빙그레·한화)."
+			"계보는 이름이 바뀐 구단을 한 구단으로 봅니다\n(예: 해태·KIA, OB·두산, 빙그레·한화).",
+			// 2026-11-17 (user: "코치 조합 필터링을 다른 화면처럼"; CoachCardCombineMain.OnBtn_MainSort, SortPopupPanel.Ma9MCoachValues).
+			"목록 위 버튼(코치종류·구단·연도·코치등급)\n짧게 누르면 정렬(한 번 더 누르면 반대로),\n" +
+			"길게 누르면 거르기: 여러 값 고르기·제외·모두 해제.\n" +
+			"거르기는 버튼끼리 함께 걸립니다(예: LG + 노말).\n구단·연도에는 가진 코치 카드의 값만 나옵니다."
 		},
 		// AI 테스터 NC (11-11): 작전실·순위표에 (?)가 없음. sim TacticRules (Tactics.cs), LeagueState.Ranked, LeagueRules.NextTier.
 		["Scene_OperationRoom"] = () => new[]
@@ -259,14 +283,17 @@ public class Ma9MHelp : MonoBehaviour
 		// 2026-11-11 빠른조합·목표교환 (Ma9MBookQuick; server TrainingHandlers TryMix/TryExchange/TryQuickMix/TryTargetExchange).
 		["Scene_CombineTraining"] = () => CombineTraining_Main.Ma9MExchange ? new[]
 		{
+			// 2026-11-16 (user 18:3x 9번): one 전력강화 slot, two pages.
+			TrainingPages,
 			// 2 → 1 since 2026-11-12 (user 10:4x).
-			"교환소: 안 쓰는 III·IV 트레이닝북 2권을\n같은 등급 원하는 능력치 책 1권으로 바꿉니다.\n" +
+			"트레이닝북 교환: 안 쓰는 III·IV 트레이닝북 2권을\n같은 등급 원하는 능력치 책 1권으로 바꿉니다.\n" +
 			"(2권은 능력치가 달라도 되고, 등급은 같아야 합니다)\n책 2권을 칸에 올리고 교환을 눌러 능력치를 고릅니다.",
 			"목표교환: 능력치별로 갖고 싶은 권수를 정하면\n목표보다 많은 책(목표 0인 능력치부터) 2권마다\n" +
 			"모자란 능력치 책 1권으로 한 번에 바꿉니다.\n목표는 이 기기에 구단별로 기억됩니다(III·IV 따로).\n" +
 			"줄을 눌러 고르고 -1/+1(꾹 누르면 빠르게)."
 		} : new[]
 		{
+			TrainingPages,
 			"같은 등급 트레이닝북 4권 → 한 등급 위 1권\n(능력치는 무작위). III은 트레이닝코치가 있으면\n" +
 			"코치 등급에 따라 5·4·3·2권으로 IV 1권.\n빠른선택: 같은 등급 4권을 칸에 올립니다.",
 			"빠른조합: 고른 등급(II·III·IV)까지 가진 책을\n아래 등급부터 한 번에 모두 조합합니다.\n" +
@@ -359,6 +386,65 @@ public class Ma9MHelp : MonoBehaviour
 		["Scene_TeamInfo"] = "구단정보"
 	};
 
+	// 2026-11-16 (AI testers NC 63, kt 70, 자급자족: no "(?)" on the album): 구단정보's album page has a title of its own
+	// ("기록실>구단앨범", TeamInfo_Album_LeftTitle), so it never matched "구단정보". A scene listed here also takes the shown titles
+	// holding this word; the album asks again when it opens (AttachExtra), in case its page was not up at the scene's start.
+	// The FA 시장 (same scene, the album titled "전력강화 > FA 시장" by TeamInfo_Album.Ma9MSetupMarket, 2026-11-16) too.
+	private static readonly Dictionary<string, string[]> ExtraTitleHints = new Dictionary<string, string[]>
+	{
+		["Scene_TeamInfo"] = new[] { "구단앨범", "FA 시장" }
+	};
+
+	private static List<UILabel> ExtraTitles(string scene)
+	{
+		List<UILabel> list = new List<UILabel>();
+		string[] extra;
+		if (!ExtraTitleHints.TryGetValue(scene, out extra))
+		{
+			return list;
+		}
+		foreach (UILabel label in UnityEngine.Object.FindObjectsByType<UILabel>(FindObjectsSortMode.None))
+		{
+			if (label.gameObject.activeInHierarchy && label.gameObject.name != "Ma9MHelpButton" && !string.IsNullOrEmpty(label.text)
+				&& label.text.Contains(">") && Array.Exists(extra, label.text.Contains) && !label.text.Contains("\n"))
+			{
+				list.Add(label);
+			}
+		}
+		return list;
+	}
+
+	// TeamInfo_Album.Initialize: a (?) on the album's own title once it shows (a quarter second later, the label laid out).
+	public static void AttachExtra(string scene)
+	{
+		if (s_runner != null)
+		{
+			s_runner.StartCoroutine(s_runner.AttachExtraLater(scene));
+		}
+	}
+
+	private IEnumerator AttachExtraLater(string scene)
+	{
+		yield return new WaitForSeconds(0.25f);
+		if (SceneChanger.GetLoadedLevelName() != scene)
+		{
+			yield break;
+		}
+		int made = 0;
+		foreach (UILabel title in ExtraTitles(scene))
+		{
+			if (title.transform.parent != null && title.transform.parent.Find("Ma9MHelpButton") == null)
+			{
+				MakeButton(title, scene);
+				made++;
+			}
+		}
+		if (made > 0)
+		{
+			Debug.Log("[Ma9MHelp] " + scene + ": (?) on " + made + " more title(s) (" + string.Join(", ", ExtraTitleHints[scene]) + ")");
+		}
+	}
+
 	private static List<UILabel> FindTitles(string scene)
 	{
 		string hint;
@@ -379,6 +465,13 @@ public class Ma9MHelp : MonoBehaviour
 		if (!all.Contains(best))
 		{
 			all.Insert(0, best);
+		}
+		foreach (UILabel label in ExtraTitles(scene))
+		{
+			if (!all.Contains(label))
+			{
+				all.Add(label);
+			}
 		}
 		return all;
 	}

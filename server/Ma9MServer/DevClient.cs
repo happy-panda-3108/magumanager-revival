@@ -1043,8 +1043,23 @@ namespace Ma9MServer
 			HashSet<int> owned = Owned(all);
 			Check(shown.Count == fa.Count && fa.All(c => shown.Contains(c.Idx)),
 				$"등급별 FA page: {shown.Count} of {fa.Count} FA cards, all in colour; {owned.Count} owned; {all.total_count.n} seen in all (FA left out)");
-			CardInfo card = fa.Where(c => !owned.Contains(c.Idx) && c.Ball == 8).OrderByDescending(c => c.Year).FirstOrDefault()
-				?? fa.First(c => !owned.Contains(c.Idx));
+			// 전력강화 > FA 시장 (page 6, 2026-11-17: this season's 10 — 3 of the 1군's team colour, 7 at random — kept for the season).
+			Ma9MPacket.PKS_SC_ENTER_ALBUM market = Page(AlbumHandlers.GradePageYear, AlbumHandlers.MarketPage);
+			List<int> list = (market.index.array ?? Array.Empty<PInteger>()).Select(i => i.n).ToList();
+			List<int> again2 = (Page(AlbumHandlers.GradePageYear, AlbumHandlers.MarketPage).index.array ?? Array.Empty<PInteger>()).Select(i => i.n).ToList();
+			// The 팀컬러 share is in the server's log ("FA 시장: team … 팀컬러 몫 n, entries …").
+			Check(list.Count == Math.Min(10, fa.Count - owned.Count) && list.Distinct().Count() == list.Count && list.All(i => catalog.Get(i)?.IsFA == true && !owned.Contains(i))
+				&& list.SequenceEqual(again2),
+				$"FA 시장 page 6: {list.Count} cards, the same on the second look {list.SequenceEqual(again2)}: "
+				+ string.Join(" · ", list.Select(i => catalog.Get(i)).Select(c => $"'{c.Year % 100:00} {TeamColors.TeamName(c.HomeTeam, c.Year)} {c.Name} {c.Ball}볼")));
+			CardInfo card = list.Select(i => catalog.Get(i)).Where(c => c.Ball == 8).OrderByDescending(c => c.Year).FirstOrDefault()
+				?? catalog.Get(list.First());
+			CardInfo outside = fa.FirstOrDefault(c => !owned.Contains(c.Idx) && !list.Contains(c.Idx));
+			if (outside != null)
+			{
+				Ma9MPacket.PKS_SC_POPUP no = Ask("ma9m:v2:fa:" + outside.Idx);
+				Check(no.Type.n == 1 && Text(no).Contains("명단에 없는"), $"an FA off the list ({outside.Idx} {outside.Name}): type {no.Type.n}: {Text(no)}");
+			}
 			Ma9MPacket.PKS_SC_ENTER_ALBUM season = Page(card.Year % 100, AlbumHandlers.FaAlbumTeam);
 			int seasonCount = season.index.array?.Length ?? 0;
 			Check(seasonCount == fa.Count(c => c.Year == card.Year) && season.index.array.Any(i => i.n == card.Idx),

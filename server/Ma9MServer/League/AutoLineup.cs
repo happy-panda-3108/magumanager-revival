@@ -48,6 +48,11 @@ namespace Ma9MServer
 			public int SimGames;
 			// Whether the games tell the advice from the 1군 of now (its gain beyond twice its standard error).
 			public bool SimClear => SimGames > 0 && SimAdvice - SimNow > 2 * SimSe;
+			// 포지션 엄수 (engine 2026-11-16, StrictPositions): the 1군 of now's cards out of position (a fielder who cannot field his
+			// spot, a pitcher out of his role; 선수 고정 cards left out), and why no 1군 in position could be built (null when one
+			// was; then Lineup is the 1군 of now).
+			public List<int> CurrentMisplaced = new List<int>();
+			public string NoFit;
 		}
 
 		// Full games a club for AutoLineupResult.Sim* (2026-11-12: 100 → about 1.5 s for three 1군s in a league of eight on 3 threads).
@@ -230,6 +235,8 @@ namespace Ma9MServer
 			// lineup effect of that slot for his role (LineupEffects: graph 80 in role, a starter in relief or a reliever
 			// starting graph 40/60 and −15%), as a league game plays him.
 			public double[] PerBfRole = new double[4];
+			// A pitcher's role now (PitcherOrder: 0 선발, 1 중계, 2 셋업, 3 마무리); −1 for a batter.
+			public int Order = -1;
 		}
 
 		// The LineupEffects view of each kind of pitcher slot (PerBfRole) and the kind of pitching slot k.
@@ -240,6 +247,71 @@ namespace Ma9MServer
 		// Dev (11-14): MA9M_AUTOLINEUP_ROLEVALUE=0 values pitchers as before (one PerBf for every slot, no role effect in the
 		// cards' own values; the whole-1군 evaluation always had it) — to compare on a data copy.
 		private static readonly bool RoleValue = Environment.GetEnvironmentVariable("MA9M_AUTOLINEUP_ROLEVALUE") != "0";
+
+		// 포지션 엄수 (user 2026-11-16 18:3x: "자동편성 시 포지션이 안 맞게 편성을 절대 하지 말 것. 무조건 포지션에 맞게 하고, 타자도 해당
+		// 포지션에 멀티 포지션이 있어서 수비 가능한게 아니면 넣지 말 것. 지명타자 자리에는 어떤 포지션이든지 들어갈 수 있음, 수비를 안 하기
+		// 때문임." — the AI tester 쌍방울 B20 got RP cards in three of the five starter slots): a fielder only where he can field (main
+		// or multi position, CardInfo.CanField — where a game plays him without LineupEffects.OutOfPosition), a pitcher only in his
+		// role (RP1-4 중계, SU 셋업, CP 마무리, SP1-5 선발; after 포지션 변경 the changed one), the DH and the bench anyone. A bullpen slot
+		// with nobody of its role stays empty. 선수 고정 cards stay where the user put them. Dev: MA9M_AUTOLINEUP_STRICT=0 as before.
+		private static readonly bool StrictPositions = Environment.GetEnvironmentVariable("MA9M_AUTOLINEUP_STRICT") != "0";
+
+		// Runs a game off a card's slot value out of position (SlotValue): never chosen while a card in position is there.
+		private const double Misfit = -1000;
+
+		// The LineupEffects view of pitcher slot k (0 starter, 1-4 RP1-4, 5 SU, 6 CP).
+		private static int ViewOfSlot(int k) => k < 5 ? 0 : k - 4;
+
+		private static bool FitsSlot(CardValue c, int k) => c.Order < 0 || LineupEffects.InRole(ViewOfSlot(k), c.Order);
+
+		private static bool FitsField(CardValue c, int pos) => pos < 0 || pos >= 8 || !double.IsNaN(c.Def[pos]);
+
+		// A pitcher's role now: the 포지션 변경 one, else his card's.
+		private static int PitcherOrder(LineupContext x, CardInfo info) =>
+			x.Owned.TryGetValue(info.Idx, out TeamCard tc) && tc.PositionTrainingInfo % 10 != 0 ? PositionChangeHandlers.OrderOf(info, tc.PositionTrainingInfo) : info.PreferredOrder;
+
+		// The cards of a 1군 out of position (StrictPositions), 선수 고정 cards left out; with `first` only the first one.
+		private static List<int> Misplaced(LineupContext x, Lineup l, bool first = false)
+		{
+			List<int> r = new List<int>();
+			for (int k = 0; k < 9; k++)
+			{
+				int idx = l.Batters[k], pos = PositionOf(l, k);
+				if (idx == 0 || pos < 0 || pos >= 8 || x.LockedIdx.Contains(idx)) continue;
+				CardInfo c = s_data.Catalog.Get(idx);
+				if (c == null || c.CanField(pos)) continue;
+				r.Add(idx);
+				if (first) return r;
+			}
+			for (int k = 0; k < Lineup.PitcherSlots; k++)
+			{
+				int idx = l.Pitchers[k];
+				if (idx == 0 || x.LockedIdx.Contains(idx)) continue;
+				CardInfo c = s_data.Catalog.Get(idx);
+				if (c == null || LineupEffects.InRole(ViewOfSlot(k), PitcherOrder(x, c))) continue;
+				r.Add(idx);
+				if (first) return r;
+			}
+			return r;
+		}
+
+		// Why no 1군 in position could be built (for the window).
+		private static string NoFitReason(LineupContext x)
+		{
+			string[] names = { "포수", "1루수", "2루수", "3루수", "유격수", "좌익수", "중견수", "우익수" };
+			List<string> why = new List<string>();
+			List<CardInfo> bats = x.Info.Values.Where(c => c.IsBatter).ToList();
+			for (int p = 0; p < 8; p++)
+			{
+				if (!bats.Any(c => c.CanField(p))) why.Add($"{names[p]} 수비가 되는 타자가 없습니다.");
+			}
+			List<CardInfo> starters = x.Info.Values.Where(c => !c.IsBatter && PitcherOrder(x, c) == 0).ToList();
+			int blocked = starters.Count(c => x.Blocked.Contains(c.Idx));
+			int sp = starters.Where(c => !x.Blocked.Contains(c.Idx)).Select(c => c.Sidx).Distinct().Count();
+			if (sp < 5) why.Add($"선발로 쓸 수 있는 투수가 {sp}명입니다(5명 필요" + (blocked > 0 ? $", 선발 {SpBlock.Games}경기 제한 {blocked}명 빼고" : "") + ").");
+			if (why.Count == 0) why.Add("볼 상한 안에서 모든 선수를 맞는 포지션에 넣는 1군을 찾지 못했습니다.");
+			return string.Join("\n", why);
+		}
 
 		private static Dictionary<int, CardValue> CardValues(LineupContext x)
 		{
@@ -311,6 +383,7 @@ namespace Ma9MServer
 					// starter slots — the seeds (Greedy, by SlotValue) valued a reliever starting as if in role, and the single
 					// changes did not always undo it).
 					int order = tc != null && tc.PositionTrainingInfo % 10 != 0 ? PositionChangeHandlers.OrderOf(info, tc.PositionTrainingInfo) : info.PreferredOrder;
+					cv.Order = order;
 					for (int role = 0; role < 4; role++)
 					{
 						if (!RoleValue)
@@ -345,18 +418,19 @@ namespace Ma9MServer
 			if (pitcher)
 			{
 				double bf = k < 5 ? TeamValue.BfStart / 5 : TeamValue.BfRelief[k - 5];
-				return TeamValue.Leverage[k] * bf * c.PerBfRole[RoleOfSlot(k)] + (k < 5 ? c.Stamina : 0);
+				double v = TeamValue.Leverage[k] * bf * c.PerBfRole[RoleOfSlot(k)] + (k < 5 ? c.Stamina : 0);
+				return StrictPositions && !FitsSlot(c, k) ? v + Misfit : v;
 			}
 			int pos = PositionOf(l, k);
 			if (pos < 0) return -0.001 * c.Info.Ball;   // the bench plays no part but its balls (and the team colour)
 			if (pos == 8) return c.Off;
-			return double.IsNaN(c.Def[pos]) ? c.Off - 0.5 : c.Off + c.Def[pos];
+			return double.IsNaN(c.Def[pos]) ? c.Off + (StrictPositions ? Misfit : -0.5) : c.Off + c.Def[pos];
 		}
 
 		private static int PersonOf(CardInfo c) => c.IsBatter ? c.Sidx : -1 - c.Sidx;
 
-		// Whether a 1군 keeps the rules (and, with keep, the team colours working now).
-		private static bool Allowed(LineupContext x, Lineup l, int[] keep)
+		// Whether a 1군 keeps the rules (and, with keep, the team colours working now; with positions, 포지션 엄수 too).
+		private static bool Allowed(LineupContext x, Lineup l, int[] keep, bool positions = true)
 		{
 			List<int> all = l.Batters.Concat(l.Pitchers).Where(i => i != 0).ToList();
 			if (all.Count != all.Distinct().Count() || all.Any(i => !x.Info.ContainsKey(i))) return false;
@@ -368,6 +442,7 @@ namespace Ma9MServer
 			if (l.Pitchers.Take(5).Any(i => i == 0) || l.Pitchers.Any(i => i != 0 && x.Info[i].IsBatter)) return false;
 			if (l.Pitchers.Take(5).Any(i => x.Blocked.Contains(i))) return false;
 			if (RosterHandlers.LineupBalls(l) > x.Cap) return false;
+			if (positions && StrictPositions && Misplaced(x, l, first: true).Count > 0) return false;
 			// 선수 고정: each locked card where it was (a batter's batting slot may change, not his position or the bench).
 			foreach ((int idx, bool pit, int slot, int pos) in x.Locked)
 			{
@@ -466,6 +541,7 @@ namespace Ma9MServer
 								if (c.Info.IsFA && fa - (now != null && now.Info.IsFA ? 1 : 0) >= CardInfo.MaxFaInFirstTeam) continue;
 								if (pit && k < 5 && x.Blocked.Contains(c.Info.Idx)) continue;
 								if (Array.IndexOf(row, c.Info.Idx) >= 0) continue;
+								if (StrictPositions && (pit ? !FitsSlot(c, k) : k < 9 && !FitsField(c, PositionOf(l, k)))) continue;
 								double d = V(c, l, k, pit) - lambda * c.Info.Ball - was;
 								if (d > bd) { bd = d; bk = k; bc = c; }
 							}
@@ -495,6 +571,7 @@ namespace Ma9MServer
 					foreach (CardValue c in batters)
 					{
 						if (!Take(c, false)) continue;
+						if (StrictPositions && k < 9 && !FitsField(c, PositionOf(l, k))) continue;
 						double sc = V(c, l, k, false) - lambda * c.Info.Ball;
 						if (sc > bs) { bs = sc; best = c; }
 					}
@@ -511,6 +588,7 @@ namespace Ma9MServer
 					foreach (CardValue c in pitchers)
 					{
 						if (!Take(c, true) || (k < 5 && x.Blocked.Contains(c.Info.Idx))) continue;
+						if (StrictPositions && !FitsSlot(c, k)) continue;
 						double sc = V(c, l, k, true) - lambda * c.Info.Ball;
 						if (sc > bs) { bs = sc; best = c; }
 					}
@@ -655,6 +733,7 @@ namespace Ma9MServer
 			if (x == null || x.Current == null) return null;
 			Dictionary<int, CardValue> values = CardValues(x);
 			AutoLineupResult r = new AutoLineupResult { Current = x.Current, Cap = x.Cap, CurrentBalls = RosterHandlers.LineupBalls(x.Current), Locked = x.Locked.Select(k => k.idx).ToList() };
+			if (StrictPositions) r.CurrentMisplaced = Misplaced(x, x.Current);
 			r.CurrentParts = Evaluate(x, x.Current, out r.CurrentColours);
 			r.CurrentRuns = r.CurrentParts.Runs;
 			int[] keep = keepColour ? TeamColors.Registered(userCode) : null;
@@ -676,11 +755,13 @@ namespace Ma9MServer
 				r.Parts = r.CurrentParts;
 				r.Runs = r.CurrentRuns;
 				r.Colours = r.CurrentColours;
+				if (StrictPositions && r.CurrentMisplaced.Count > 0) r.NoFit = NoFitReason(x);
 				return r;
 			}
-			// Without keep, also the best 1군 that keeps today's team colours, so both can be told (팀컬러를 지키면 / 바꾸면).
+			// Without keep, also the best 1군 that keeps today's team colours, so both can be told (팀컬러를 지키면 / 바꾸면). (11-16: the
+			// 1군 of now keeping them is asked without 포지션 엄수; it starts the search only when in position.)
 			int[] registered = TeamColors.Registered(userCode);
-			bool compare = !keepColour && registered.Any(e => e != 0) && Allowed(x, x.Current, registered);
+			bool compare = !keepColour && registered.Any(e => e != 0) && Allowed(x, x.Current, registered, positions: false);
 			// Budget (2026-11-12): a third shared by the starts, then the two best go on with the rest (the 1군 keeping today's
 			// team colours with a sixth of its own when compared).
 			int end = x.Evaluations + maxEvals;
@@ -708,9 +789,13 @@ namespace Ma9MServer
 				{
 					if (kept.l == null || t.v.Runs > kept.v.Runs) kept = (t.l, t.v);
 				}
-				(Lineup best, TeamValue.Parts bv) = Improve(x, values, kept.l ?? x.Current, registered, Math.Max(x.Evaluations + 100, end));
-				if (kept.l == null || bv.Runs > kept.v.Runs) kept = (best, bv);
-				if (bv.Runs > win.v.Runs) win = (best, bv, "지금 1군 (팀컬러 유지)");
+				Lineup from = kept.l ?? (Allowed(x, x.Current, registered) ? x.Current : null);
+				if (from != null)
+				{
+					(Lineup best, TeamValue.Parts bv) = Improve(x, values, from, registered, Math.Max(x.Evaluations + 100, end));
+					if (kept.l == null || bv.Runs > kept.v.Runs) kept = (best, bv);
+					if (bv.Runs > win.v.Runs) win = (best, bv, "지금 1군 (팀컬러 유지)");
+				}
 			}
 			// The batting order of the nine by the 선수분석 graph, the positions going with the players.
 			Lineup ordered = Reorder(win.l);
@@ -728,7 +813,7 @@ namespace Ma9MServer
 			{
 				r.KeepsColour = Allowed(x, win.l, registered);
 				if (r.KeepsColour) kept = (win.l, win.v);
-				else
+				else if (kept.l != null)
 				{
 					Lineup ko = Reorder(kept.l);
 					if (ko != null && Allowed(x, ko, registered))
@@ -739,7 +824,7 @@ namespace Ma9MServer
 				}
 				r.Kept = kept.l;
 				r.KeptParts = kept.v;
-				r.KeptRuns = kept.v.Runs;
+				r.KeptRuns = kept.v?.Runs ?? 0;
 			}
 			else r.KeepsColour = keepColour || registered.All(e => e == 0) || Allowed(x, win.l, registered);
 			r.Balls = RosterHandlers.LineupBalls(win.l);
@@ -820,6 +905,15 @@ namespace Ma9MServer
 				return $"FA {fa}장, 같은 선수 두 번 {twice}{(fa <= CardInfo.MaxFaInFirstTeam && twice == 0 ? "" : " ← 규칙 위반")}";
 			}
 			ServerLog.Info($"[autolineup]   now    {FaCheck(a.Current)} | advice {FaCheck(a.Lineup)}");
+			// 포지션 엄수 (11-16): the advice has nobody out of position (선수 고정 cards apart).
+			LineupContext cx = Context(user);
+			string Mis(Lineup l)
+			{
+				List<int> m = Misplaced(cx, l);
+				return m.Count == 0 ? "0" : $"{m.Count} ({string.Join(", ", m.Select(i => s_data.Catalog.Get(i)?.Name ?? i.ToString()))})";
+			}
+			ServerLog.Info($"[autolineup]   자리 안 맞음: now {Mis(a.Current)} | advice {Mis(a.Lineup)}{(StrictPositions && a.Lineup != a.Current && Misplaced(cx, a.Lineup).Count > 0 ? " ← 규칙 위반" : "")}" +
+				(a.Kept != null ? $" | kept {Mis(a.Kept)}" : "") + (a.NoFit != null ? $" | 맞는 1군 없음: {a.NoFit.Replace("\n", " ")}" : "") + (StrictPositions ? "" : " (MA9M_AUTOLINEUP_STRICT=0)"));
 			ServerLog.Info($"[autolineup]   now    투수 {Pitchers(a.Current)}");
 			ServerLog.Info($"[autolineup]   advice 투수 {Pitchers(a.Lineup)}");
 			ServerLog.Info($"[autolineup]   now    타자 {Batters(a.Current)}");

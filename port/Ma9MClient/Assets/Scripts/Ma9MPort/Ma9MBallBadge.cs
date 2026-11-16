@@ -92,33 +92,30 @@ public static class Ma9MBallBadge
 		ballGo.name = "Ball";
 		UITexture ball = ballGo.AddComponent<UITexture>();
 		ball.shader = Shader.Find("Unlit/Transparent Colored");
-		ball.mainTexture = BallTexture();
+		// The letter is drawn into the ball's own texture (AI testers 11-16, all six: a white ball without its letter in the lobby,
+		// the N's top cut on the standings). A font label over a UITexture is a second draw call, and this NGUI orders draw calls
+		// of different materials by distance, not by depth: the ball could cover the letter.
+		ball.mainTexture = BallTexture(band);
 		ball.depth = font.depth + 1;
 		ballGo.transform.localScale = new Vector3(d, d, 1f);
-		GameObject letterGo = UnityEngine.Object.Instantiate(font.gameObject) as GameObject;
-		letterGo.name = "Letter";
-		letterGo.transform.parent = root.transform;
-		letterGo.transform.localRotation = Quaternion.identity;
-		Ma9MCardSpread.DropLocalize(letterGo);
-		foreach (Collider c in letterGo.GetComponents<Collider>())
-		{
-			UnityEngine.Object.Destroy(c);
-		}
-		for (int i = letterGo.transform.childCount - 1; i >= 0; i--)
-		{
-			UnityEngine.Object.Destroy(letterGo.transform.GetChild(i).gameObject);
-		}
-		UILabel letter = letterGo.GetComponent<UILabel>();
-		letter.text = Letter(band);
-		letter.color = LetterColour(band);
-		letter.effectStyle = UILabel.Effect.None;
-		letter.pivot = UIWidget.Pivot.Center;
-		letter.depth = font.depth + 2;
-		float s = d * 0.66f;
-		letterGo.transform.localScale = new Vector3(s, s, 1f);
-		letterGo.transform.localPosition = new Vector3(0f, d * 0.02f, 0f);
-		letterGo.SetActive(true);
+		// A tap tells what the ball means (AI testers 11-16: "눌러도 반응이 없다").
+		BoxCollider box = ballGo.AddComponent<BoxCollider>();
+		box.size = new Vector3(1f, 1f, 1f);
+		string tapped = band;
+		UIEventListener.Get(ballGo).onClick = go => Explain(tapped);
 		return root;
+	}
+
+	// What each ball means, as the help's 공인구 pages say it (Ma9MHelp).
+	public static void Explain(string band)
+	{
+		string body = band == "빅볼"
+			? "이번 시즌은 빅볼(B, 고반발)입니다.\n홈런과 장타가 늘어 점수가 많이 나는 시즌입니다."
+			: band == "스몰볼"
+				? "이번 시즌은 스몰볼(S, 저반발)입니다.\n홈런과 장타가 줄어 점수가 적게 나는 시즌입니다."
+				: "이번 시즌은 노말볼(N, 표준)입니다.\n득점이 평소와 같은 시즌입니다.";
+		body += "\n트리플A부터 챔피언스까지는 시즌마다 공인구가 바뀌고,\n그 아래 리그는 노말볼로 고정입니다.";
+		PopupManager.ViewPopup1("공인구", body, Localization.instance.Get("OK"), null);
 	}
 
 	public static void Remove(Transform parent)
@@ -138,19 +135,26 @@ public static class Ma9MBallBadge
 		}
 	}
 
+	private static readonly System.Collections.Generic.Dictionary<string, Texture2D> s_balls = new System.Collections.Generic.Dictionary<string, Texture2D>();
+
 	// A white baseball, 64 px: soft edge, grey rim, slight shade toward the bottom right, two red seams curving in from the sides
-	// (kept clear of the middle where the letter goes).
-	private static Texture2D BallTexture()
+	// (kept clear of the middle), and the band's letter in its colour in the middle.
+	private static Texture2D BallTexture(string band)
 	{
-		if (s_ball != null)
+		string letter = Letter(band);
+		Texture2D tex;
+		if (s_balls.TryGetValue(letter, out tex) && tex != null)
 		{
-			return s_ball;
+			return tex;
 		}
 		const int n = 64;
 		s_ball = new Texture2D(n, n, TextureFormat.ARGB32, false);
 		s_ball.wrapMode = TextureWrapMode.Clamp;
 		float c = n / 2f, r = n / 2f - 1f;
 		Color white = new Color(0.99f, 0.98f, 0.95f), rim = new Color(0.5f, 0.5f, 0.52f), seam = new Color(0.86f, 0.16f, 0.16f);
+		Color ink = LetterColour(band);
+		// The letter box: 30 px tall (a little under half the ball), centred; LetterDistance works in units of that height.
+		const float letterH = 30f;
 		for (int y = 0; y < n; y++)
 		{
 			for (int x = 0; x < n; x++)
@@ -178,12 +182,98 @@ public static class Ma9MBallBadge
 				{
 					col = Color.Lerp(col, rim, Mathf.Clamp01((d - edge) / 1.6f));
 				}
+				// The letter: its stroke distance in pixels, antialiased over one pixel.
+				float ld = LetterDistance(letter, dx / letterH, dy / letterH) * letterH;
+				float cover = Mathf.Clamp01(StrokeHalf * letterH - ld + 0.5f);
+				if (cover > 0f)
+				{
+					col = Color.Lerp(col, ink, cover);
+				}
 				col.a = a;
 				s_ball.SetPixel(x, y, col);
 			}
 		}
 		s_ball.Apply();
+		s_balls[letter] = s_ball;
 		return s_ball;
+	}
+
+	// Half the stroke of the letter, in letter heights (a bold sans letter).
+	private const float StrokeHalf = 0.085f;
+
+	// Distance from (x, y) to the centre line of B, N or S, in letter heights; (0, 0) is the letter's middle, the letter spans
+	// y −0.5..0.5 (the stroke half outside that) and about x −0.32..0.32.
+	private static float LetterDistance(string letter, float x, float y)
+	{
+		float top = 0.5f - StrokeHalf, bottom = -0.5f + StrokeHalf;
+		if (letter == "B")
+		{
+			float left = -0.26f, mid = 0.02f;
+			float d = Seg(x, y, left, bottom, left, top);
+			// The upper bowl (smaller) and the lower bowl: straight runs out from the stem, then a half circle on the right.
+			float ru = (top - mid) / 2f, cu = (top + mid) / 2f, xu = 0.03f;
+			d = Mathf.Min(d, Seg(x, y, left, top, xu, top));
+			d = Mathf.Min(d, Seg(x, y, left, mid, xu, mid));
+			d = Mathf.Min(d, HalfRight(x, y, xu, cu, ru));
+			float rl = (mid - bottom) / 2f, cl = (mid + bottom) / 2f, xl = 0.05f;
+			d = Mathf.Min(d, Seg(x, y, left, mid, xl, mid));
+			d = Mathf.Min(d, Seg(x, y, left, bottom, xl, bottom));
+			d = Mathf.Min(d, HalfRight(x, y, xl, cl, rl));
+			return d;
+		}
+		if (letter == "S")
+		{
+			// Two arcs meeting in the middle: the upper one open on the lower right, the lower one open on the upper left.
+			float rr = (top - bottom) / 4f, cx = 0f;
+			float d = Arc(x, y, cx, top - rr, rr, 25f, 270f);
+			d = Mathf.Min(d, Arc(x, y, cx, bottom + rr, rr, -155f, 90f));
+			return d;
+		}
+		// N: two stems and the diagonal from the top left to the bottom right.
+		float l = -0.25f, rgt = 0.25f;
+		float dn = Seg(x, y, l, bottom, l, top);
+		dn = Mathf.Min(dn, Seg(x, y, rgt, bottom, rgt, top));
+		dn = Mathf.Min(dn, Seg(x, y, l, top, rgt, bottom));
+		return dn;
+	}
+
+	private static float Seg(float px, float py, float ax, float ay, float bx, float by)
+	{
+		float vx = bx - ax, vy = by - ay;
+		float t = Mathf.Clamp01(((px - ax) * vx + (py - ay) * vy) / Mathf.Max(1e-6f, vx * vx + vy * vy));
+		float qx = ax + t * vx - px, qy = ay + t * vy - py;
+		return Mathf.Sqrt(qx * qx + qy * qy);
+	}
+
+	// The right half of a circle (x ≥ cx).
+	private static float HalfRight(float px, float py, float cx, float cy, float r)
+	{
+		if (px >= cx)
+		{
+			float dx = px - cx, dy = py - cy;
+			return Mathf.Abs(Mathf.Sqrt(dx * dx + dy * dy) - r);
+		}
+		float d1 = Mathf.Sqrt((px - cx) * (px - cx) + (py - cy - r) * (py - cy - r));
+		float d2 = Mathf.Sqrt((px - cx) * (px - cx) + (py - cy + r) * (py - cy + r));
+		return Mathf.Min(d1, d2);
+	}
+
+	// An arc of a circle from angle a0 counter-clockwise to a1 (degrees, 0 = right, a1 > a0).
+	private static float Arc(float px, float py, float cx, float cy, float r, float a0, float a1)
+	{
+		float dx = px - cx, dy = py - cy;
+		float ang = Mathf.Atan2(dy, dx) * Mathf.Rad2Deg;
+		while (ang < a0)
+		{
+			ang += 360f;
+		}
+		if (ang <= a1)
+		{
+			return Mathf.Abs(Mathf.Sqrt(dx * dx + dy * dy) - r);
+		}
+		float e0x = cx + r * Mathf.Cos(a0 * Mathf.Deg2Rad), e0y = cy + r * Mathf.Sin(a0 * Mathf.Deg2Rad);
+		float e1x = cx + r * Mathf.Cos(a1 * Mathf.Deg2Rad), e1y = cy + r * Mathf.Sin(a1 * Mathf.Deg2Rad);
+		return Mathf.Min(Mathf.Sqrt((px - e0x) * (px - e0x) + (py - e0y) * (py - e0y)), Mathf.Sqrt((px - e1x) * (px - e1x) + (py - e1y) * (py - e1y)));
 	}
 }
 

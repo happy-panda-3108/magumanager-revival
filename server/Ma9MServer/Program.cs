@@ -24,6 +24,13 @@ namespace Ma9MServer
 				// Dev: a headless client against the running server (test accounts only).
 				Environment.Exit(DevClient.Run(dataDir, args));
 			}
+			if (Array.IndexOf(args, "--emblemtest") >= 0)
+			{
+				// Dev (engine session, 2026-11-16): each franchise's logo by season and its art in the CDN (EmblemYears); read-only.
+				// Here, before the DB and the league start (moved 11-17): LeagueService.Init below rewrites the AI decks' emblems
+				// (AiTeams.DeckEmblems), and an 11-16 run on the live data directory with MA9M_EMBLEM_YEARS=1 did exactly that.
+				Environment.Exit(EmblemYears.SelfTest(dataDir));
+			}
 
 			Database db = new Database(Path.Combine(dataDir, "ma9m.db"));
 			GameLoop loop = new GameLoop();
@@ -285,7 +292,8 @@ namespace Ma9MServer
 			}
 			if (Array.IndexOf(args, "--uniformtest") >= 0)
 			{
-				// Dev (engine session): the broadcast uniform of every team and its league's clubs; read-only.
+				// Dev (engine session): the broadcast uniform of every team and its league's clubs. Reads only, but the startup
+				// above (LeagueService.Init) writes the AI decks' emblems, so use a copy of the data directory.
 				Environment.Exit(Uniforms.SelfTest());
 			}
 			int hustleTest = Array.IndexOf(args, "--hustletest");

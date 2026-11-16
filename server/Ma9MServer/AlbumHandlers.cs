@@ -32,6 +32,10 @@ namespace Ma9MServer
 		// those pages comes as seen (in colour: the list to sign from); a tap signs (FaMarket).
 		public const int FaPage = 5, FaAlbumTeam = 20;
 
+		// 전력강화 > FA 시장 (systems session 2026-11-16; user 18:3x 8·9번: the album shows every FA card, signing is the market's):
+		// 등급별 page 6 = the team's market list (FaMarket.MarketList), asked by the 1.0.54+ app only.
+		public const int MarketPage = 6;
+
 		private static Database s_db;
 
 		private static CardCatalog s_catalog;
@@ -58,6 +62,8 @@ namespace Ma9MServer
 					INSERT OR IGNORE INTO card_seen (user_code, card_idx, first_seen) SELECT user_code, card_idx, acquired FROM team_card;";
 				command.ExecuteNonQuery();
 			}
+			// FA 시장's per-season lists (2026-11-17).
+			FaMarket.Init(dbPath);
 			loop.Register<Ma9MPacket.PKS_CS_ENTER_ALBUM>(Enter);
 		}
 
@@ -70,8 +76,9 @@ namespace Ma9MServer
 			int year = yy == LegendYear ? 0 : (yy >= 80 ? 1900 + yy : 2000 + yy);
 			HashSet<int> seen = Seen(user);
 			HashSet<int> owned = s_db.GetCards(user).Select(c => c.Idx).ToHashSet();
-			bool faPage = yy == GradePageYear ? team == FaPage : team == FaAlbumTeam;
-			List<int> page = Page(s_catalog, yy, team, year);
+			bool market = yy == GradePageYear && team == MarketPage;
+			bool faPage = market || (yy == GradePageYear ? team == FaPage : team == FaAlbumTeam);
+			List<int> page = market ? FaMarket.MarketList(user) : Page(s_catalog, yy, team, year);
 			Ma9MPacket.PKS_SC_ENTER_ALBUM reply = new Ma9MPacket.PKS_SC_ENTER_ALBUM();
 			reply.year.n = packet.year.n;
 			reply.team.n = packet.team.n;

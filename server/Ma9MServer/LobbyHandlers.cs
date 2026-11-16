@@ -30,7 +30,9 @@ namespace Ma9MServer
 			14, // POWERUP_COMBINETRAININGCARD
 			15, // POWERUP_POSITIONCHANGE (포지션 변경, PositionChangeHandlers; user 2026-10-24)
 			16, // EXHIBITION_EXHIBITIONGAME
-			24  // POWERUP_COACH_MIX slot = 트레이닝북 교환소 in Ma9M builds (TrainingHandlers.ExchangeMenu; user 2026-10-25)
+			24, // POWERUP_COACH_MIX slot = 트레이닝북 교환소 in Ma9M builds (TrainingHandlers.ExchangeMenu; user 2026-10-25)
+			32  // 전력강화 > FA 시장 (systems session 2026-11-16; the 1.0.54+ app's MainLobby_DetailMenuPopup.Ma9MFaMarketMenu, past the
+				// original's values: older apps never look for it)
 		};
 
 		// Client MainLobby_LeftWindow shows the next-match box when this is 0.
@@ -117,6 +119,8 @@ namespace Ma9MServer
 				Missions.DeliverAutoPay(session);
 				// 코칭스태프: the day's SP and the 치어리더's gift (CoachHandlers; off unless MA9M_COACH=1).
 				CoachHandlers.OnLobby(session);
+				// 1군 계약 만료 알림 (ContractNotice, systems session 2026-11-16).
+				ContractNotice.OnLobby(session);
 			}
 		}
 

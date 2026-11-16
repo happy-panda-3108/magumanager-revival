@@ -395,9 +395,20 @@ public static class Ma9MSortMemory
 
 		public readonly HashSet<int> ExPositions = new HashSet<int>();
 
+		// 코칭스태프 조합 (2026-11-17, user: "코치 조합 필터링을 다른 화면처럼"): the 코치종류·코치등급 picks and 제외 of
+		// CoachCombine_CardList (its 구단 picks and 제외 are Teams / ExTeams, its 연도 picks Years).
+		public readonly HashSet<int> CoachTypes = new HashSet<int>();
+
+		public readonly HashSet<int> CoachGrades = new HashSet<int>();
+
+		public readonly HashSet<int> ExCoachTypes = new HashSet<int>();
+
+		public readonly HashSet<int> ExCoachGrades = new HashSet<int>();
+
 		protected override string Body()
 		{
-			return Year + "|" + Ball + "|" + Pos + "|" + Team + "|" + Join(Balls) + "|" + Join(Teams) + "|" + Join(Years) + "|" + Join(Positions) + "|" + Join(ExPositions);
+			return Year + "|" + Ball + "|" + Pos + "|" + Team + "|" + Join(Balls) + "|" + Join(Teams) + "|" + Join(Years) + "|" + Join(Positions) + "|" + Join(ExPositions)
+				+ "|" + Join(CoachTypes) + "|" + Join(CoachGrades) + "|" + Join(ExCoachTypes) + "|" + Join(ExCoachGrades);
 		}
 
 		protected override void Read(string[] parts)
@@ -415,6 +426,14 @@ public static class Ma9MSortMemory
 				Fill(Positions, parts[7]);
 				Fill(ExPositions, parts[8]);
 			}
+			// Saved before 2026-11-17: no coach sets.
+			if (parts.Length >= 15)
+			{
+				Fill(CoachTypes, parts[9]);
+				Fill(CoachGrades, parts[10]);
+				Fill(ExCoachTypes, parts[11]);
+				Fill(ExCoachGrades, parts[12]);
+			}
 		}
 	}
 
@@ -431,6 +450,10 @@ public static class Ma9MSortMemory
 			return list.Years;
 		case SortPopup.eSortType.Position:
 			return list.Positions;
+		case SortPopup.eSortType.CoachType:
+			return list.CoachTypes;
+		case SortPopup.eSortType.CoachGrade:
+			return list.CoachGrades;
 		default:
 			return null;
 		}
@@ -446,10 +469,19 @@ public static class Ma9MSortMemory
 			return list.ExTeams;
 		case SortPopup.eSortType.Position:
 			return list.ExPositions;
+		case SortPopup.eSortType.CoachType:
+			return list.ExCoachTypes;
+		case SortPopup.eSortType.CoachGrade:
+			return list.ExCoachGrades;
 		default:
 			return null;
 		}
 	}
+
+	// The coach list's 코치종류 / 코치등급 names (Korean.txt HD … CL; the grades as the popup shows them).
+	public static readonly string[] CoachTypeKeys = new string[5] { "HD", "PC", "HC", "SC", "CL" };
+
+	public static readonly string[] CoachGradeNames = new string[5] { string.Empty, "노말", "스페셜", "레어", "엘리트" };
 
 	private static readonly Dictionary<int, string> PositionKeys = new Dictionary<int, string>
 	{
@@ -473,6 +505,10 @@ public static class Ma9MSortMemory
 			string key;
 			return PositionKeys.TryGetValue(v, out key) ? Localization.instance.Get(key) : v.ToString();
 		}
+		case SortPopup.eSortType.CoachType:
+			return (v >= 0 && v < CoachTypeKeys.Length) ? Localization.instance.Get(CoachTypeKeys[v]) : v.ToString();
+		case SortPopup.eSortType.CoachGrade:
+			return (v > 0 && v < CoachGradeNames.Length) ? CoachGradeNames[v] : v.ToString();
 		default:
 			return v.ToString();
 		}
@@ -487,7 +523,8 @@ public static class Ma9MSortMemory
 		{
 			return null;
 		}
-		string unit = (type == SortPopup.eSortType.Ball) ? "볼" : ((type == SortPopup.eSortType.Team) ? "팀" : ((type == SortPopup.eSortType.Year) ? "연도" : "포지션"));
+		string unit = (type == SortPopup.eSortType.Ball) ? "볼" : ((type == SortPopup.eSortType.Team) ? "팀" : ((type == SortPopup.eSortType.Year) ? "연도"
+			: ((type == SortPopup.eSortType.CoachType) ? "종류" : ((type == SortPopup.eSortType.CoachGrade) ? "등급" : "포지션"))));
 		if (inCount > 0 && outCount > 0)
 		{
 			return unit + inCount + "·제외" + outCount;
@@ -499,7 +536,8 @@ public static class Ma9MSortMemory
 			{
 				return ValueName(type, ordered.First());
 			}
-			if (inCount == 2 && type != SortPopup.eSortType.Team)
+			// Two coach kinds ("수석코치·투수코치") are too long for the button: "종류 2개".
+			if (inCount == 2 && type != SortPopup.eSortType.Team && type != SortPopup.eSortType.CoachType)
 			{
 				return string.Join("·", ordered.Select(v => (type == SortPopup.eSortType.Ball) ? v.ToString() : ValueName(type, v)).ToArray()) + ((type == SortPopup.eSortType.Ball) ? "볼" : string.Empty);
 			}

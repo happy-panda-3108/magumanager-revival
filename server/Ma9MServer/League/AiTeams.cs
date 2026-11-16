@@ -162,6 +162,7 @@ namespace Ma9MServer
 					s_teams[(t.Tier, t.Slot)] = t;
 				}
 			}
+			DeckEmblems(c);
 			// The deck ranking now, at start: a 편성 that makes the decks again then runs in milliseconds on the game loop.
 			if (data != null) Ranked(data);
 			for (int tier = 0; tier < LeagueRules.Tiers; tier++)
@@ -201,18 +202,42 @@ namespace Ma9MServer
 			s_fresh = null;
 			s_teams.Clear();
 			using SqliteConnection c = Open();
-			using SqliteCommand cmd = c.CreateCommand();
-			cmd.CommandText = "SELECT tier, slot, name, emblem, lineup, ball, traits, development FROM league_ai_team";
-			using SqliteDataReader r = cmd.ExecuteReader();
-			while (r.Read())
+			using (SqliteCommand cmd = c.CreateCommand())
 			{
-				AiTeam t = new AiTeam
+				cmd.CommandText = "SELECT tier, slot, name, emblem, lineup, ball, traits, development FROM league_ai_team";
+				using SqliteDataReader r = cmd.ExecuteReader();
+				while (r.Read())
 				{
-					Tier = (int)r.GetInt64(0), Slot = (int)r.GetInt64(1), Name = r.GetString(2), Emblem = (byte)r.GetInt64(3),
-					Lineup = r.GetString(4), Ball = (int)r.GetInt64(5), Traits = ParseTraits(r.GetString(6)), Development = ParseDevelopment(r.GetString(7))
-				};
-				s_teams[(t.Tier, t.Slot)] = t;
+					AiTeam t = new AiTeam
+					{
+						Tier = (int)r.GetInt64(0), Slot = (int)r.GetInt64(1), Name = r.GetString(2), Emblem = (byte)r.GetInt64(3),
+						Lineup = r.GetString(4), Ball = (int)r.GetInt64(5), Traits = ParseTraits(r.GetString(6)), Development = ParseDevelopment(r.GetString(7))
+					};
+					s_teams[(t.Tier, t.Slot)] = t;
+				}
 			}
+			DeckEmblems(c);
+		}
+
+		// 해에 맞는 로고 (engine 2026-11-16, EmblemYears): the stored team-year decks ("2013 SK") get their season's logo, or the plain
+		// club emblem back while MA9M_EMBLEM_YEARS is off; the leagues' clubs follow (LeagueService.SyncAiClubs).
+		private static void DeckEmblems(SqliteConnection c)
+		{
+			int changed = 0;
+			foreach (AiTeam t in s_teams.Values.Where(IsDeck).ToList())
+			{
+				byte e = EmblemYears.ForDeck(t.Name, t.Emblem);
+				if (e == t.Emblem) continue;
+				t.Emblem = e;
+				using SqliteCommand cmd = c.CreateCommand();
+				cmd.CommandText = "UPDATE league_ai_team SET emblem = $e WHERE tier = $t AND slot = $s";
+				cmd.Parameters.AddWithValue("$e", (int)e);
+				cmd.Parameters.AddWithValue("$t", t.Tier);
+				cmd.Parameters.AddWithValue("$s", t.Slot);
+				cmd.ExecuteNonQuery();
+				changed++;
+			}
+			if (changed > 0) ServerLog.Info($"league AI decks: {changed} emblems set to their season's logo (MA9M_EMBLEM_YEARS {(EmblemYears.Enabled ? "on" : "off")})");
 		}
 
 		public static IEnumerable<AiTeam> OfTier(int tier) => Enumerable.Range(0, PerTier).Select(k => Get(tier, k));
@@ -520,7 +545,7 @@ namespace Ma9MServer
 				Lineup arranged = LineupBuilder.Build(cards.Select(x => x.Idx), s_catalog);
 				AiTeam t = new AiTeam
 				{
-					Tier = tier, Slot = DeckSlot(tier, k), Name = $"{d.Year} {TeamColors.TeamName(d.TeamCode, d.Year)}", Emblem = (byte)d.TeamCode,
+					Tier = tier, Slot = DeckSlot(tier, k), Name = $"{d.Year} {TeamColors.TeamName(d.TeamCode, d.Year)}", Emblem = EmblemYears.For(d.TeamCode, d.Year),
 					Lineup = arranged.Serialize(), Ball = cards.Sum(x => x.Ball),
 					Traits = TraitBuild(tier, k)
 				};

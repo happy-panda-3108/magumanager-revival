@@ -584,7 +584,7 @@ public class Ma9MSeasonResult : MonoBehaviour
 
 	private void Emblem(GameObject parent, int index, string size, Vector3 pos, float scale)
 	{
-		if (index < 0 || index >= global::Emblem.emblemNames.Length)
+		if (!Ma9MEmblemYears.IsDrawable(index))   // a club's emblem or a season's logo (2026-11-16)
 		{
 			return;
 		}

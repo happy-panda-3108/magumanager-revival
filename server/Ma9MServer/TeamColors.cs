@@ -984,6 +984,15 @@ namespace Ma9MServer
 			return Resolve(Choice(user), Available(s_db.GetLineup(user)));
 		}
 
+		// The entries an FA card should fit for the team's FA 시장 list (systems session 2026-11-17, FaMarket.MarketList): those
+		// registered now, else the greyed hints the 1군 is gathering (Hints), else none.
+		public static int[] MarketEntries(uint user)
+		{
+			if (s_cs == null) return Array.Empty<int>();
+			int[] reg = Registered(user).Where(i => i != 0).ToArray();
+			return reg.Length > 0 ? reg : Hints(s_db.GetLineup(user)).Distinct().ToArray();
+		}
+
 		// After a 1군 save (RosterHandlers.ApplyPitchers; Refresh has registered again): a popup naming each slot that changed and
 		// the user's choices kept although a stronger entry came, or null when the registration is as before. gained = entries
 		// new to the 1군 and not registered, for the app's own "새로운 팀컬러가 활성화되었습니다" popup when nothing changed; they
