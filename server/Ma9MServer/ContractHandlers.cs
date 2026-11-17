@@ -142,13 +142,16 @@ namespace Ma9MServer
 		}
 
 		// An FA card's end at signing (team_card.contract_until; other cards leave it empty for acquired + StartDays).
-		public static void StartFa(uint user, int idx, DateTime today)
+		public static void StartFa(uint user, int idx, DateTime today) => StartFa(user, idx, today, FaStartDays);
+
+		// The days of a negotiated contract (FaNegotiation, 2026-11-17).
+		public static void StartFa(uint user, int idx, DateTime today, int days)
 		{
 			using (SqliteConnection c = Open())
 			using (SqliteCommand cmd = c.CreateCommand())
 			{
 				cmd.CommandText = "UPDATE team_card SET contract_until = $until WHERE user_code = $u AND card_idx = $i";
-				cmd.Parameters.AddWithValue("$until", today.Date.AddDays(FaStartDays).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+				cmd.Parameters.AddWithValue("$until", today.Date.AddDays(days).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
 				cmd.Parameters.AddWithValue("$u", (long)user);
 				cmd.Parameters.AddWithValue("$i", idx);
 				cmd.ExecuteNonQuery();
@@ -265,7 +268,13 @@ namespace Ma9MServer
 			}
 			uint user = session.Team.UserCode;
 			Ma9MPacket.PKS_SC_EXTEND_CONTRACT reply = new Ma9MPacket.PKS_SC_EXTEND_CONTRACT();
-			string why = TryExtend(user, packet.target_card.n, packet.bonus_stat.n, DateTime.Now.Date, out int mp);
+			// 재계약 협상 (2026-11-17, user "계약관리에서 진행하는 일반 계약보다 다시 FA가 되어서 재계약 협상하는 시스템"): an app that has the
+			// negotiation renews an FA card only after one (FaNegotiation); older apps renew as before.
+			CardInfo asked = s_catalog.Get(packet.target_card.n);
+			string why = asked != null && asked.IsFA && FaNegotiation.On(session) && !FaNegotiation.HasRenewalDeal(user, asked.Idx)
+				? "FA renewal needs a negotiation"
+				: TryExtend(user, packet.target_card.n, packet.bonus_stat.n, DateTime.Now.Date, out _);
+			int mp = s_db.AddMp(user, 0);
 			reply.result.n = (byte)(why == null ? 0 : 1);
 			reply.cur_point.n = mp;
 			session.Send(reply);
@@ -293,12 +302,20 @@ namespace Ma9MServer
 				return "no bonus stat chosen";
 			}
 			int cost = Cost(card.ContractCount, info, card.RemainContract);
+			// 재계약 협상 (FaNegotiation, 2026-11-17): an FA card's negotiated renewal sets the 계약금 and the days.
+			FaNegotiation.Deal deal = info.IsFA ? FaNegotiation.PeekRenewalDeal(user, idx) : null;
+			int days = ExtendDaysOf(info);
+			if (deal != null)
+			{
+				cost = deal.Price;
+				days = deal.Days;
+			}
 			if (mp < cost)
 			{
 				return $"MP short ({cost:N0})";
 			}
 			bool expired = card.ContractUntil <= today;
-			DateTime until = (expired ? today : card.ContractUntil).AddDays(ExtendDaysOf(info));
+			DateTime until = (expired ? today : card.ContractUntil).AddDays(days);
 			if (until > today.AddDays(MaxDays))
 			{
 				until = today.AddDays(MaxDays);
@@ -326,6 +343,10 @@ namespace Ma9MServer
 			mp = s_db.AddMp(user, -cost, MpLedger.Contract);
 			Invalidate(user);
 			Missions.Add(user, Missions.Contracts);  // 업적
+			if (deal != null && FaNegotiation.TakeRenewalDeal(user, idx) != null)
+			{
+				FaNegotiation.AfterRenewal(user, null, info, deal);
+			}
 			return null;
 		}
 

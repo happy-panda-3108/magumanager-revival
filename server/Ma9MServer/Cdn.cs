@@ -138,6 +138,12 @@ namespace Ma9MServer
 			{
 				return File.ReadAllBytes(Path.Combine(m_dataDir, "cdn", current.Replace('/', Path.DirectorySeparatorChar)));
 			}
+			// An FA card in a club's uniform not drawn (yet): not found, so the app falls back to the FA art (Ma9MFaArt asks once,
+			// without retries; systems session 2026-11-17, FaArt).
+			if (path.Contains("/fa/"))
+			{
+				return null;
+			}
 			// Card art died with the Netmarble CDN. A missing image made the client retry it five
 			// times (and log an error each time) whenever the card was shown, which stalled the
 			// broadcast; a placeholder portrait gets cached instead (tools/scripts/make_placeholder_art.py).

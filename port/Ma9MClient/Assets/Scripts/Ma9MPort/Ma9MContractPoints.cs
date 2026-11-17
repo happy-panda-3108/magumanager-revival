@@ -40,14 +40,26 @@ public static class Ma9MContractPoints
 	// Days a renewal adds to this card.
 	public static int ExtendDaysFor(int cardIdx)
 	{
-		return IsFa(cardIdx) ? FaDays : CardDays;
+		if (IsFa(cardIdx))
+		{
+			// 2026-11-17: the days the agent agreed to (Ma9MNegotiation) for that card's renewal now under way.
+			return (DealCard == cardIdx && DealDays > 0) ? DealDays : FaDays;
+		}
+		return CardDays;
 	}
+
+	// The negotiated FA renewal being sent (ContractManage_ExtendContractDlg, PlayerInfo_ContractManagementWindow); 0 = none.
+	public static int DealCard;
+
+	public static int DealDays;
 
 	// The card whose renewal is being set up: its kind, no points yet.
 	public static void ForCard(int cardIdx)
 	{
 		Fa = IsFa(cardIdx);
 		s_picks.Clear();
+		DealCard = 0;
+		DealDays = 0;
 	}
 
 	// Every split of FaPoints over the six stats: a ascending, then b, … each 0..what is left, the last stat the rest (the server's

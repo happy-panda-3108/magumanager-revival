@@ -65,7 +65,9 @@ namespace Ma9MServer
 		// the FA team (teamcode 250, the original client's eTeamName.FA), idx FaIdxBase + the source idx, the same year, sidx and
 		// stats, so it plays as its source (GameData.Row goes by sidx and year). At most one in the 1군; it counts for any
 		// 팀컬러 group; random draws never give it (Drawable). HomeTeam = the source card's club (coaches' lineage and the like).
-		public const int FaTeam = 250, FaIdxBase = 7_000_000, MaxFaInFirstTeam = 1;
+		// Two since 2026-11-17 (user 07:3x: "1군에도 FA선수를 2명 쓸 수 있다는 얘기야"; 07:4x "영입은 4명까지 가능하고 1군에 사용가능한
+		// 인원을 2명으로 제한합시다"): two FA cards in the 1군, four held (FaMarket.MaxHeld).
+		public const int FaTeam = 250, FaIdxBase = 7_000_000, MaxFaInFirstTeam = 2;
 
 		public bool IsFA => TeamCode == FaTeam;
 

@@ -53,6 +53,13 @@ namespace Ma9MServer
 			// was; then Lineup is the 1군 of now).
 			public List<int> CurrentMisplaced = new List<int>();
 			public string NoFit;
+			// (engine 2026-11-17, AI tester 쌍방울 B21) The 1군 of now's cards whose contract has ended (RemainContract 0: condition
+			// fixed at 최하): no 1군 of the advice takes them; a 선수 고정 card stays where the user put it.
+			public List<int> LeftOutExpired = new List<int>();
+			// (engine 2026-11-17, AI tester LG 96) The advice the search found when the games called it worse than the 1군 of now
+			// (Lineup is then the 1군 of now), and its games' win share; null / NaN when not turned down.
+			public Lineup TurnedDown;
+			public double TurnedDownSim = double.NaN;
 		}
 
 		// Full games a club for AutoLineupResult.Sim* (2026-11-12: 100 → about 1.5 s for three 1군s in a league of eight on 3 threads).
@@ -74,6 +81,8 @@ namespace Ma9MServer
 			public Dictionary<int, byte> Cond;
 			public Dictionary<int, CardInfo> Info;
 			public HashSet<int> Blocked;   // may not start (선발 5경기 제한)
+			public HashSet<int> Expired = new HashSet<int>();   // contract ended (not 선수 고정): no candidates
+
 			public Lineup Current;
 			public int Evaluations;
 			// 선수 고정 (systems session, user 11-12 10:4x: "선수 고정을 시켜 놓으면 그 선수는 자동 편성에 해당되지 않는걸로 …
@@ -114,7 +123,14 @@ namespace Ma9MServer
 			// clubs too (Teams raw). Before: today's Condition.For.
 			x.Cond = new Dictionary<int, byte>();
 			HashSet<int> lesson = LessonHandlers.InLesson(userCode);
-			x.Info = owned.Where(c => !lesson.Contains(c.Idx)).Select(c => s_data.Catalog.Get(c.Idx)).Where(c => c != null).ToDictionary(c => c.Idx);
+			// (11-17, AI tester 쌍방울 B21: the advice put two 9볼 starters whose contracts had ended into the 1군 and valued them at
+			// 보통; they play at 최하 until renewed) A card whose contract has ended is no candidate — the 컨디션-free rule above is
+			// about the day's condition, not this fixed one. 선수 고정 cards stay (the user's choice).
+			x.Expired = owned.Where(c => c.RemainContract == 0 && !c.IsLock).Select(c => c.Idx).ToHashSet();
+			// And the 1군 of now is valued with them at 최하 (LOW_LOW 4), as it plays, so the advice is told against what it replaces
+			// (at 보통 the 1군 of now looked 3.5%p better than an advice without them). 선수 고정 ones too.
+			foreach (TeamCard c in owned.Where(c => c.RemainContract == 0)) x.Cond[c.Idx] = 4;
+			x.Info = owned.Where(c => !lesson.Contains(c.Idx) && !x.Expired.Contains(c.Idx)).Select(c => s_data.Catalog.Get(c.Idx)).Where(c => c != null).ToDictionary(c => c.Idx);
 			x.Blocked = SpBlock.ForRoster(userCode, x.Info.Values.Where(c => !c.IsBatter).Select(c => c.Idx), x.Current).Select(b => b.idx).ToHashSet();
 			x.Cap = RosterHandlers.MaxCostOf(userCode);
 			x.PenaltyCap = LeagueRules.BallCap[s.Tier];
@@ -722,6 +738,24 @@ namespace Ma9MServer
 			r.SimAdvice = w[1];
 			r.SimSe = se[1];
 			if (kept) { r.SimKept = w[2]; r.SimKeptSe = se[2]; }
+			// (11-17, AI tester LG 96: TeamValue put the advice +1.03%p above the 1군 of now, the games 78.5% → 74.5% ±1.9, and the
+			// window called it "지금과 비슷") An advice the games call worse than the 1군 of now — below it by more than twice the
+			// paired standard error — is turned down when the 1군 of now keeps the rules (in position, no ended contract): the advice
+			// is the 1군 of now. The kept 1군 stays as it was (shown on its own).
+			if (r.SimAdvice < r.SimNow - 2 * r.SimSe && r.CurrentMisplaced.Count == 0 && r.LeftOutExpired.Count == 0)
+			{
+				r.TurnedDown = r.Lineup;
+				r.TurnedDownSim = r.SimAdvice;
+				r.Lineup = r.Current;
+				r.Runs = r.CurrentRuns;
+				r.Parts = r.CurrentParts;
+				r.Colours = r.CurrentColours;
+				r.Balls = r.CurrentBalls;
+				r.KeepsColour = true;
+				r.StartersOut = new List<int>();
+				r.SimAdvice = r.SimNow;
+				r.SimSe = 0;
+			}
 			return r;
 		}
 
@@ -734,6 +768,7 @@ namespace Ma9MServer
 			Dictionary<int, CardValue> values = CardValues(x);
 			AutoLineupResult r = new AutoLineupResult { Current = x.Current, Cap = x.Cap, CurrentBalls = RosterHandlers.LineupBalls(x.Current), Locked = x.Locked.Select(k => k.idx).ToList() };
 			if (StrictPositions) r.CurrentMisplaced = Misplaced(x, x.Current);
+			r.LeftOutExpired = x.Current.Batters.Concat(x.Current.Pitchers).Where(i => i != 0 && x.Expired.Contains(i)).Distinct().ToList();
 			r.CurrentParts = Evaluate(x, x.Current, out r.CurrentColours);
 			r.CurrentRuns = r.CurrentParts.Runs;
 			int[] keep = keepColour ? TeamColors.Registered(userCode) : null;
@@ -755,7 +790,16 @@ namespace Ma9MServer
 				r.Parts = r.CurrentParts;
 				r.Runs = r.CurrentRuns;
 				r.Colours = r.CurrentColours;
+				r.Balls = r.CurrentBalls;   // (11-17) it read 0 here
 				if (StrictPositions && r.CurrentMisplaced.Count > 0) r.NoFit = NoFitReason(x);
+				// (11-17, systems session's check: [팀컬러 유지] said "지금 1군이 가장 강합니다" with two ended contracts in the 1군) The
+				// 1군 of now with ended contracts is no answer either: say why none was built.
+				else if (r.LeftOutExpired.Count > 0)
+				{
+					r.NoFit = keep != null
+						? "계약이 끝난 선수를 빼면 지금 팀컬러를 지키는 1군을 짤 수 없습니다."
+						: "계약이 끝난 선수를 빼고는 볼 상한 안에서 1군을 짤 수 없습니다.";
+				}
 				return r;
 			}
 			// Without keep, also the best 1군 that keeps today's team colours, so both can be told (팀컬러를 지키면 / 바꾸면). (11-16: the
@@ -874,6 +918,8 @@ namespace Ma9MServer
 			string Colour(int[] e) => string.Join(", ", e.Where(i => i != 0).Select(i => $"{TeamColors.Label(i).name} {"SABC"[i / 1_000_000 % 10]}"));
 			ServerLog.Info($"[autolineup] {teamName} (user {user}), keep colour {keep}, {a.Evaluations} lineups valued in {watch.ElapsedMilliseconds} ms, best from {a.Start}");
 			if (a.Locked.Count > 0) ServerLog.Info($"[autolineup] 선수 고정 (선수보호): {string.Join(", ", a.Locked.Select(i => s_data.Catalog.Get(i)?.Name ?? i.ToString()))}");
+			if (a.LeftOutExpired.Count > 0) ServerLog.Info($"[autolineup] 계약 끝남(후보에서 뺌): {string.Join(", ", a.LeftOutExpired.Select(i => s_data.Catalog.Get(i)?.Name ?? i.ToString()))}");
+			if (a.TurnedDown != null) ServerLog.Info($"[autolineup] 경기로 재 보니 찾은 안 {100 * a.TurnedDownSim:F1}% < 지금 {100 * a.SimNow:F1}% → 지금 1군 그대로 | 찾은 안: {LineupEffects.Describe(a.TurnedDown, s_data.Catalog)}");
 			ServerLog.Info($"[autolineup] now    {a.CurrentBalls}/{a.Cap}볼, {a.CurrentRuns:+0.000;-0.000} runs a game | {Colour(a.CurrentColours)} | {LineupEffects.Describe(a.Current, s_data.Catalog)}");
 			ServerLog.Info($"[autolineup] advice {a.Balls}/{a.Cap}볼, {a.Runs:+0.000;-0.000} runs a game ({100 * a.Gain:+0.00;-0.00}%p) | {Colour(a.Colours)} | {LineupEffects.Describe(a.Lineup, s_data.Catalog)}");
 			ServerLog.Info($"[autolineup]   now    {a.CurrentParts}");

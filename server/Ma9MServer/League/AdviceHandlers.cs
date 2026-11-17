@@ -70,6 +70,11 @@ namespace Ma9MServer
 					// FA 시장 (2026-11-15): the album's FA pages.
 					FaMarket.Ask(session, user, what.Substring(FaMarket.Request.Length), v2);
 				}
+				else if (what.StartsWith(FaNegotiation.Request, StringComparison.Ordinal))
+				{
+					// FA 에이전트 협상 (2026-11-17): 영입·재계약 협상 차례, 서명.
+					FaNegotiation.Handle(session, user, what.Substring(FaNegotiation.Request.Length));
+				}
 				else
 				{
 					Say(session, 1, "알림", "알 수 없는 요청입니다.");
@@ -297,8 +302,20 @@ namespace Ma9MServer
 			// 포지션 엄수 (engine 2026-11-16): no 1군 in position could be built from the cards owned (Lineup is the 1군 of now).
 			if (r.NoFit != null)
 			{
-				Say(session, 1, title, "맞는 포지션으로 1군을 짤 수 없습니다.\n" + r.NoFit
-					+ (r.CurrentMisplaced.Count > 0 ? $"\n지금 1군에서 포지션이 맞지 않는 선수 {r.CurrentMisplaced.Count}명" : string.Empty));
+				// Since 11-17 07:4x the reason can be contracts that ended (engine: "계약이 끝난 선수를 빼면 …", LeftOutExpired), so the head
+				// follows it; the cards out of position now come by name (AI testers NC 69, kt 75: "맞지 않는 선수 1명" said nobody).
+				// The type-1 window has room for five lines.
+				bool byContract = r.LeftOutExpired != null && r.LeftOutExpired.Count > 0 && r.CurrentMisplaced.Count == 0;
+				List<string> fit = new List<string> { byContract ? "지금은 1군을 새로 짤 수 없습니다." : "맞는 포지션으로 1군을 짤 수 없습니다." };
+				fit.AddRange(r.NoFit.Split('\n'));
+				if (r.CurrentMisplaced.Count > 0)
+				{
+					fit.AddRange(Wrapped($"포지션이 맞지 않는 선수 {r.CurrentMisplaced.Count}명: ", r.CurrentMisplaced.Take(3).Select(CardName)
+						.Concat(r.CurrentMisplaced.Count > 3 ? new[] { $"외 {r.CurrentMisplaced.Count - 3}명" } : Array.Empty<string>())));
+				}
+				List<string> expired = ExpiredLines(r);
+				fit.AddRange(fit.Count + expired.Count <= 5 ? expired : expired.Take(Math.Max(0, 5 - fit.Count)));
+				Say(session, 1, title, string.Join("\n", fit));
 				ServerLog.Info($"[{session.Id}] auto lineup{(keepColour ? " keep" : string.Empty)}: no fit ({r.NoFit.Replace('\n', ' ')}), misplaced {r.CurrentMisplaced.Count}");
 				return;
 			}
@@ -307,7 +324,12 @@ namespace Ma9MServer
 			List<int> comes = next.Where(i => !now.Contains(i)).ToList(), goes = now.Where(i => !next.Contains(i)).ToList();
 			if (comes.Count == 0 && r.Lineup.Serialize() == r.Current.Serialize())
 			{
-				Say(session, 1, title, "지금 1군이 가장 강합니다.\n바꿀 선수가 없습니다." + (r.Locked.Count > 0 ? $"\n(선수보호 {r.Locked.Count}명은 고정)" : string.Empty));
+				// The engine's games turned the search's advice down (engine 2026-11-17, AI tester LG 96: the search's 1군 played 74.5%
+				// against 78.5% of now, and the window said "지금과 비슷"): say so with both numbers.
+				string turned = r.TurnedDown != null && !double.IsNaN(r.TurnedDownSim) && !double.IsNaN(r.SimNow)
+					? $"\n다른 1군을 경기로 재 보니 {100 * r.TurnedDownSim:F0}%로\n지금({100 * r.SimNow:F0}%)보다 낮아 그대로 두는 것이 좋습니다."
+					: "\n바꿀 선수가 없습니다.";
+				Say(session, 1, title, "지금 1군이 가장 강합니다." + turned + (r.Locked.Count > 0 ? $"\n(선수보호 {r.Locked.Count}명은 고정)" : string.Empty));
 				return;
 			}
 			string List(List<int> ids) => ids.Count == 0 ? "없음" : Rows(ids.Take(8).Select(CardName), 4) + (ids.Count > 8 ? $" 외 {ids.Count - 8}명" : string.Empty);
@@ -348,6 +370,21 @@ namespace Ma9MServer
 			{
 				lines.Add("(자리를 맞추면 예상 승률이 지금보다 낮게 나올 수 있음)");
 			}
+			return lines;
+		}
+
+		// 계약이 끝난 1군 카드 (engine 2026-11-17, AutoLineup LeftOutExpired; AI tester 쌍방울 B21: the advice put two 9볼 starters whose
+		// contracts had ended): the advice leaves them out, and the window says who and how to get them back.
+		private static List<string> ExpiredLines(LeagueService.AutoLineupResult r)
+		{
+			List<string> lines = new List<string>();
+			if (r.LeftOutExpired == null || r.LeftOutExpired.Count == 0)
+			{
+				return lines;
+			}
+			lines.AddRange(Wrapped($"계약이 끝난 {r.LeftOutExpired.Count}명은 빼고 계산했습니다: ", r.LeftOutExpired.Take(4).Select(CardName)
+				.Concat(r.LeftOutExpired.Count > 4 ? new[] { $"외 {r.LeftOutExpired.Count - 4}명" } : Array.Empty<string>())));
+			lines.Add("(계약관리에서 연장하면 다시 쓸 수 있음)");
 			return lines;
 		}
 
@@ -395,6 +432,7 @@ namespace Ma9MServer
 			s.Add(comes.Count == 0 ? "같은 선수로 자리·타순만 바뀝니다."
 				: $"바뀌는 선수 {comes.Count}명 (타자 {comes.Count(batters.Contains)} · 투수 {comes.Count(i => !batters.Contains(i))})");
 			s.AddRange(MisplacedLines(r));
+			s.AddRange(ExpiredLines(r));
 			List<int> starts = Enumerable.Range(0, 5).Where(k => was.Pitchers[k] != now.Pitchers[k]).ToList();
 			if (starts.Count <= 2)
 			{

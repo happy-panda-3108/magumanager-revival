@@ -38,7 +38,10 @@ namespace Ma9MServer
 			count = 0;
 			Lineup l = RosterHandlers.Db.GetLineup(user);
 			if (l == null) return null;
-			HashSet<int> first = l.Batters.Concat(l.Pitchers).Where(i => i != 0).ToHashSet();
+			// The batting order and the 11 pitchers, not the bench (Batters 9-13; user 11-17 21:1x: "후보선수 5명에 대해서는 계약 만료
+			// 알림이 나오지 않아야 한다고 이전에 얘기했었음. 팀 로스터에서 … 팝업에 후보는 포함 안 되는거랑 같은 이치임" — the app's
+			// Roster_DataCenter.isExistExpired has left the bench out since 10-25).
+			HashSet<int> first = l.Batters.Take(9).Concat(l.Pitchers).Where(i => i != 0).ToHashSet();
 			List<TeamCard> cards = RosterHandlers.Db.GetCards(user).Where(c => first.Contains(c.Idx)).ToList();
 			List<TeamCard> ending = cards.Where(c => c.RemainContract == 1).ToList();
 			List<TeamCard> ended = cards.Where(c => c.RemainContract == 0).ToList();

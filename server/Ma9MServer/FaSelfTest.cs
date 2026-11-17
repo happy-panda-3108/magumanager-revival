@@ -49,15 +49,17 @@ namespace Ma9MServer
 				}
 				return l;
 			}
-			string two = RosterHandlers.FaProblem(Of(faBat, faArm));
+			// Two FA in the 1군 since 2026-11-17 (CardInfo.MaxFaInFirstTeam; user 07:3x/07:4x): two ok, three refused, the batter step
+			// alone sees two batters at most.
 			string same = RosterHandlers.FaProblem(Of(src, faBat));
-			Check(RosterHandlers.FaProblem(Of(faBat, other)) == null && two != null && !two.StartsWith(RosterHandlers.SamePlayerHead)
-					&& RosterHandlers.FaProblem(Of(faBat, faArm), battersOnly: true) == null
-					&& same != null && same.StartsWith(RosterHandlers.SamePlayerHead) && RosterHandlers.FaProblem(Of(faBat, faBat2)) != null,
-				$"1군: one FA ok; FA batter + FA pitcher refused ({two?.Replace('\n', ' ')}), but not at the batter step; FA + its source refused ({same?.Replace('\n', ' ')}); two FA batters refused");
+			string three = RosterHandlers.FaProblem(Of(faBat, faBat2, faArm));
+			Check(RosterHandlers.FaProblem(Of(faBat, other)) == null && RosterHandlers.FaProblem(Of(faBat, faArm)) == null && RosterHandlers.FaProblem(Of(faBat, faBat2)) == null
+					&& three != null && !three.StartsWith(RosterHandlers.SamePlayerHead) && RosterHandlers.FaProblem(Of(faBat, faBat2, faArm), battersOnly: true) == null
+					&& same != null && same.StartsWith(RosterHandlers.SamePlayerHead),
+				$"1군: {CardInfo.MaxFaInFirstTeam} FA ok (batter + pitcher, two batters); three refused ({three?.Replace('\n', ' ')}), but not at the batter step; FA + its source refused ({same?.Replace('\n', ' ')})");
 			List<int> kept = RosterHandlers.LegendLimited(new[] { src.Idx, faBat.Idx, faBat2.Idx, faArm.Idx, other.Idx }).ToList();
-			Check(kept.Contains(src.Idx) && !kept.Contains(faBat.Idx) && kept.Count(i => catalog.Get(i).IsFA) == 1 && kept.Contains(other.Idx),
-				$"server-built lineups: of {src.Name} the original kept, his FA copy left out; one FA of the other two kept ({string.Join(", ", kept.Select(i => catalog.Get(i).Name + (catalog.Get(i).IsFA ? "(FA)" : "")))})");
+			Check(kept.Contains(src.Idx) && !kept.Contains(faBat.Idx) && kept.Count(i => catalog.Get(i).IsFA) == Math.Min(2, CardInfo.MaxFaInFirstTeam) && kept.Contains(other.Idx),
+				$"server-built lineups: of {src.Name} the original kept, his FA copy left out; {CardInfo.MaxFaInFirstTeam} FA of the other two kept ({string.Join(", ", kept.Select(i => catalog.Get(i).Name + (catalog.Get(i).IsFA ? "(FA)" : "")))})");
 
 			// 3. 팀컬러 (user 19:4x: "해당 년도 세트덱을 사용할 때 해당 년도의 FA선수를 쓸 수 있고, 20년대 롯데 << 이런 세트덱에는 20년대 FA 다 사용
 			// 가능 … 년도 조건을 타는 조커 카드다"): an FA card of the deck's season in place of a member keeps the single-year S and gets
@@ -115,7 +117,14 @@ namespace Ma9MServer
 			}
 			Check(user != 0, $"test team {user}");
 			if (user == 0) return 1;
-			CardInfo buy = faBat2, dear = fa.Where(c => c.Idx != buy.Idx).OrderByDescending(c => FaMarket.Price(c)).First();
+			// Only the season's list signs (FaMarket rule since 11-17): both cards from the test team's list, a batter to buy (the
+			// renewal bonus below is a batter's), the dearest other to be refused without the MP.
+			HashSet<int> heldNow = db.GetCards(user).Select(x => x.Idx).ToHashSet();
+			List<CardInfo> onList = FaMarket.MarketList(user).Select(catalog.Get).Where(c => c != null && !heldNow.Contains(c.Idx)).ToList();
+			Check(onList.Count >= 2, $"the test team's FA 시장 list: {onList.Count} cards not held");
+			if (onList.Count < 2) return 1;
+			CardInfo buy = onList.Where(c => c.IsBatter).OrderBy(c => FaMarket.Price(c)).FirstOrDefault() ?? onList[0];
+			CardInfo dear = onList.Where(c => c.Idx != buy.Idx).OrderByDescending(c => FaMarket.Price(c)).First();
 			db.RemoveCards(user, new[] { buy.Idx, dear.Idx });
 			int price = FaMarket.Price(buy);
 			int mp0 = db.AddMp(user, 0);

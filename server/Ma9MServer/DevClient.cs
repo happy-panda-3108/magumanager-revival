@@ -23,6 +23,10 @@ namespace Ma9MServer
 
 		private static int s_problems;
 
+		private static string s_dataDir;
+
+		private static uint s_user;
+
 		public static int Run(string dataDir, string[] args)
 		{
 			int at = Array.IndexOf(args, "--devclient");
@@ -39,7 +43,10 @@ namespace Ma9MServer
 			{
 				Connect();
 				// The 코칭스태프 menu shows only to builds that say they have its screens.
-				Login(email, password, scenario == "coach" ? "devclient%" + CoachHandlers.ClientMark : string.Empty);
+				s_dataDir = dataDir;
+				Login(email, password, scenario == "coach" ? "devclient%" + CoachHandlers.ClientMark
+					: scenario == "fanego" ? $"devclient%{FaNegotiation.ClientMark}%{NewsFeed.ClientMark}"
+					: scenario == "faart" ? $"devclient%{FaArt.ClientMark}" : string.Empty);
 				switch (scenario)
 				{
 				case "training":
@@ -107,6 +114,12 @@ namespace Ma9MServer
 					break;
 				case "famarket":
 					FaMarketTest(catalog);
+					break;
+				case "fanego":
+					FaNegoTest(catalog);
+					break;
+				case "faart":
+					FaArtTest(catalog);
 					break;
 				default:
 					Log($"unknown scenario {scenario}");
@@ -1048,13 +1061,33 @@ namespace Ma9MServer
 			List<int> list = (market.index.array ?? Array.Empty<PInteger>()).Select(i => i.n).ToList();
 			List<int> again2 = (Page(AlbumHandlers.GradePageYear, AlbumHandlers.MarketPage).index.array ?? Array.Empty<PInteger>()).Select(i => i.n).ToList();
 			// The 팀컬러 share is in the server's log ("FA 시장: team … 팀컬러 몫 n, entries …").
-			Check(list.Count == Math.Min(10, fa.Count - owned.Count) && list.Distinct().Count() == list.Count && list.All(i => catalog.Get(i)?.IsFA == true && !owned.Contains(i))
+			int size = global::Ma9MServer.FaMarket.TeamColorPicks + global::Ma9MServer.FaMarket.RandomPicks;
+			// A card signed this season stays on the season's list (owned now), so a second run of this test sees it there.
+			Check(list.Count == Math.Min(size, fa.Count - owned.Count + list.Count(owned.Contains)) && list.Distinct().Count() == list.Count && list.All(i => catalog.Get(i)?.IsFA == true && !catalog.Get(i).Foreigner)
 				&& list.SequenceEqual(again2),
 				$"FA 시장 page 6: {list.Count} cards, the same on the second look {list.SequenceEqual(again2)}: "
 				+ string.Join(" · ", list.Select(i => catalog.Get(i)).Select(c => $"'{c.Year % 100:00} {TeamColors.TeamName(c.HomeTeam, c.Year)} {c.Name} {c.Ball}볼")));
-			CardInfo card = list.Select(i => catalog.Get(i)).Where(c => c.Ball == 8).OrderByDescending(c => c.Year).FirstOrDefault()
-				?? catalog.Get(list.First());
-			CardInfo outside = fa.FirstOrDefault(c => !owned.Contains(c.Idx) && !list.Contains(c.Idx));
+			int heldFa = owned.Count, maxHeld = global::Ma9MServer.FaMarket.MaxHeld;
+			if (heldFa >= maxHeld)
+			{
+				// Two held (11-17 07:3x, FaMarket.MaxHeld): a third is refused, whatever the MP.
+				CardInfo third = list.Where(i => !owned.Contains(i)).Select(i => catalog.Get(i)).FirstOrDefault();
+				if (third != null)
+				{
+					Ma9MPacket.PKS_SC_POPUP no = Ask("ma9m:v2:fa:" + third.Idx);
+					Check(no.Type.n == 1 && Text(no).Contains($"{maxHeld}명까지 영입"), $"{heldFa} FA held, a third ({third.Name}): type {no.Type.n}: {Text(no)}");
+				}
+				return;
+			}
+			CardInfo card = list.Where(i => !owned.Contains(i)).Select(i => catalog.Get(i)).Where(c => c.Ball == 8).OrderByDescending(c => c.Year).FirstOrDefault()
+				?? catalog.Get(list.First(i => !owned.Contains(i)));
+			CardInfo outside = fa.FirstOrDefault(c => !c.Foreigner && !owned.Contains(c.Idx) && !list.Contains(c.Idx));
+			CardInfo foreignFa = fa.FirstOrDefault(c => c.Foreigner && !owned.Contains(c.Idx));
+			if (foreignFa != null)
+			{
+				Ma9MPacket.PKS_SC_POPUP no = Ask("ma9m:v2:fa:" + foreignFa.Idx);
+				Check(no.Type.n == 1 && Text(no).Contains("외국인"), $"a foreign FA ({foreignFa.Idx} {foreignFa.Name}): type {no.Type.n}: {Text(no)}");
+			}
 			if (outside != null)
 			{
 				Ma9MPacket.PKS_SC_POPUP no = Ask("ma9m:v2:fa:" + outside.Idx);
@@ -1092,6 +1125,284 @@ namespace Ma9MServer
 			CardInfo plain = catalog.Get(card.SourceIdx);
 			Ma9MPacket.PKS_SC_POPUP notFa = Ask("ma9m:v2:fa:" + plain.Idx);
 			Check(notFa.Type.n == 1 && Text(notFa).Contains("FA 시장에 없는"), $"the source card {plain.Idx}: type {notFa.Type.n}: {Text(notFa)}");
+		}
+
+		// FA 에이전트 협상 (FaNegotiation, 2026-11-17), over the wire on a server running a data copy (it signs a card, breaks off with
+		// another, edits a contract date in the copy's DB): logs in as an app with ma9m-fan1 / ma9m-news1; a break-off (계약금 깎기 until
+		// the gauge is under 0) and the season's refusal after it; a talk quit; a negotiation to a deal (terms, raises, the last offer
+		// accepted) and the signing (the MP taken = the deal's price, days = the deal's); the renewal refused with 15 days left, then with
+		// 1 day left: EXTEND refused without a negotiation, 정가 바로 → a renewal deal → EXTEND ok with its days; the lobby news band.
+		private static void FaNegoTest(CardCatalog catalog)
+		{
+			Ma9MPacket.PKS_SC_ENTER_ALBUM Page(int yy, int team)
+			{
+				Send(new Ma9MPacket.PKS_CS_ENTER_ALBUM { year = { n = (byte)yy }, team = { n = (byte)team } });
+				return Await<Ma9MPacket.PKS_SC_ENTER_ALBUM>();
+			}
+			HashSet<int> Owned() => (Page(AlbumHandlers.GradePageYear, AlbumHandlers.FaPage).possess_player.array ?? Array.Empty<PInteger>()).Select(i => i.n).ToHashSet();
+			Ma9MPacket.PKS_SC_POPUP Ask(string what)
+			{
+				Send(new Ma9MPacket.PKS_CS_REQ_SCENE_TUTORIAL { scene_name = { str = what } });
+				return Await<Ma9MPacket.PKS_SC_POPUP>(20000);
+			}
+			Ma9MPacket.PKS_SC_POPUP Fan(int idx, string action) => Ask($"ma9m:v2:fan:{idx}:{action}");
+			string[] Msgs(Ma9MPacket.PKS_SC_POPUP p) => (p.Messages.array ?? Array.Empty<PLongString>()).Select(m => m.str ?? string.Empty).ToArray();
+			string Text(Ma9MPacket.PKS_SC_POPUP p) => string.Join(" / ", Msgs(p).Select(m => m.Replace("\n", " | ")));
+			int MpNow(int idx)
+			{
+				// The old 영입 question shows "가진 MP a → b"; 취소 leaves everything as it was.
+				Ma9MPacket.PKS_SC_POPUP q = Ask("ma9m:v2:fa:" + idx);
+				Send(new Ma9MPacket.PKS_CS_POPUP_ACK { Ack = { n = AdviceHandlers.AckCancel } });
+				string line = Msgs(q).ElementAtOrDefault(1)?.Split('\n').FirstOrDefault(l => l.StartsWith("가진 MP")) ?? string.Empty;
+				string a = line.Length > 5 ? line.Substring(5).Split('→')[0].Trim().Replace(",", string.Empty) : string.Empty;
+				return int.TryParse(a, out int mp) ? mp : -1;
+			}
+
+			List<int> list = (Page(AlbumHandlers.GradePageYear, AlbumHandlers.MarketPage).index.array ?? Array.Empty<PInteger>()).Select(i => i.n).ToList();
+			HashSet<int> owned = Owned();
+			List<CardInfo> free = list.Where(i => !owned.Contains(i)).Select(i => catalog.Get(i)).Where(c => c != null).ToList();
+			Log($"FA 시장 {list.Count}명, 가진 FA {owned.Count}명, 영입할 수 있는 후보 {free.Count}명");
+			if (owned.Count >= global::Ma9MServer.FaMarket.MaxHeld || free.Count < 3)
+			{
+				if (free.Count > 0)
+				{
+					Ma9MPacket.PKS_SC_POPUP no = Fan(free[0].Idx, "start");
+					Check(no.Type.n == FaNegotiation.DoneType && Msgs(no).ElementAtOrDefault(2) == "0", $"{owned.Count} held: start refused: {Text(no)}");
+				}
+				Log("not enough room on the test team for the full run (release FA cards on the copy)");
+				return;
+			}
+
+			// 1. 결렬: 깎기 until the gauge is under 0, then the season's refusal.
+			CardInfo b = free[free.Count - 1];
+			Ma9MPacket.PKS_SC_POPUP p = Fan(b.Idx, "start");
+			if (p.Type.n == FaNegotiation.DoneType && Text(p).Contains("결렬"))
+			{
+				Log($"{b.Name}: broken off in an earlier run this season ({Text(p)})");
+			}
+			else
+			{
+				string[] m = Msgs(p);
+				Check(p.Type.n == FaNegotiation.TurnType && m.Length == 14 && m[2] == FaNegotiation.StartGauge.ToString() && m[11] == "turn" && m[13] == "0"
+					&& !string.IsNullOrEmpty(m[4]) && !string.IsNullOrEmpty(m[7]), $"start {b.Year} {b.Name}: type {p.Type.n}: {Text(p)}");
+				for (int i = 0; i < 6 && p.Type.n == FaNegotiation.TurnType; i++)
+				{
+					p = Fan(b.Idx, "c3");
+					Log($"  깎기 → type {p.Type.n}, gauge {Msgs(p).ElementAtOrDefault(2)}, {Msgs(p).ElementAtOrDefault(3)}");
+					if (p.Type.n == FaNegotiation.TurnType && Msgs(p)[11] == "last")
+					{
+						p = Fan(b.Idx, "quit");
+						break;
+					}
+				}
+				Check(p.Type.n == FaNegotiation.DoneType && Text(p).Contains("결렬") && Msgs(p)[2] == "0", $"break-off: {Text(p)}");
+				Ma9MPacket.PKS_SC_POPUP again = Fan(b.Idx, "start");
+				Check(again.Type.n == FaNegotiation.DoneType && Text(again).Contains("결렬"), $"start again this season: {Text(again)}");
+			}
+
+			// 2. 그만두기: the talk is gone.
+			CardInfo c2 = free[free.Count - 2];
+			p = Fan(c2.Idx, "start");
+			if (p.Type.n == FaNegotiation.TurnType)
+			{
+				Send(new Ma9MPacket.PKS_CS_REQ_SCENE_TUTORIAL { scene_name = { str = $"ma9m:v2:fan:{c2.Idx}:quit" } });
+				Ma9MPacket.PKS_SC_POPUP gone = Fan(c2.Idx, "c0");
+				Check(gone.Type.n == FaNegotiation.DoneType && Text(gone).Contains("끝났거나"), $"quit, then a choice: {Text(gone)}");
+			}
+
+			// 3. 협상 → 성사 → 서명.
+			CardInfo a = free[0];
+			int listPrice = global::Ma9MServer.FaMarket.Price(a);
+			int mp0 = MpNow(a.Idx);
+			p = Fan(a.Idx, "start");
+			Check(p.Type.n == FaNegotiation.TurnType, $"start {a.Year} {a.Name} (정가 {listPrice:N0}, MP {mp0:N0}): {Text(p)}");
+			for (int i = 0; i < 8 && p.Type.n == FaNegotiation.TurnType; i++)
+			{
+				string[] m = Msgs(p);
+				string pick = m[11] == "last" ? "accept" : !string.IsNullOrEmpty(m[5]) ? "c1" : !string.IsNullOrEmpty(m[6]) ? "c2" : "c0";
+				p = Fan(a.Idx, pick);
+				Log($"  {pick} → type {p.Type.n}: {Text(p)}");
+			}
+			string[] d = Msgs(p);
+			bool dealt = p.Type.n == FaNegotiation.DealType && d.Length >= 14;
+			int price = dealt ? int.Parse(d[7]) : 0, days = dealt ? int.Parse(d[6]) : 0;
+			Check(dealt && d[2] == a.Idx.ToString() && d[11] == "0" && (days == FaNegotiation.DaysOf(FaNegotiation.Seasons) || days == FaNegotiation.DaysOf(FaNegotiation.LongSeasons)) && price >= (long)listPrice * FaNegotiation.MinPct / 100 - 10_000
+				&& price <= (long)listPrice * FaNegotiation.MaxPct / 100 + 10_000 && d[8] == listPrice.ToString(),
+				$"deal: {Text(p)}");
+			if (!dealt)
+			{
+				return;
+			}
+			Ma9MPacket.PKS_SC_POPUP signed = Fan(a.Idx, "sign");
+			bool own = Owned().Contains(a.Idx);
+			Check(signed.Type.n == FaNegotiation.DoneType && Msgs(signed)[2] == "1" && own && Text(signed).Contains($"남은 MP {mp0 - price:N0}") && Text(signed).Contains($"계약 {days}일"),
+				$"sign: {Text(signed)}; owned {own}; MP {mp0:N0} − {price:N0}");
+			Ma9MPacket.PKS_SC_POPUP twice = Fan(a.Idx, "sign");
+			Check(twice.Type.n == FaNegotiation.DoneType && Msgs(twice)[2] == "0", $"sign twice: {Text(twice)}");
+
+			// 4. 재계약: refused with the contract long; with 1 day left EXTEND needs a negotiation; 정가 바로 → renewal deal → EXTEND.
+			// 미리 연장 (11-17 12:xx): with more than 2 days left the agent offers the 계약관리 price (early surcharge) for 4시즌 at once.
+			Ma9MPacket.PKS_SC_POPUP early = Fan(a.Idx, "start");
+			string[] em = Msgs(early);
+			int earlyPrice = ContractHandlers.FaCost(0, listPrice, days);
+			Check(early.Type.n == FaNegotiation.DealType && em[11] == "1" && em[6] == FaNegotiation.DaysOf(FaNegotiation.QuickSeasons).ToString()
+				&& em[7] == earlyPrice.ToString() && em[1].Contains("미리") && em[14].Contains("·"),
+				$"미리 연장 with {days} days left: {Text(early)} (want {earlyPrice:N0})");
+			string cs = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = Path.Combine(s_dataDir, "ma9m.db") }.ToString();
+			DateTime today = DateTime.Today;
+			string Until()
+			{
+				using Microsoft.Data.Sqlite.SqliteConnection c = new Microsoft.Data.Sqlite.SqliteConnection(cs);
+				c.Open();
+				using Microsoft.Data.Sqlite.SqliteCommand cmd = c.CreateCommand();
+				cmd.CommandText = "SELECT contract_until FROM team_card WHERE card_idx = $i AND user_code = $u";
+				cmd.Parameters.AddWithValue("$i", a.Idx);
+				cmd.Parameters.AddWithValue("$u", (long)s_user);
+				return cmd.ExecuteScalar() as string;
+			}
+			if (early.Type.n == FaNegotiation.DealType)
+			{
+				DateTime before = DateTime.Parse(Until());
+				Send(new Ma9MPacket.PKS_CS_EXTEND_CONTRACT { target_card = { n = a.Idx }, bonus_stat = { n = 0 } });
+				Ma9MPacket.PKS_SC_EXTEND_CONTRACT er = Await<Ma9MPacket.PKS_SC_EXTEND_CONTRACT>();
+				string wantEarly = before.AddDays(FaNegotiation.DaysOf(FaNegotiation.QuickSeasons)).ToString("yyyy-MM-dd");
+				Check(er.result.n == 0 && Until() == wantEarly, $"EXTEND after 미리 연장: result {er.result.n}, contract until {Until()} (want {wantEarly}), MP {er.cur_point.n:N0}");
+			}
+			using (Microsoft.Data.Sqlite.SqliteConnection c = new Microsoft.Data.Sqlite.SqliteConnection(cs))
+			{
+				c.Open();
+				using Microsoft.Data.Sqlite.SqliteCommand cmd = c.CreateCommand();
+				cmd.CommandText = "UPDATE team_card SET contract_until = $d WHERE card_idx = $i AND user_code = $u";
+				cmd.Parameters.AddWithValue("$d", today.AddDays(1).ToString("yyyy-MM-dd"));
+				cmd.Parameters.AddWithValue("$i", a.Idx);
+				cmd.Parameters.AddWithValue("$u", (long)s_user);
+				Log($"contract of {a.Name} set to 1 day left in the copy: {cmd.ExecuteNonQuery()} row(s)");
+			}
+			Send(new Ma9MPacket.PKS_CS_EXTEND_CONTRACT { target_card = { n = a.Idx }, bonus_stat = { n = 0 } });
+			Ma9MPacket.PKS_SC_EXTEND_CONTRACT refused = Await<Ma9MPacket.PKS_SC_EXTEND_CONTRACT>();
+			Check(refused.result.n == 1, $"EXTEND without a negotiation: result {refused.result.n}");
+			Ma9MPacket.PKS_SC_POPUP r = Fan(a.Idx, "start");
+			string[] rm = Msgs(r);
+			Check(r.Type.n == FaNegotiation.TurnType && rm.Length == 14 && rm[13] == "1" && rm[2] == FaNegotiation.RenewalGauge.ToString(), $"renewal talk: {Text(r)}");
+			Ma9MPacket.PKS_SC_POPUP rq = Fan(a.Idx, "quick");
+			string[] rd = Msgs(rq);
+			Check(rq.Type.n == FaNegotiation.DealType && rd.Length >= 14 && rd[11] == "1" && rd[6] == FaNegotiation.DaysOf(FaNegotiation.QuickSeasons).ToString(), $"renewal 정가 바로: {Text(rq)}");
+			Send(new Ma9MPacket.PKS_CS_EXTEND_CONTRACT { target_card = { n = a.Idx }, bonus_stat = { n = 0 } });
+			Ma9MPacket.PKS_SC_EXTEND_CONTRACT ok = Await<Ma9MPacket.PKS_SC_EXTEND_CONTRACT>();
+			string until = null;
+			using (Microsoft.Data.Sqlite.SqliteConnection c = new Microsoft.Data.Sqlite.SqliteConnection(cs))
+			{
+				c.Open();
+				using Microsoft.Data.Sqlite.SqliteCommand cmd = c.CreateCommand();
+				cmd.CommandText = "SELECT contract_until FROM team_card WHERE card_idx = $i AND user_code = $u";
+				cmd.Parameters.AddWithValue("$i", a.Idx);
+				cmd.Parameters.AddWithValue("$u", (long)s_user);
+				until = cmd.ExecuteScalar() as string;
+			}
+			string want = today.AddDays(1 + FaNegotiation.DaysOf(FaNegotiation.QuickSeasons)).ToString("yyyy-MM-dd");
+			Check(ok.result.n == 0 && until == want, $"EXTEND after the renewal deal: result {ok.result.n}, contract until {until} (want {want}), MP {ok.cur_point.n:N0}");
+
+			// 5. 크게 만족: an agent who wants 주전 (or money) with its favourite move last → 게이지 110+ → 최상 for 24 hours, no 회복제 slot
+			// (the condition read back through 선수관리's 적용취소 reply, which also says the card has no item).
+			CardInfo top = free.Skip(1).Take(free.Count - 3).FirstOrDefault(c => (((c.Sidx * 31) + c.Year) & 3) is 0 or 2);
+			if (top == null || Owned().Count >= global::Ma9MServer.FaMarket.MaxHeld)
+			{
+				Log("no 주전/돈 agent left on the list for the 크게 만족 run");
+			}
+			else
+			{
+				bool money = (((top.Sidx * 31) + top.Year) & 3) == 0;
+				// 주전: raise, raise, 우승 (third button after two raises), 주전 last; 돈: 주전, 우승, raise, raise.
+				string[] plan = money ? new[] { "c1", "c1", "c0", "c0" } : new[] { "c0", "c0", "c2", "c1" };
+				p = Fan(top.Idx, "start");
+				Log($"  {top.Year} {top.Name}: {Msgs(p).ElementAtOrDefault(8)}, {Msgs(p).ElementAtOrDefault(3)}");
+				foreach (string step in plan)
+				{
+					if (p.Type.n != FaNegotiation.TurnType)
+					{
+						break;
+					}
+					p = Fan(top.Idx, step);
+					Log($"  {step} → type {p.Type.n}: gauge {Msgs(p).ElementAtOrDefault(p.Type.n == FaNegotiation.DealType ? 9 : 2)}, {Msgs(p).ElementAtOrDefault(1)?.Replace("\n", " | ")}");
+				}
+				Check(p.Type.n == FaNegotiation.DealType && Msgs(p)[10] == "1", $"크게 만족 deal: {Text(p)}");
+				if (p.Type.n == FaNegotiation.DealType)
+				{
+					Ma9MPacket.PKS_SC_POPUP s2 = Fan(top.Idx, "sign");
+					long item = -1;
+					using (Microsoft.Data.Sqlite.SqliteConnection c = new Microsoft.Data.Sqlite.SqliteConnection(cs))
+					{
+						c.Open();
+						using Microsoft.Data.Sqlite.SqliteCommand cmd = c.CreateCommand();
+						cmd.CommandText = "SELECT item FROM card_manage WHERE card_idx = $i AND user_code = $u";
+						cmd.Parameters.AddWithValue("$i", top.Idx);
+						cmd.Parameters.AddWithValue("$u", (long)s_user);
+						item = cmd.ExecuteScalar() is long v ? v : -1;
+					}
+					Send(new Ma9MPacket.PKS_CS_TAKE_OFF_ITEM_ENDTIME { take_off_player_index = { n = top.Idx }, target_card_index = { n = top.Idx } });
+					Ma9MPacket.PKS_SC_TAKE_OFF_ITEM cond = Await<Ma9MPacket.PKS_SC_TAKE_OFF_ITEM>();
+					int applied = cond.apply_players.array?.Length ?? 0;
+					Check(Msgs(s2)[2] == "1" && Text(s2).Contains("크게 만족") && item == -1 && cond.take_off_player_condition.n == 0 && !(cond.apply_players.array ?? Array.Empty<PUICardInfoPlayerManage>()).Any(r => r.ui_info.index.n == top.Idx),
+						$"크게 만족 sign: {Text(s2)}; card_manage item {item} (none), condition {cond.take_off_player_condition.n} (0 = 최상), 회복제 slots in use {applied}");
+				}
+			}
+
+			// 6. 로비 소식 띠.
+			Send(new Ma9MPacket.PKS_CS_ENTER_MAIN());
+			Ma9MPacket.PKS_SC_POPUP news = null;
+			Stopwatch w = Stopwatch.StartNew();
+			while (news == null && w.ElapsedMilliseconds < 15000)
+			{
+				Ma9MPacket.PKS_SC_POPUP any = Await<Ma9MPacket.PKS_SC_POPUP>(15000);
+				if (any.Type.n == NewsFeed.Type)
+				{
+					news = any;
+				}
+			}
+			Check(news != null && Msgs(news).Any(s => s.Contains(a.Name) && s.Contains("재계약"))
+				&& Msgs(news).SkipWhile(s => s.StartsWith(NewsFeed.NoticeMark, StringComparison.Ordinal)).All(s => !s.StartsWith(NewsFeed.NoticeMark, StringComparison.Ordinal)),
+				$"lobby news: {(news == null ? "none" : string.Join(" ‖ ", Msgs(news)))}");
+		}
+
+		// FA 카드 구단 유니폼 그림 (FaArt, 2026-11-17), on a server running a data copy (it may add lines to the copy's render list): a lobby
+		// visit as an app with ma9m-faart1 → POPUP type 34 [club, idx…]; every listed card is the team's FA card and its picture is on the
+		// CDN (HTTP 200 from /ma9m/KBO/CardImage/<v>/fa/…), a picture that is not there answers 404 (not the placeholder); the team's FA
+		// cards without their picture are on the render list.
+		private static void FaArtTest(CardCatalog catalog)
+		{
+			Send(new Ma9MPacket.PKS_CS_ENTER_MAIN());
+			Ma9MPacket.PKS_SC_POPUP list = null;
+			Stopwatch w = Stopwatch.StartNew();
+			while (list == null && w.ElapsedMilliseconds < 15000)
+			{
+				Ma9MPacket.PKS_SC_POPUP any = Await<Ma9MPacket.PKS_SC_POPUP>(15000);
+				if (any.Type.n == FaArt.ListType)
+				{
+					list = any;
+				}
+			}
+			string[] m = (list?.Messages.array ?? Array.Empty<PLongString>()).Select(s => s.str ?? string.Empty).ToArray();
+			Check(list != null && m.Length >= 1 && int.TryParse(m[0], out _), $"type {FaArt.ListType}: {string.Join(" / ", m)}");
+			if (list == null || m.Length == 0)
+			{
+				return;
+			}
+			int club = int.Parse(m[0]);
+			List<int> ready = m.Skip(1).Select(int.Parse).ToList();
+			using System.Net.Http.HttpClient http = new System.Net.Http.HttpClient();
+			string root = $"http://127.0.0.1:{Program.HttpPort}/ma9m/KBO";
+			foreach (int idx in ready)
+			{
+				CardInfo c = catalog.Get(idx);
+				System.Net.Http.HttpResponseMessage face = http.GetAsync($"{root}/CardImage/{Cdn.CardArtVersion}/fa/{idx}_{club}.png").Result;
+				System.Net.Http.HttpResponseMessage detail = http.GetAsync($"{root}/CardDetailImage/{Cdn.CardDetailVersion}/fa/{idx}_{club}_detail.png").Result;
+				Check(c?.IsFA == true && face.IsSuccessStatusCode && detail.IsSuccessStatusCode,
+					$"'{c?.Year % 100:00} {c?.Name} ({idx}) in club {club}'s uniform: face {(int)face.StatusCode} {face.Content.ReadAsByteArrayAsync().Result.Length} bytes, detail {(int)detail.StatusCode}");
+			}
+			System.Net.Http.HttpResponseMessage none = http.GetAsync($"{root}/CardImage/{Cdn.CardArtVersion}/fa/1_{club}.png").Result;
+			Check((int)none.StatusCode == 404, $"a picture that is not there: {(int)none.StatusCode} (404, not the placeholder)");
+			string queue = Path.Combine(s_dataDir, "fa_art_queue.tsv");
+			Log($"render list of the copy: {(File.Exists(queue) ? string.Join(" · ", File.ReadAllLines(queue)) : "none")}");
 		}
 
 		private static Dictionary<int, int> Inventory()
@@ -1234,6 +1545,7 @@ namespace Ma9MServer
 			choose.possess_team_count.n = 1;
 			Send(choose);
 			Ma9MPacket.PKS_SC_CHOOSE_TEAM chosen = Await<Ma9MPacket.PKS_SC_CHOOSE_TEAM>();
+			s_user = (uint)team.user_code.n;
 			Log($"logged in as {email}, team {team.user_code.n} (choose result {chosen.result.n})");
 		}
 

@@ -122,6 +122,13 @@ namespace Ma9MServer
 				// 1군 계약 만료 알림 (ContractNotice, systems session 2026-11-16).
 				ContractNotice.OnLobby(session);
 			}
+			// 로비 소식 띠 (NewsFeed, systems session 2026-11-17): not a popup, so also before unconfirmed games.
+			if (session.Team != null)
+			{
+				NewsFeed.OnLobby(session);
+				// FA 카드 구단 유니폼 그림 (FaArt): the app's list, missing pictures onto the render list.
+				FaArt.OnLobby(session);
+			}
 		}
 
 		private static void SceneTutorial(GameSession session, Ma9MPacket.PKS_CS_REQ_SCENE_TUTORIAL packet)

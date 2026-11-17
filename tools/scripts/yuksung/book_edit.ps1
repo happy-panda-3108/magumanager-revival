@@ -39,8 +39,11 @@ try {
   # 2026-11-15 (FA 추천): "add_sheet": { "name", "values": [[addr, value]...], "fills", "fonts", "bold": [range...],
   # "widths": [[col, width]...], "wrap": [range...] } adds (or empties and rewrites) a sheet after the last one; the user's
   # own sheets stay as they are.
-  if ($null -ne $s.add_sheet) {
-    $a = $s.add_sheet
+  # 2026-11-17 (FA 2명): "add_sheets": [ {same as add_sheet}, ... ] adds several, in order, after add_sheet.
+  $sheets = @()
+  if ($null -ne $s.add_sheet) { $sheets += $s.add_sheet }
+  if ($null -ne $s.add_sheets) { $sheets += @($s.add_sheets) }
+  foreach ($a in $sheets) {
     $new = $null
     foreach ($w in $wb.Worksheets) { if ($w.Name -eq $a.name) { $new = $w } }
     if ($null -eq $new) {
@@ -90,17 +93,18 @@ try {
       if ($want -is [string] -and $want.StartsWith('=')) { continue }
       if ("$got" -ne "$want") { $bad += "$($v[0]): $got != $want" }
     }
-    if ($null -ne $s.add_sheet) {
-      $ns = $wb.Worksheets.Item($s.add_sheet.name)
-      foreach ($v in $s.add_sheet.values) {
+    $n = $s.values.Count
+    foreach ($a in $sheets) {
+      $ns = $wb.Worksheets.Item($a.name)
+      $n += $a.values.Count
+      foreach ($v in $a.values) {
         if ($null -eq $v[1] -or ($v[1] -is [string] -and $v[1].StartsWith('='))) { continue }
         $got = $ns.Range($v[0]).Value2
         $gn = 0.0; $wn = 0.0
         if ([double]::TryParse("$got", [ref]$gn) -and [double]::TryParse("$($v[1])", [ref]$wn) -and [math]::Abs($gn - $wn) -lt 1e-9) { continue }
-        if ("$got" -ne "$($v[1])") { $bad += "$($s.add_sheet.name)!$($v[0]): $got != $($v[1])" }
+        if ("$got" -ne "$($v[1])") { $bad += "$($a.name)!$($v[0]): $got != $($v[1])" }
       }
     }
-    $n = $s.values.Count + $(if ($null -ne $s.add_sheet) { $s.add_sheet.values.Count } else { 0 })
     "{0}: {1} cells written, {2} differ{3}" -f [IO.Path]::GetFileName($p), $n, $bad.Count, $(if ($bad.Count) { ' | ' + ($bad -join '; ') } else { '' })
     $wb.Close($false)
   }

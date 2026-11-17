@@ -511,6 +511,12 @@ namespace Ma9MServer
 					restart = renewed;
 				}
 			}
+			// FA 협상 크게 만족 (FaNegotiation, systems session 2026-11-17): 최상 for 24 hours from the signing or renewal, not a
+			// 컨디션 회복제 (no 선수관리 slot).
+			if (FaNegotiation.TopAt(userCode, cardIdx, at))
+			{
+				return 0;
+			}
 			DateTime from = restart ?? Epoch;
 			day = day.Date;
 			int level = restart.HasValue ? 2 : Draw(Unit(userCode, cardIdx, from, 0));

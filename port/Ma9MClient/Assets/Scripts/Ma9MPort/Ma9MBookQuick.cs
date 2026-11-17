@@ -523,6 +523,15 @@ public class Ma9MBookPopup : MonoBehaviour
 		return p;
 	}
 
+	// Ma9M (systems session, 2026-11-17): the message as in the common popups (Ma9MTextBox.FitPopup): the body size, wrapped at
+	// the box, the popup grows, then scrolls. Call after setting Content.text (with Create(0)) and before adding the buttons.
+	public void FitContent(bool left = false)
+	{
+		float extra = Ma9MTextBox.FitPopup(Content, left);
+		TitleY += extra * 0.5f;
+		BottomRow -= extra * 0.5f;
+	}
+
 	// click: a tap; press: down / up (for holding). Returns the button's label.
 	public UILabel AddButton(string text, float x, float y, float scale, Action click, Action<bool> press = null)
 	{

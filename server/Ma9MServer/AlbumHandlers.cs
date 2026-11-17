@@ -64,6 +64,11 @@ namespace Ma9MServer
 			}
 			// FA 시장's per-season lists (2026-11-17).
 			FaMarket.Init(dbPath);
+			// FA 에이전트 협상 (결렬 기록) and the lobby's news band (2026-11-17).
+			FaNegotiation.Init(dbPath);
+			NewsFeed.Init(dbPath);
+			// FA cards in the signing club's uniform: the render list and the app's list (FaArt, 2026-11-17).
+			FaArt.Init(dbPath);
 			loop.Register<Ma9MPacket.PKS_CS_ENTER_ALBUM>(Enter);
 		}
 

@@ -602,6 +602,27 @@ namespace Ma9MServer
 			return best;
 		}
 
+		// The smaller side of a dual group as DualReach counts it (FA cards of the pair's season go to it, Smaller).
+		private static int DualSmaller(int k, int slot, List<CardInfo> cards, int group)
+		{
+			Kind kind = Kinds[k].kind;
+			int a, b, w;
+			if (kind == Kind.SingleYearDualTeam)
+			{
+				int yy = group / 10000, lo = group / 100 % 100, hi = group % 100;
+				a = cards.Count(c => !c.IsFA && IsMember(Kind.SingleYearTeam, lo * 100 + yy, c));
+				b = cards.Count(c => !c.IsFA && IsMember(Kind.SingleYearTeam, hi * 100 + yy, c));
+				w = cards.Count(c => c.IsFA && c.Year % 100 == yy);
+			}
+			else
+			{
+				a = cards.Count(c => !c.IsFA && IsMember(Kind.TeamAllStar, group / 100, c));
+				b = cards.Count(c => !c.IsFA && IsMember(Kind.TeamAllStar, group % 100, c));
+				w = cards.Count(c => c.IsFA);
+			}
+			return Math.Min((a + b + w) / 2, Math.Min(a, b) + w);
+		}
+
 		// Whether batters and pitchers (a 1군's 14 + 11) reach any team colour; no catalog needed (StarterTeam.DrawClub, 2026-11-12).
 		public static bool AnyAvailable(List<CardInfo> batters, List<CardInfo> pitchers)
 		{
@@ -651,7 +672,11 @@ namespace Ma9MServer
 					if (members == 0) continue;
 					int reached = grade < 0 ? 4 : grade;
 					int target = Enumerable.Range(0, reached).Where(g => Value(k, slot, g) > 0).DefaultIfEmpty(-1).Last();
-					if (target >= 0 && members * 3 >= Need(k, slot, target)) hints.Add(Instance(Kinds[k].kind, slot, target, group));
+					if (target < 0 || members * 3 < Need(k, slot, target)) continue;
+					// A dual kind's hint also wants a third of the per-team share on its smaller side (user 11-17 21:1x: "단일팀만 있는데
+					// 듀얼팀 올스타가 풀리는 것은 잘못된 일임"; 24 LG + 1 KIA showed "KIA·LG 올스타" greyed on the total alone).
+					if (IsDual(Kinds[k].kind) && DualSmaller(k, slot, scopes[slot], group) * 3 < DualEach(Need(k, slot, target))) continue;
+					hints.Add(Instance(Kinds[k].kind, slot, target, group));
 				}
 			}
 			return hints;
@@ -749,6 +774,37 @@ namespace Ma9MServer
 		internal static (int group, int count) BestGroupForTest(int kind, List<CardInfo> cards) => BestGroup((Kind)kind, cards);
 
 		public static bool IsMemberOf(int instance, CardInfo c) => instance >= InstanceBase && Parse(instance) is { } e && IsMember(e.kind, instance % 1_000_000, c);
+
+		// An entry every FA card joins (the club all-star kinds: an FA is a joker of any club, IsMember), for FaMarket's 팀컬러 share
+		// (systems session 2026-11-17): there only the club's own players count.
+		public static bool FaJoinsAnyClub(int instance) => instance >= InstanceBase && Parse(instance) is { } e && (e.kind == Kind.TeamAllStar || e.kind == Kind.DualTeamAllStar);
+
+		// Whether a card is of an entry's scope: 전체 any, 타자진 a batter, 투수진 a pitcher (the slots of Scopes). FaMarket rule 4
+		// (11-17 22:5x): a batter FA was counted as the share of a 투수진 entry.
+		public static bool InScopeOf(int instance, CardInfo c)
+		{
+			if (c == null || instance < InstanceBase || !(Parse(instance) is { } e)) return false;
+			return e.slot == 0 || (e.slot == 1) == c.IsBatter;
+		}
+
+		// Whether a (non-FA) card is of the club an entry is named after: the club of a 단일 년도 팀 or the two of a 단일 년도 듀얼 팀 (that
+		// season's club), the lineage of a 듀얼 년도·연대 팀 or a 팀 올스타 (one or two lines). False for the all-stars of a season, which
+		// are of no club. FaMarket rule 4 (user 11-17 21:1x): the FA share strengthens an entry with players of other clubs.
+		public static bool IsOwnClubOf(int instance, CardInfo c)
+		{
+			if (c == null || instance < InstanceBase || !(Parse(instance) is { } e)) return false;
+			int group = instance % 1_000_000, team = c.TeamCode, line = Lineage(c.TeamCode);
+			return e.kind switch
+			{
+				Kind.SingleYearTeam => team == group / 100,
+				Kind.SingleYearDualTeam => team == group / 100 % 100 || team == group % 100,
+				Kind.DualYearTeam => line == group / 10000,
+				Kind.DecadeTeam => line == group / 100,
+				Kind.TeamAllStar => line == group,
+				Kind.DualTeamAllStar => line == group / 100 || line == group % 100,
+				_ => false
+			};
+		}
 
 		// Writes the bonuses into team_card.team_color (every card; 0 off the 1군). Call after the lineup or
 		// the choice changes.

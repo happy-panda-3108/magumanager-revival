@@ -197,6 +197,58 @@ public class Ma9MRemote : MonoBehaviour
 			case "state":
 				reply = $"ok scene={UnityEngine.SceneManagement.SceneManager.GetActiveScene().name} screen={Screen.width}x{Screen.height} frame={Time.frameCount} batch={Application.isBatchMode}";
 				break;
+			case "ceremony":
+				// Dev (engine session, 2026-11-17): "ceremony <FA card idx> [renewal] [top]" plays the FA 계약서·입단식 (Ma9MFaCeremony)
+				// on this screen with sample terms and our club; nothing goes to the server.
+				reply = Ma9MFaCeremony.PlayTest(N(a, 1, 0), line.Contains("renewal"), line.Contains("top"));
+				break;
+			// Systems session, 2026-11-17 (user 18:1x: every text box checked by us, not after someone points it out):
+			//   textcheck [file]       Ma9MTextCheck on this screen (넘침·화면밖·잘림·겹침·줄임·줄어듦·작음 + the 글상자), the report in file
+			//   textscroll <0..1>      every scrolling 글상자 to that point (0 the top, 1 the end)
+			//   popuptext <file> [two] a common popup with the file's text (UTF-8; the first line is the title), two buttons with "two"
+			//   news                   the lobby's 리그 소식 window
+			//   help                   this screen's (?) help
+			case "textcheck":
+				reply = Ma9MTextCheck.Run(line.Length > 10 ? Unquote(line.Substring(10).Trim()) : null);
+				break;
+			case "textscroll":
+				foreach (Ma9MTextBox box in Ma9MTextBox.Live.ToArray())
+				{
+					box.ScrollTo(F(a, 1));
+				}
+				break;
+			case "popuptext":
+			{
+				bool two = line.EndsWith(" two", StringComparison.Ordinal);
+				string file = Unquote((two ? line.Substring(0, line.Length - 4) : line).Substring(10).Trim());
+				string[] parts = File.ReadAllText(file, Encoding.UTF8).Replace("\r", string.Empty).Split(new[] { '\n' }, 2);
+				string body = parts.Length > 1 ? parts[1].TrimEnd('\n') : string.Empty;
+				if (two)
+				{
+					PopupManager.ViewPopup2(parts[0], body, "다음", "닫기", null, null);
+				}
+				else
+				{
+					PopupManager.ViewPopup1(parts[0], body, "닫기", null);
+				}
+				break;
+			}
+			case "news":
+				Ma9MNewsTicker.ShowAll();
+				break;
+			case "help":
+			{
+				Ma9MHelpButton help = UnityEngine.Object.FindFirstObjectByType<Ma9MHelpButton>();
+				if (help != null)
+				{
+					help.SendMessage("OnClick");
+				}
+				else
+				{
+					reply = "error no (?) on this screen";
+				}
+				break;
+			}
 			default:
 				reply = "error unknown command: " + verb;
 				break;

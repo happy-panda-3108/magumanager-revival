@@ -87,6 +87,7 @@ namespace Ma9MServer
 			public (int from, int to)[] Moves = Array.Empty<(int, int)>();
 			public int Leaver;
 			public bool Chain;   // a TCSIM_FA_CHAIN variant (else as the 11-15 run had it)
+			public bool Great;   // (11-17, TCSIM_FA_PAIRS key ending "!") the moved man's 포지션 변경 is a 대성공, not a 성공
 		}
 
 		private static List<(string label, Deck deck, DevDeck dev, string line)> FaVariants(string label, Deck own, DevDeck y, List<DevDeck> field)
@@ -104,65 +105,102 @@ namespace Ma9MServer
 			// TCSIM_FA_YEAR=deck (user 2026-11-15 19:2x: "97쌍방울덱이면 97년도 FA 선수를 써야하는거야"): only the FA cards of the deck's own
 			// season (the label's year, "1997 쌍방울#지금" → 1997).
 			int onlyYear = Environment.GetEnvironmentVariable("TCSIM_FA_YEAR") == "deck" && int.TryParse(label.Split(' ')[0], out int ly) ? ly : 0;
-			List<Cand> fas = s_data.Catalog.All.Where(c => c.IsFA && (onlyYear == 0 || c.Year == onlyYear)).OrderBy(c => c.Idx).Select(c => AnyCard(c.Idx)).Where(c => c != null).ToList();
-			bool Twice(Cand fa, params int[] leaving) => Enumerable.Range(0, Slots).Any(s => !leaving.Contains(s) && own.At[s] != null
-				&& own.At[s].Info.IsBatter == fa.Info.IsBatter && own.At[s].Info.Sidx == fa.Info.Sidx);
+			// TCSIM_FA_DOMESTIC=1 (user 2026-11-17 02:0x: "외국인 선수는 안 넣는게 맞는 것 같음. 국내선수들로만 나오게 해주고 … 국내선수FA로
+			// 계산해서 다시 우선순위를 찾아주고"): domestic FA cards only (CardInfo.Foreigner), as the FA 시장 offers them from 11-17.
+			bool domestic = Environment.GetEnvironmentVariable("TCSIM_FA_DOMESTIC") == "1";
+			List<Cand> fas = s_data.Catalog.All.Where(c => c.IsFA && (onlyYear == 0 || c.Year == onlyYear) && (!domestic || !c.Foreigner)).OrderBy(c => c.Idx).Select(c => AnyCard(c.Idx)).Where(c => c != null).ToList();
 			bool chain = FaChain;
-			List<FaTry> tries = new List<FaTry>();
-			void Add(FaTry t)
+			// TCSIM_FA_DEPTH=n (user 2026-11-17 10:2x: "01롯데처럼 두 칸 이상의 연쇄를 6가지 덱이 전부 적용해서 다시 재봅시다"): chains of up to n
+			// moves — the man the FA displaces moves on, the man there moves on too, … and the last one leaves. Keys "<fa>@SP5>RP2>RP4"
+			// (SP5's man to RP2, RP2's to RP4, RP4's leaves), "<fa>@SS>3B>DH". 1 (the default) is the 11-16 set exactly.
+			int depth = int.TryParse(Environment.GetEnvironmentVariable("TCSIM_FA_DEPTH"), out int dp) && dp > 1 ? dp : 1;
+			string SpotOfSlot(int slot) => slot < FirstPitcher ? SpotNames[slot] : PlanRoles[slot - FirstPitcher];
+			// Every try of the FA cards on deck d (development z): the 11-16 set, then (depth > 1) the longer chains. skip: an FA
+			// already in d (the second FA's tries, TCSIM_FA_THEN).
+			List<FaTry> TriesOn(Deck d, DevDeck z, int deep, int skip)
 			{
-				if (!Twice(t.Fa, t.Leaver)) tries.Add(t);
-			}
-			foreach (Cand fa in fas)
-			{
-				if (fa.Info.IsBatter)
+				List<FaTry> list = new List<FaTry>();
+				bool Twice(Cand fa, int leaving) => Enumerable.Range(0, Slots).Any(s => s != leaving && d.At[s] != null
+					&& d.At[s].Info.IsBatter == fa.Info.IsBatter && d.At[s].Info.Sidx == fa.Info.Sidx);
+				void Add(FaTry t)
 				{
-					for (int s = 0; s < 9; s++)
+					if (!Twice(t.Fa, t.Leaver)) list.Add(t);
+				}
+				// From the man at `cur` (moving), one more step to t; the man at t leaves (emitted when the chain has 2+ moves)
+				// or moves on while steps are left.
+				void Deeper(Cand fa, int at, string key, List<(int, int)> moves, int cur, HashSet<int> used, int left)
+				{
+					Cand m = d.At[cur];
+					bool batter = m.Info.IsBatter;
+					int lo = batter ? 0 : FirstPitcher, hi = batter ? 9 : FirstPitcher + 11;
+					for (int t = lo; t < hi; t++)
 					{
-						if (!Fits(fa, s) || own.At[s] == null) continue;
-						string at = $"{fa.Info.Idx}@{SpotNames[s]}";
-						Add(new FaTry { Key = at, Fa = fa, At = s, Leaver = s });
-						// The man at s stays (to DH); only the DH leaves.
-						if (s < 8 && own.At[8] != null) Add(new FaTry { Key = at + "+DH", Fa = fa, At = s, Moves = new[] { (s, 8) }, Leaver = 8 });
-						if (!chain) continue;
-						// The man at s to another fielding spot t (his card plays it), the man there leaves or goes to DH.
-						for (int t = 0; t < 8; t++)
+						if (used.Contains(t) || d.At[t] == null) continue;
+						if (batter ? !(t == 8 || Fits(m, t)) : MovedPti(m, z.Dev[cur].PositionTrainingInfo, t) == null) continue;
+						List<(int, int)> next = new List<(int, int)>(moves) { (cur, t) };
+						string k = $"{key}>{SpotOfSlot(t)}";
+						if (next.Count >= 2) Add(new FaTry { Key = k, Fa = fa, At = at, Moves = next.ToArray(), Leaver = t, Chain = true });
+						if (left > 1) Deeper(fa, at, k, next, t, new HashSet<int>(used) { t }, left - 1);
+					}
+				}
+				foreach (Cand fa in fas)
+				{
+					if (fa.Info.Idx == skip) continue;
+					if (fa.Info.IsBatter)
+					{
+						for (int s = 0; s < 9; s++)
 						{
-							if (t == s || own.At[t] == null || !Fits(own.At[s], t)) continue;
-							Add(new FaTry { Key = $"{at}>{SpotNames[t]}", Fa = fa, At = s, Moves = new[] { (s, t) }, Leaver = t, Chain = true });
-							if (s < 8 && own.At[8] != null) Add(new FaTry { Key = $"{at}>{SpotNames[t]}+DH", Fa = fa, At = s, Moves = new[] { (s, t), (t, 8) }, Leaver = 8, Chain = true });
+							if (!Fits(fa, s) || d.At[s] == null) continue;
+							string at = $"{fa.Info.Idx}@{SpotNames[s]}";
+							Add(new FaTry { Key = at, Fa = fa, At = s, Leaver = s });
+							// The man at s stays (to DH); only the DH leaves.
+							if (s < 8 && d.At[8] != null) Add(new FaTry { Key = at + "+DH", Fa = fa, At = s, Moves = new[] { (s, 8) }, Leaver = 8 });
+							if (!chain) continue;
+							// The man at s to another fielding spot t (his card plays it), the man there leaves or goes to DH.
+							for (int t = 0; t < 8; t++)
+							{
+								if (t == s || d.At[t] == null || !Fits(d.At[s], t)) continue;
+								Add(new FaTry { Key = $"{at}>{SpotNames[t]}", Fa = fa, At = s, Moves = new[] { (s, t) }, Leaver = t, Chain = true });
+								if (s < 8 && d.At[8] != null) Add(new FaTry { Key = $"{at}>{SpotNames[t]}+DH", Fa = fa, At = s, Moves = new[] { (s, t), (t, 8) }, Leaver = 8, Chain = true });
+							}
+							if (deep > 1) Deeper(fa, s, at, new List<(int, int)>(), s, new HashSet<int> { s }, deep);
+						}
+					}
+					else
+					{
+						bool starter = fa.Info.MainPosition == CardPos.SP;
+						for (int r = 0; r < 11; r++)
+						{
+							int slot = FirstPitcher + r;
+							if (d.At[slot] == null) continue;
+							bool ownRole = starter ? r < 5 : r >= 5;
+							if (!ownRole && !chain) continue;
+							string at = $"{fa.Info.Idx}@{PlanRoles[r]}";
+							Add(new FaTry { Key = at, Fa = fa, At = slot, Leaver = slot, Chain = !ownRole });
+							if (!chain) continue;
+							// The man at r to another pitcher spot he may play, the man there leaves.
+							for (int q = 0; q < 11; q++)
+							{
+								int to = FirstPitcher + q;
+								if (q == r || d.At[to] == null || MovedPti(d.At[slot], z.Dev[slot].PositionTrainingInfo, to) == null) continue;
+								Add(new FaTry { Key = $"{at}>{PlanRoles[q]}", Fa = fa, At = slot, Moves = new[] { (slot, to) }, Leaver = to, Chain = true });
+							}
+							if (deep > 1) Deeper(fa, slot, at, new List<(int, int)>(), slot, new HashSet<int> { slot }, deep);
 						}
 					}
 				}
-				else
-				{
-					bool starter = fa.Info.MainPosition == CardPos.SP;
-					for (int r = 0; r < 11; r++)
-					{
-						int slot = FirstPitcher + r;
-						if (own.At[slot] == null) continue;
-						bool ownRole = starter ? r < 5 : r >= 5;
-						if (!ownRole && !chain) continue;
-						string at = $"{fa.Info.Idx}@{PlanRoles[r]}";
-						Add(new FaTry { Key = at, Fa = fa, At = slot, Leaver = slot, Chain = !ownRole });
-						if (!chain) continue;
-						// The man at r to another pitcher spot he may play, the man there leaves.
-						for (int q = 0; q < 11; q++)
-						{
-							int to = FirstPitcher + q;
-							if (q == r || own.At[to] == null || MovedPti(own.At[slot], y.Dev[slot].PositionTrainingInfo, to) == null) continue;
-							Add(new FaTry { Key = $"{at}>{PlanRoles[q]}", Fa = fa, At = slot, Moves = new[] { (slot, to) }, Leaver = to, Chain = true });
-						}
-					}
-				}
+				return list;
 			}
+			List<FaTry> tries = TriesOn(own, y, depth, 0);
 			if (only != null) tries = tries.Where(t => only.Contains(t.Key)).ToList();
 			ConcurrentDictionary<(int idx, bool catcher), TeamCard> devOf = new ConcurrentDictionary<(int, bool), TeamCard>();
 			string SpotOf(int slot) => slot < FirstPitcher ? SpotNames[slot] : PlanRoles[slot - FirstPitcher];
-			(Deck v, DevDeck z, string what) Variant(FaTry t)
+			(Deck v, DevDeck z, string what) Variant(FaTry t) => VariantOn(t, own, y, $"{label}#FA {t.Key}");
+			// (11-17, FA 2명) The try on any deck — the deck as it is, or one with another FA in already (TCSIM_FA_PAIRS).
+			(Deck v, DevDeck z, string what) VariantOn(FaTry t, Deck own, DevDeck y, string vLabel)
 			{
 				Cand fa = t.Fa;
-				Deck v = new Deck { Label = $"{label}#FA {t.Key}", At = (Cand[])own.At.Clone(), Value = own.Value };
+				Deck v = new Deck { Label = vLabel, At = (Cand[])own.At.Clone(), Value = own.Value };
 				DevDeck z = new DevDeck { D = v, Traits = y.Traits, Build = y.Build, Order = (int[])y.Order.Clone(), Tactics = y.Tactics };
 				for (int s = 0; s < Slots; s++) z.Dev[s] = y.Dev[s];
 				int at = t.At;
@@ -181,6 +219,7 @@ namespace Ma9MServer
 					// A pitcher moved: his card's development goes with him, his 포지션 변경 as he plays the new spot.
 					TeamCard had = y.Dev[from];
 					byte pti = MovedPti(m, had.PositionTrainingInfo, to) ?? 0;
+					if (t.Great && pti % 10 == 2) pti--;   // 성공 → 대성공 (code role*10 + 1)
 					TeamCard moved = new TeamCard { Idx = had.Idx, PositionTrainingInfo = pti };
 					for (int k = 0; k < 6; k++)
 					{
@@ -191,7 +230,7 @@ namespace Ma9MServer
 						moved.Coach[k] = had.Coach[k];
 					}
 					z.Dev[to] = moved;
-					string note = pti == had.PositionTrainingInfo ? string.Empty : pti == 0 ? "(포지션 변경 안 함)" : $"(포지션 변경 → {PlanRoleNames[pti / 10 + 11]})";
+					string note = pti == had.PositionTrainingInfo ? string.Empty : pti == 0 ? "(포지션 변경 안 함)" : $"(포지션 변경 → {PlanRoleNames[pti / 10 + 11]}{(pti % 10 == 1 ? " 대성공" : string.Empty)})";
 					parts.Add($"{SpotOf(from)} {m.Info.Name}→{SpotOf(to)}{note}");
 				}
 				parts.Add($"{SpotOf(t.Leaver)} {own.At[t.Leaver].Info.Name}{own.At[t.Leaver].Info.Ball} 빠짐");
@@ -224,12 +263,120 @@ namespace Ma9MServer
 				v.Balls = v.At.Where(c => c != null).Sum(c => c.Info.Ball);
 				return (v, z, what);
 			}
+			// TCSIM_FA_CAP="<deck>=<cap>;…" (11-17): variants over the deck's ball cap are left out before the screen.
+			Dictionary<string, int> caps = (Environment.GetEnvironmentVariable("TCSIM_FA_CAP") ?? string.Empty).Split(';', StringSplitOptions.RemoveEmptyEntries)
+				.Select(s => s.Split('=', 2)).Where(kv => kv.Length == 2 && int.TryParse(kv[1], out _)).ToDictionary(kv => kv[0].Trim(), kv => int.Parse(kv[1]));
+			int cap = caps.TryGetValue(label, out int capOf) ? capOf : int.MaxValue;
+			string FaName(Cand c) => $"{c.Info.Year % 100:00} {c.Info.Name} {c.Info.Ball}볼 ({TeamColors.TeamName(c.Info.HomeTeam, c.Info.Year)})";
+			// A key ending "!" (11-17, user 09:3x on 01롯데: "박석진 선발 포지션 대성공"): that try with its moved man's change a 대성공.
+			FaTry PickFrom(Dictionary<string, FaTry> byKey, string k)
+			{
+				bool great = k.EndsWith("!");
+				if (!byKey.TryGetValue(great ? k[..^1] : k, out FaTry t)) return null;
+				return great ? new FaTry { Key = k, Fa = t.Fa, At = t.At, Moves = t.Moves, Leaver = t.Leaver, Chain = t.Chain, Great = true } : t;
+			}
+			bool PlayerTwice(Deck d) => d.At.Where(c => c != null).GroupBy(c => (c.Info.IsBatter, c.Info.Sidx)).Any(g => g.Count() > 1);
+			// TCSIM_FA_THEN="<deck>=<keyA>|<keyA>…;…" (user 11-17 10:2x, two FAs with chains of two moves and more): for each first FA as its
+			// key has it (from the single run's games), every try of a second FA on the deck with the first one in — chains up to
+			// TCSIM_FA_THEN_DEPTH (default TCSIM_FA_DEPTH) — under the cap, valued by TeamValue; the best TCSIM_FA_THEN_KEEP (default 10,
+			// two variants a card at most) play, and the TCSIM_FA_THEN_ALSO="<deck>=<keyB>,…;…" keys whenever valid there.
+			Dictionary<string, string> Picks(string env) => (Environment.GetEnvironmentVariable(env) ?? string.Empty).Split(';', StringSplitOptions.RemoveEmptyEntries)
+				.Select(s => s.Split('=', 2)).Where(kv => kv.Length == 2).ToDictionary(kv => kv[0].Trim(), kv => kv[1]);
+			if (Picks("TCSIM_FA_THEN").TryGetValue(label, out string thenList))
+			{
+				int keepB = int.TryParse(Environment.GetEnvironmentVariable("TCSIM_FA_THEN_KEEP"), out int kb) && kb > 0 ? kb : 10;
+				int deepB = int.TryParse(Environment.GetEnvironmentVariable("TCSIM_FA_THEN_DEPTH"), out int dB) && dB >= 1 ? dB : depth;
+				HashSet<string> also = Picks("TCSIM_FA_THEN_ALSO").TryGetValue(label, out string al)
+					? al.Split(',').Select(k => k.Trim()).Where(k => k.Length > 0).ToHashSet() : new HashSet<string>();
+				Dictionary<string, FaTry> byKeyA = tries.GroupBy(t => t.Key).ToDictionary(g => g.Key, g => g.First());
+				foreach (string ka in thenList.Split('|').Select(s => s.Trim()).Where(s => s.Length > 0))
+				{
+					FaTry ta = PickFrom(byKeyA, ka);
+					if (ta == null)
+					{
+						ServerLog.Warn($"tcsim entry: {label} FA 2명 먼저 {ka}: 경우가 없음, 뺌");
+						continue;
+					}
+					(Deck va, DevDeck za, string wa) = VariantOn(ta, own, y, $"{label}#FA {ka}");
+					List<FaTry> triesB = TriesOn(va, za, deepB, ta.Fa.Info.Idx);
+					ConcurrentBag<(FaTry t, double gain)> valuedB = new ConcurrentBag<(FaTry, double)>();
+					Parallel.ForEach(triesB, tb =>
+					{
+						(Deck v2, DevDeck z2, _) = VariantOn(tb, va, za, "screen");
+						if (v2.Balls > cap || PlayerTwice(v2)) return;
+						valuedB.Add((tb, FaValue(z2, refs) - baseValue));
+					});
+					List<(FaTry t, double gain)> ranked = valuedB.OrderByDescending(x => x.gain).ThenBy(x => x.t.Key, StringComparer.Ordinal).ToList();
+					List<(FaTry t, double gain)> chosenB = new List<(FaTry, double)>();
+					Dictionary<int, int> perCard = new Dictionary<int, int>();
+					foreach ((FaTry t, double gain) x in ranked)
+					{
+						if (chosenB.Count >= keepB) break;
+						perCard.TryGetValue(x.t.Fa.Info.Idx, out int n);
+						if (n >= 2) continue;
+						perCard[x.t.Fa.Info.Idx] = n + 1;
+						chosenB.Add(x);
+					}
+					foreach ((FaTry t, double gain) x in ranked)
+					{
+						if (also.Contains(x.t.Key) && !chosenB.Exists(p => p.t.Key == x.t.Key)) chosenB.Add(x);
+					}
+					ServerLog.Info($"tcsim entry: {label} FA 2명 먼저 {ka}: 둘째 경우 {triesB.Count}개, 상한({(cap == int.MaxValue ? "-" : cap.ToString())}) 안 {valuedB.Count}개 → {chosenB.Count}개 경기 | 선별 "
+						+ string.Join(", ", ranked.Take(15).Select((x, i) => $"{i + 1}.{x.t.Fa.Info.Name} {x.gain:+0.000;-0.000} {x.t.Key.Substring(x.t.Key.IndexOf('@') + 1)}")));
+					foreach ((FaTry t, double gain) x in chosenB)
+					{
+						(Deck v2, DevDeck z2, string wb) = VariantOn(x.t, va, za, $"{label}#FA {ka}&{x.t.Key}");
+						string dev = $"{FaDevText(z2.Dev[ta.At], ta.Fa.Info.IsBatter)} // {FaDevText(z2.Dev[x.t.At], x.t.Fa.Info.IsBatter)}";
+						runs.Add((v2.Label, v2, z2, $"FA2 {FaName(ta.Fa)} → {wa} + {FaName(x.t.Fa)} → {wb}{(ta.Chain || x.t.Chain ? " [연쇄]" : string.Empty)} 육성 {dev}"));
+					}
+				}
+				return runs;
+			}
+			// TCSIM_FA_PAIRS="<deck>=<keyA>&<keyB>,…;…" (user 2026-11-17 07:3x: "1군에도 FA선수를 2명 쓸 수 있다는 얘기야. 그래서 2명을 넣는다는
+			// 계산 하에 승률을 다시 계산해줬으면 하는 것임. … FA 투수는 포지션 변경이 안 되니 그걸 고려해서"): two FA cards at once, each as
+			// its single try had it (key as above, chains included; an FA pitcher plays his spot with no 포지션 변경, in or out of his role),
+			// on spots apart. The pairs come from tools\scripts\yuksung\fa_pairs.py (the single run's games, the deck's cap); only they play.
+			Dictionary<string, string> pairPicks = (Environment.GetEnvironmentVariable("TCSIM_FA_PAIRS") ?? string.Empty).Split(';', StringSplitOptions.RemoveEmptyEntries)
+				.Select(s => s.Split('=', 2)).Where(kv => kv.Length == 2).ToDictionary(kv => kv[0].Trim(), kv => kv[1]);
+			if (pairPicks.TryGetValue(label, out string pairList))
+			{
+				Dictionary<string, FaTry> byKey = tries.GroupBy(t => t.Key).ToDictionary(g => g.Key, g => g.First());
+				HashSet<int> Touched(FaTry t) => new[] { t.At, t.Leaver }.Concat(t.Moves.SelectMany(m => new[] { m.from, m.to })).ToHashSet();
+				int skipped = 0;
+				foreach (string pk in pairList.Split(',').Select(s => s.Trim()).Where(s => s.Length > 0))
+				{
+					string[] ab = pk.Split('&');
+					FaTry ta = ab.Length == 2 ? PickFrom(byKey, ab[0]) : null, tb = ab.Length == 2 ? PickFrom(byKey, ab[1]) : null;
+					if (ta == null || tb == null || ta.Fa.Info.Idx == tb.Fa.Info.Idx || Touched(ta).Overlaps(Touched(tb)))
+					{
+						ServerLog.Warn($"tcsim entry: {label} FA 2명 {pk}: 경우가 없거나 자리가 겹침, 뺌");
+						skipped++;
+						continue;
+					}
+					string vLabel = $"{label}#FA {pk}";
+					(Deck va, DevDeck za, string wa) = VariantOn(ta, own, y, vLabel);
+					(Deck vb, DevDeck zb, string wb) = VariantOn(tb, va, za, vLabel);
+					if (PlayerTwice(vb))
+					{
+						ServerLog.Warn($"tcsim entry: {label} FA 2명 {pk}: 같은 선수 두 장, 뺌");
+						skipped++;
+						continue;
+					}
+					string dev = $"{FaDevText(zb.Dev[ta.At], ta.Fa.Info.IsBatter)} // {FaDevText(zb.Dev[tb.At], tb.Fa.Info.IsBatter)}";
+					runs.Add((vb.Label, vb, zb, $"FA2 {FaName(ta.Fa)} → {wa} + {FaName(tb.Fa)} → {wb}{(ta.Chain || tb.Chain ? " [연쇄]" : string.Empty)} 육성 {dev}"));
+				}
+				ServerLog.Info($"tcsim entry: {label} FA 2명: 짝 {runs.Count}개 경기{(skipped > 0 ? $", {skipped}개 뺌" : string.Empty)}");
+				return runs;
+			}
 			ConcurrentBag<(FaTry t, double gain)> valued = new ConcurrentBag<(FaTry, double)>();
 			Parallel.ForEach(tries, t =>
 			{
-				(_, DevDeck z, _) = Variant(t);
+				(Deck v, DevDeck z, _) = Variant(t);
+				if (v.Balls > cap) return;
 				valued.Add((t, FaValue(z, refs) - baseValue));
 			});
+			// TCSIM_FA_PERFA=n (11-17, chains): an FA card that plays plays its best n variants (by the screen), not only the best.
+			int perFa = int.TryParse(Environment.GetEnvironmentVariable("TCSIM_FA_PERFA"), out int pf) && pf > 1 ? pf : 1;
 			List<(FaTry t, double gain)> chosen;
 			if (only != null)
 			{
@@ -240,15 +387,32 @@ namespace Ma9MServer
 				// Each FA card's best variant; the best `batters` and `pitchers` play. With chains, an FA whose best variant is a
 				// chain also plays his best variant as the 11-15 run had it (so the book shows what the chain adds, by games).
 				List<(FaTry t, double gain)> best = valued.GroupBy(v => v.t.Fa.Info.Idx).Select(g => g.OrderByDescending(v => v.gain).ThenBy(v => v.t.Key, StringComparer.Ordinal).First()).ToList();
+				// The whole screen in the log (11-17: '24 류현진 had been screened out of 24롯데's run unseen, and the user expected him
+				// first): every FA card's best variant and its screen value, batters and pitchers.
+				foreach (bool bat in new[] { true, false })
+				{
+					ServerLog.Info($"tcsim entry: {label} FA 선별 순위 {(bat ? "타자" : "투수")} " + string.Join(", ", best.Where(f => f.t.Fa.Info.IsBatter == bat)
+						.OrderByDescending(f => f.gain).ThenBy(f => f.t.Key, StringComparer.Ordinal)
+						.Select((f, i) => $"{i + 1}.{f.t.Fa.Info.Name}{(f.t.Fa.Info.Foreigner ? "(외)" : string.Empty)} {f.gain:+0.000;-0.000} {f.t.Key.Substring(f.t.Key.IndexOf('@') + 1)}")));
+				}
 				best = best.Where(f => f.t.Fa.Info.IsBatter).OrderByDescending(f => f.gain).Take(keepN[0])
 					.Concat(best.Where(f => !f.t.Fa.Info.IsBatter).OrderByDescending(f => f.gain).Take(keepN.Length > 1 ? keepN[1] : keepN[0])).ToList();
 				chosen = new List<(FaTry, double)>(best);
+				if (perFa > 1)
+				{
+					foreach ((FaTry t, double gain) b in best.ToList())
+					{
+						chosen.AddRange(valued.Where(v => v.t.Fa.Info.Idx == b.t.Fa.Info.Idx && v.t.Key != b.t.Key)
+							.OrderByDescending(v => v.gain).ThenBy(v => v.t.Key, StringComparer.Ordinal).Take(perFa - 1));
+					}
+				}
 				foreach ((FaTry t, double gain) in best.Where(b => b.t.Chain))
 				{
 					var plain = valued.Where(v => !v.t.Chain && v.t.Fa.Info.Idx == t.Fa.Info.Idx).OrderByDescending(v => v.gain).ThenBy(v => v.t.Key, StringComparer.Ordinal).FirstOrDefault();
 					if (plain.t != null) chosen.Add(plain);
 				}
 			}
+			chosen = chosen.GroupBy(c => c.t.Key).Select(g => g.First()).ToList();   // a key once (PERFA and the plain variant may meet)
 			foreach ((FaTry t, double gain) in chosen.OrderByDescending(c => c.gain).ThenBy(c => c.t.Key, StringComparer.Ordinal))
 			{
 				Cand fa = t.Fa;
@@ -256,7 +420,7 @@ namespace Ma9MServer
 				string line = $"FA {fa.Info.Year % 100:00} {fa.Info.Name} {fa.Info.Ball}볼 ({TeamColors.TeamName(fa.Info.HomeTeam, fa.Info.Year)}) → {what} [선별 {gain:+0.000;-0.000}점]{(t.Chain ? " [연쇄]" : string.Empty)} 육성 {FaDevText(z.Dev[t.At], fa.Info.IsBatter)}";
 				runs.Add((v.Label, v, z, line));
 			}
-			ServerLog.Info($"tcsim entry: {label} FA {fas.Count}장{(onlyYear != 0 ? $"('{onlyYear % 100:00}만)" : string.Empty)}, 경우 {tries.Count}개 선별(TeamValue, 기준 {refs.Count}덱) → {runs.Count}개 경기" + (only != null ? " (지정)" : $" (타자 {keepN[0]}·투수 {(keepN.Length > 1 ? keepN[1] : keepN[0])}까지)"));
+			ServerLog.Info($"tcsim entry: {label} FA {fas.Count}장{(onlyYear != 0 ? $"('{onlyYear % 100:00}만)" : string.Empty)}{(domestic ? "(국내만)" : string.Empty)}, 경우 {tries.Count}개 선별(TeamValue, 기준 {refs.Count}덱) → {runs.Count}개 경기" + (only != null ? " (지정)" : $" (타자 {keepN[0]}·투수 {(keepN.Length > 1 ? keepN[1] : keepN[0])}까지)"));
 			return runs;
 		}
 	}

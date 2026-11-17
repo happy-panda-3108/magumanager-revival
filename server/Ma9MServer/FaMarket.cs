@@ -41,11 +41,22 @@ namespace Ma9MServer
 		// The 전력강화 > FA 시장 list of a team (AlbumHandlers.MarketPage). User 2026-11-17 00:0x (asked at 11-16 18:3x: all at once, a list
 		// drawn each season, or a drawn list with the team's own share kept): "시즌마다 바뀌는 명단에 우리 1군 팀컬러에 맞는 FA 3명, 전체 무작위
 		// 7명 해서 총 10명으로 합시다". Drawn at the team's first look in a season of the common calendar (LeagueCalendar.CycleStart) and kept
-		// for that season (table fa_market): TeamColorPicks FA cards that join an entry the 1군 has registered (else one it is gathering,
-		// TeamColors.MarketEntries) — first those whose own card joins it too (the same club and season: "LG 올스타" → LG players), then
-		// the jokers of the rule —, then RandomPicks of the rest at random. FA cards the team holds are left out; only the list signs.
+		// for that season (table fa_market): TeamColorPicks FA cards at random among those that join an entry the 1군 has registered (else
+		// one it is gathering, TeamColors.MarketEntries) — for a club all-star entry, which every FA joins, only the club's own players —,
+		// then RandomPicks of the rest at random. Left out: FA cards the team holds, and players already in its 1군 (one card of a player
+		// there, RosterHandlers.FaProblem). Only the list signs.
+		// Rule 2 (11-17 01:3x, user "응 재시작하자"): rule 1 (00:44) took the players of the entry's own club and season first, and for a
+		// single-year team those are mostly in the 1군 already (7 of the first 21 picks on the live server); its lists are drawn again.
 		// (The user's idea for a real game, 11-17: every FA at random and the users bidding against each other — docs\나중에_쓸_아이디어.md.)
-		public const int TeamColorPicks = 3, RandomPicks = 7;
+		// Rule 3 (user 11-17 02:0x: "역시 외국인 선수는 안 넣는게 맞는 것 같음. 국내선수들로만 나오게 해주고, 시존 3/7을 4/8로 변경합시다"):
+		// domestic players only (CardInfo.Foreigner), 4 of the team colour and 8 at random, 12 in all; rule 1-2 lists are drawn again.
+		public const int TeamColorPicks = 4, RandomPicks = 8;
+
+		// FA cards a team may hold (user 11-17 07:4x: "영입은 4명까지 가능하고 1군에 사용가능한 인원을 2명으로 제한합시다. 영입에는 자유롭게
+		// 하면서 사용인원을 유동적으로 변경할 수 있는걸로"): four held, two of them in the 1군 at a time (CardInfo.MaxFaInFirstTeam).
+		public const int MaxHeld = 4;
+
+		private const int Rule = 4;
 
 		private static string s_cs;
 
@@ -58,11 +69,26 @@ namespace Ma9MServer
 		{
 			s_cs = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
 			using SqliteConnection c = Open();
-			using SqliteCommand cmd = c.CreateCommand();
-			cmd.CommandText = @"CREATE TABLE IF NOT EXISTS fa_market (
-				user_code INTEGER NOT NULL, cycle_start TEXT NOT NULL, cards TEXT NOT NULL, colour_picks INTEGER NOT NULL,
-				entries TEXT NOT NULL, made TEXT NOT NULL, PRIMARY KEY (user_code, cycle_start))";
-			cmd.ExecuteNonQuery();
+			using (SqliteCommand cmd = c.CreateCommand())
+			{
+				cmd.CommandText = @"CREATE TABLE IF NOT EXISTS fa_market (
+					user_code INTEGER NOT NULL, cycle_start TEXT NOT NULL, cards TEXT NOT NULL, colour_picks INTEGER NOT NULL,
+					entries TEXT NOT NULL, made TEXT NOT NULL, PRIMARY KEY (user_code, cycle_start))";
+				cmd.ExecuteNonQuery();
+			}
+			// The rule a list was drawn by (rows before 11-17 01:3x are rule 1 and are drawn again).
+			bool hasRule;
+			using (SqliteCommand cmd = c.CreateCommand())
+			{
+				cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('fa_market') WHERE name = 'rule'";
+				hasRule = Convert.ToInt32(cmd.ExecuteScalar()) > 0;
+			}
+			if (!hasRule)
+			{
+				using SqliteCommand cmd = c.CreateCommand();
+				cmd.CommandText = "ALTER TABLE fa_market ADD COLUMN rule INTEGER NOT NULL DEFAULT 1";
+				cmd.ExecuteNonQuery();
+			}
 		}
 
 		private static SqliteConnection Open()
@@ -92,7 +118,9 @@ namespace Ma9MServer
 				using (SqliteConnection c = Open())
 				using (SqliteCommand cmd = c.CreateCommand())
 				{
-					cmd.CommandText = "INSERT OR IGNORE INTO fa_market (user_code, cycle_start, cards, colour_picks, entries, made) VALUES ($u, $s, $c, $n, $e, $m)";
+					// REPLACE: a list of an older rule is drawn again (Load gave null for it).
+					cmd.CommandText = "INSERT OR REPLACE INTO fa_market (user_code, cycle_start, cards, colour_picks, entries, made, rule) VALUES ($u, $s, $c, $n, $e, $m, $r)";
+					cmd.Parameters.AddWithValue("$r", Rule);
 					cmd.Parameters.AddWithValue("$u", (long)user);
 					cmd.Parameters.AddWithValue("$s", season);
 					cmd.Parameters.AddWithValue("$c", string.Join(",", cards));
@@ -110,7 +138,8 @@ namespace Ma9MServer
 		{
 			using SqliteConnection c = Open();
 			using SqliteCommand cmd = c.CreateCommand();
-			cmd.CommandText = "SELECT cards FROM fa_market WHERE user_code = $u AND cycle_start = $s";
+			cmd.CommandText = "SELECT cards FROM fa_market WHERE user_code = $u AND cycle_start = $s AND rule >= $r";
+			cmd.Parameters.AddWithValue("$r", Rule);
 			cmd.Parameters.AddWithValue("$u", (long)user);
 			cmd.Parameters.AddWithValue("$s", season);
 			object v = cmd.ExecuteScalar();
@@ -125,12 +154,21 @@ namespace Ma9MServer
 		private static (List<int> cards, int colour, int[] entries) Draw(uint user)
 		{
 			HashSet<int> owned = RosterHandlers.Db.GetCards(user).Select(c => c.Idx).ToHashSet();
-			List<CardInfo> free = RosterHandlers.Catalog.All.Where(c => c.IsFA && !owned.Contains(c.Idx)).ToList();
+			// The 1군's players (the same player as RosterHandlers.FaProblem: batter or pitcher and Sidx).
+			Lineup l = RosterHandlers.Db.GetLineup(user);
+			HashSet<(bool, int)> fielded = (l?.Batters ?? Array.Empty<int>()).Concat(l?.Pitchers ?? Array.Empty<int>()).Where(i => i != 0)
+				.Select(i => RosterHandlers.Catalog.Get(i)).Where(c => c != null).Select(c => (c.IsBatter, c.Sidx)).ToHashSet();
+			List<CardInfo> free = RosterHandlers.Catalog.All.Where(c => c.IsFA && !c.Foreigner && !owned.Contains(c.Idx) && !fielded.Contains((c.IsBatter, c.Sidx))).ToList();
 			int[] entries = TeamColors.MarketEntries(user);
-			List<CardInfo> fit = free.Where(c => entries.Any(e => TeamColors.IsMemberOf(e, c))).ToList();
-			List<CardInfo> natural = fit.Where(c => RosterHandlers.Catalog.Get(c.SourceIdx) is CardInfo s && !s.IsFA && entries.Any(e => TeamColors.IsMemberOf(e, s))).ToList();
-			List<CardInfo> picks = Shuffled(natural).Take(TeamColorPicks).ToList();
-			picks.AddRange(Shuffled(fit.Where(c => !picks.Contains(c)).ToList()).Take(TeamColorPicks - picks.Count));
+			// Rule 4 (user 11-17 21:1x, asked whether the share is of the main club or of the others: "01롯데가 메인이면, 01롯데를 강화하기
+			// 위해 01롯데가 아닌 01년도의 랜덤 FA4장을 뽑아. 삼성올스타면 삼성올스타를 강화하기 위해 삼성이 아닌 FA선수 4명이 무작위로
+			// 나오는거고, 10년대 두산이면 10년대 두산을 강화하기 위해 10년도 FA중 두산이 아닌 FA 4장이 랜덤으로 나오는거야"): the share
+			// strengthens the entry with players of other clubs — FA cards that join it (its season rule, TeamColors.IsMemberOf) whose
+			// own club is not the one the entry is named after (TeamColors.IsOwnClubOf). Rules 1-3 took the entry's own club first.
+			// Of the entry's scope too (a batter for a 타자진 entry, a pitcher for a 투수진 one; rules 1-3 let a batter count for a 투수진).
+			bool Fits(CardInfo c) => entries.Any(e => TeamColors.IsMemberOf(e, c) && TeamColors.InScopeOf(e, c)
+				&& !(RosterHandlers.Catalog.Get(c.SourceIdx) is CardInfo s && !s.IsFA && TeamColors.IsOwnClubOf(e, s)));
+			List<CardInfo> picks = Shuffled(free.Where(Fits).ToList()).Take(TeamColorPicks).ToList();
 			int colour = picks.Count;
 			picks.AddRange(Shuffled(free.Where(c => !picks.Contains(c)).ToList()).Take(TeamColorPicks + RandomPicks - picks.Count));
 			return (picks.Select(c => c.Idx).ToList(), colour, entries);
@@ -181,18 +219,24 @@ namespace Ma9MServer
 				$"계약금 {price:N0} MP · 계약 {ContractHandlers.FaStartDays}일",
 				$"가진 MP {mp:N0} → {mp - price:N0}",
 				BallLine(user, card),
-				// Renewals 1-3 and the fixed price after (ContractHandlers.FaCost; user 18:3x·18:46).
-				$"연장 {ContractHandlers.FaExtendDays}일씩: {Man(ContractHandlers.FaCost(0, price, 0))} · {Man(ContractHandlers.FaCost(1, price, 0))} · {Man(ContractHandlers.FaCost(2, price, 0))} MP,",
-				$"4번째부터 {Man(ContractHandlers.FaCost(ContractHandlers.FaRisingRenewals, price, 0))} MP · 연장 보너스 {ContractHandlers.FaBonusPerRenewal}점씩(처음 {ContractHandlers.BonusRenewals}번)",
-				// AI testers 11-16 (all six): the first renewal right after signing showed 1억 1,220만 (14 days left, the early surcharge).
-				$"남은 날이 {ContractHandlers.SurchargeAfter}일 이하일 때 연장해야 웃돈이 없습니다.",
+				// 11-17 21:1x (user: "(웃돈) << 이 단어 안 보이게 해줬으면 함. 너무 짜침. 불필요한 정보나 too much information은 도움말, 안내
+				// 멘트, 등등에 안 나왔으면 함"): the renewal prices 1-3 and after, and the early-renewal line, are gone; a renewal is the
+				// player's negotiation now (FaNegotiation), its price his.
+				$"재계약: {ContractHandlers.SurchargeAfter}일 이하 남으면 선수와 협상, 보너스 {ContractHandlers.FaBonusPerRenewal}점씩",
 				// 두산 42, 쌍방울 54, kt 69: the joker rule was nowhere in the window (TeamColors.IsMember). Since 11-17 the 1군's entry
 				// it joins now, when it does (the market's 팀컬러 share).
 				TeamColorLine(user, card),
 				FirstTeamLine(user, card)
 			};
 			ServerLog.Info($"[{session.Id}] FA 영입 asked: {card.Year} {card.Name} ({card.Idx}) {price:N0} MP, has {mp:N0}; {lines[3]}");
-			AdviceHandlers.Offer(session, v2, Title, string.Join("\n", lines.Where(l => !string.IsNullOrEmpty(l))), "영입", () => Sign(user, card.Idx));
+			AdviceHandlers.Offer(session, v2, Title, string.Join("\n", lines.Where(l => !string.IsNullOrEmpty(l))), "영입", () =>
+			{
+				string done = Sign(user, card.Idx);
+				// The top bar's MP (11-17 12:2x: it kept the old MP until the next lobby, and the next renewal's "계약금" line, counted from
+				// it, came out too big).
+				TopBar.Send(session);
+				return done;
+			});
 		}
 
 		// The 1군 ball line (AI testers LG 92, kt 68, 11-16: signed 니퍼트 / 고영표 for 3,000만 and found 143/140 and 148/140 in the
@@ -228,11 +272,19 @@ namespace Ma9MServer
 			Lineup l = RosterHandlers.Db.GetLineup(user);
 			List<CardInfo> in1 = l == null ? new List<CardInfo>()
 				: l.Batters.Concat(l.Pitchers).Where(i => i != 0).Select(i => RosterHandlers.Catalog.Get(i)).Where(c => c != null).ToList();
-			CardInfo otherFa = in1.FirstOrDefault(c => c.IsFA);
+			List<CardInfo> fas = in1.Where(c => c.IsFA).ToList();
 			CardInfo source = RosterHandlers.Catalog.Get(fa.SourceIdx);
 			bool ownsSource = source != null && !source.IsFA && RosterHandlers.Db.GetCards(user).Any(c => c.Idx == source.Idx);
-			// The app's window wrapped the longer "지금 1군의 FA ○○ 선수와 바꿔야 합니다" line (11-16 screen check), so the name goes in brackets.
-			string line = otherFa != null ? $"1군 FA는 한 명뿐입니다(지금 1군: {otherFa.Name})." : "1군에는 FA를 한 명만 넣을 수 있습니다.";
+			// The app's window wrapped the longer "지금 1군의 FA ○○ 선수와 바꿔야 합니다" line (11-16 screen check), so the names go in brackets.
+			// Two since 11-17 07:3x (CardInfo.MaxFaInFirstTeam).
+			string line = fas.Count >= CardInfo.MaxFaInFirstTeam
+				? $"1군 FA는 {CardInfo.MaxFaInFirstTeam}명까지입니다(지금 1군: {string.Join("·", fas.Select(c => c.Name))})."
+				: fas.Count > 0 ? $"1군에 FA를 {CardInfo.MaxFaInFirstTeam - fas.Count}명 더 넣을 수 있습니다(지금 1군: {string.Join("·", fas.Select(c => c.Name))})."
+				: $"1군에는 FA를 {CardInfo.MaxFaInFirstTeam}명까지 넣을 수 있습니다.";
+			if (PopupText.Px(line) > PopupText.Width)
+			{
+				line = fas.Count >= CardInfo.MaxFaInFirstTeam ? $"1군 FA는 {CardInfo.MaxFaInFirstTeam}명까지입니다(지금 {fas.Count}명)." : $"1군에 FA를 {CardInfo.MaxFaInFirstTeam - fas.Count}명 더 넣을 수 있습니다.";
+			}
 			return ownsSource ? line + "\n가진 원래 카드와는 함께 1군에 넣을 수 없습니다." : line;
 		}
 
@@ -244,6 +296,11 @@ namespace Ma9MServer
 			{
 				return "FA 시장에 없는 선수입니다.";
 			}
+			// Rule 3 (11-17): foreign players are not offered (a held one stays).
+			if (card.Foreigner)
+			{
+				return "외국인 선수는 FA 시장에 나오지 않습니다.";
+			}
 			List<TeamCard> cards = RosterHandlers.Db.GetCards(user);
 			if (cards.Any(c => c.Idx == card.Idx))
 			{
@@ -253,6 +310,13 @@ namespace Ma9MServer
 			if (!MarketList(user).Contains(card.Idx))
 			{
 				return "이번 시즌 FA 시장 명단에 없는 선수입니다.\n전력강화 > FA 시장에서 이번 시즌 명단을 보세요.";
+			}
+			// At most MaxHeld FA cards a team (user 11-17 02:0x "팀별 FA영입 가능 선수는 2명으로 합시다.(투, 타 구분 없이 총 2명)"); one let go
+			// (방출) makes room again. Teams holding more from before keep them.
+			List<CardInfo> held = cards.Select(c => RosterHandlers.Catalog.Get(c.Idx)).Where(c => c != null && c.IsFA).ToList();
+			if (held.Count >= MaxHeld)
+			{
+				return $"FA 선수는 {MaxHeld}명까지 영입할 수 있습니다.\n(지금 {held.Count}명: {string.Join("·", held.Take(3).Select(c => c.Name))}{(held.Count > 3 ? " 외" : string.Empty)})";
 			}
 			int cap = RosterHandlers.MaxPossessOf(user);
 			if (cards.Count >= cap)
@@ -268,20 +332,33 @@ namespace Ma9MServer
 		}
 
 		// 영입 (checked again: the MP or the roster may have changed since the question).
-		internal static string Sign(uint user, int idx)
+		internal static string Sign(uint user, int idx) => SignWith(user, idx, -1, ContractHandlers.FaStartDays);
+
+		// A signing at the terms of a negotiation (FaNegotiation, 2026-11-17): its 계약금 (−1 = the list price) and days. The MP check
+		// is against that price (a deal may be under or over the list).
+		internal static string SignWith(uint user, int idx, int price, int days)
 		{
 			CardInfo card = RosterHandlers.Catalog.Get(idx);
-			string why = Problem(user, card, out _);
-			if (why != null)
+			if (card != null && price < 0)
+			{
+				price = Price(card);
+			}
+			string why = Problem(user, card, out int mp);
+			if (why != null && !(why.StartsWith("MP가 부족", StringComparison.Ordinal) && mp >= price))
 			{
 				return "!" + why;
 			}
-			int price = Price(card);
-			RosterHandlers.Db.AddCards(user, new[] { idx }, ContractHandlers.FaStartDays);
-			ContractHandlers.StartFa(user, idx, DateTime.Today);
+			if (mp < price)
+			{
+				return $"!MP가 부족합니다.\n계약금 {price:N0} MP · 가진 MP {mp:N0}";
+			}
+			RosterHandlers.Db.AddCards(user, new[] { idx }, (byte)Math.Clamp(days, 1, byte.MaxValue));
+			ContractHandlers.StartFa(user, idx, DateTime.Today, days);
 			int after = RosterHandlers.Db.AddMp(user, -price, MpLedger.FaSigning);
-			ServerLog.Info($"FA 영입: team {user} signed {card.Year} {card.Name} ({idx}, {card.Ball}볼) for {price:N0} MP, {after:N0} left");
-			return $"{card.Name} 선수를 영입했습니다. (계약 {ContractHandlers.FaStartDays}일)\n로스터에서 1군에 넣을 수 있습니다.\n남은 MP {after:N0}";
+			// Its picture in our club's uniform (FaArt, 2026-11-17).
+			FaArt.Signed(user, idx);
+			ServerLog.Info($"FA 영입: team {user} signed {card.Year} {card.Name} ({idx}, {card.Ball}볼) for {price:N0} MP, {days} days, {after:N0} left");
+			return $"{card.Name} 선수를 영입했습니다. (계약 {days}일)\n로스터에서 1군에 넣을 수 있습니다.\n남은 MP {after:N0}";
 		}
 	}
 }

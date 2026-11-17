@@ -199,6 +199,13 @@ public class Ma9MCardSpread : MonoBehaviour
 				Debug.Log("[Ma9MMission] spread: took back the open window \"" + title + "\" until the cards are turned");
 			}
 		}
+		// (11-17, AI tester autotest7 6회차: 업적 211 "레어 10장" came with 20 packs and ran its 5 s under the face-down cards,
+		// so the tester saw only the MP) The 업적 box on screen and those queued behind it wait the same way.
+		foreach (KeyValuePair<int, Action> box in PopupManager.Ma9MTakeBackMissionBoxes())
+		{
+			s_heldMissions.Add(box);
+			Debug.Log("[Ma9MMission] spread: took back 업적 box " + box.Key + " until the cards are turned");
+		}
 	}
 
 	// sceneGoing: the spread went with its screen (OnDisable), so the windows wait in PopupManager for the next screen.
