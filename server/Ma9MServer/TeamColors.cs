@@ -214,7 +214,9 @@ namespace Ma9MServer
 					group = LineageName(g);
 					break;
 				default:
-					name = $"{LineageName(g / 100)} & {LineageName(g % 100)} 올스타";
+					// The name with each lineage's club of today (2026-11-19, tester_1119a: "두산·OB & 한화·빙그레 올스타 투수진" ran 12 px out of
+					// the app's list row; the app's TeamColorTable says the same); the condition keeps the lineages.
+					name = $"{FranchiseName(Lineage(g / 100))} & {FranchiseName(Lineage(g % 100))} 올스타";
 					group = $"{LineageName(g / 100)} & {LineageName(g % 100)}";
 					break;
 			}

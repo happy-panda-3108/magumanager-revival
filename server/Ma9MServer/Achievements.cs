@@ -475,7 +475,26 @@ namespace Ma9MServer
 				box.mission_index.n = d.Index;
 				session.Send(box);
 			}
-			if (named.Count > 0)
+			if (named.Count > 0 && session.ClientVersion?.Contains(BoxMark) == true)
+			{
+				// 2026-11-18 (user 22:4x 2번, see BundleAt): an app with %ma9m-ach1 shows the 팀컬러 이름별 업적 in the same 도전과제완료 box,
+				// from what comes here (its table may not have the row yet: rows made after it read its tables).
+				foreach (Def d in named)
+				{
+					Ma9MPacket.PKS_SC_POPUP one = new Ma9MPacket.PKS_SC_POPUP();
+					one.Type.n = BoxType;
+					one.Messages.array = new[]
+					{
+						new PLongString { str = d.Index.ToString(CultureInfo.InvariantCulture) },
+						new PLongString { str = d.Name ?? string.Empty },
+						new PLongString { str = d.Detail ?? string.Empty },
+						new PLongString { str = Mp(d.Grade).ToString(CultureInfo.InvariantCulture) },
+						new PLongString { str = d.Grade.ToString() }
+					};
+					session.Send(one);
+				}
+			}
+			else if (named.Count > 0)
 			{
 				// 팀컬러 이름별 업적: one popup (the client's table may not have the rows yet).
 				int namedMp = named.Sum(d => Mp(d.Grade));
@@ -500,7 +519,15 @@ namespace Ma9MServer
 		private static int AchievementOrder(char grade) => "EDCBAS".IndexOf(grade);
 
 		// 업적 at once from which Deliver sends one list popup instead of a 도전과제완료 box each (2026-11-12).
-		public const int BundleAt = 2;
+		// 2026-11-18 (user 22:4x 2번 "난 그리고 업적 깨질 때마다 원작처럼 뜨길 원하는데, 한 번에 팝업으로 묶어서 끝내니까 너무 슴슴하다...이걸
+		// 원복하고 싶은데"): never — every 업적 its own box again, one after another (5 s or a tap each).
+		public const int BundleAt = int.MaxValue;
+
+		// The 팀컬러 이름별 업적 box (POPUP type 40 [index, name, detail, MP, grade], 2026-11-18) for an app that says %ma9m-ach1.
+		// Types in use: 0-2 the original's, 9 시상식, 10 특강 info, 11, 20/21 추천, 30-34 FA·소식.
+		public const byte BoxType = 40;
+
+		public const string BoxMark = "%ma9m-ach1";
 
 		// 팀컬러 이름별 업적 (TeamColors.RecordForAchievements): the applied named entries and their lower grades. Rows
 		// new to every team are made and the table rewritten; the user's new ones wait for Deliver. Then the 팀컬러 n종

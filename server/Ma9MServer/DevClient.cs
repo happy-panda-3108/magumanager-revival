@@ -1063,7 +1063,7 @@ namespace Ma9MServer
 			// The 팀컬러 share is in the server's log ("FA 시장: team … 팀컬러 몫 n, entries …").
 			int size = global::Ma9MServer.FaMarket.TeamColorPicks + global::Ma9MServer.FaMarket.RandomPicks;
 			// A card signed this season stays on the season's list (owned now), so a second run of this test sees it there.
-			Check(list.Count == Math.Min(size, fa.Count - owned.Count + list.Count(owned.Contains)) && list.Distinct().Count() == list.Count && list.All(i => catalog.Get(i)?.IsFA == true && !catalog.Get(i).Foreigner)
+			Check(list.Count == Math.Min(size, fa.Count - owned.Count + list.Count(owned.Contains)) && list.Distinct().Count() == list.Count && list.All(i => catalog.Get(i)?.IsFA == true && !global::Ma9MServer.FaMarket.IsForeign(catalog.Get(i)))
 				&& list.SequenceEqual(again2),
 				$"FA 시장 page 6: {list.Count} cards, the same on the second look {list.SequenceEqual(again2)}: "
 				+ string.Join(" · ", list.Select(i => catalog.Get(i)).Select(c => $"'{c.Year % 100:00} {TeamColors.TeamName(c.HomeTeam, c.Year)} {c.Name} {c.Ball}볼")));
@@ -1081,8 +1081,8 @@ namespace Ma9MServer
 			}
 			CardInfo card = list.Where(i => !owned.Contains(i)).Select(i => catalog.Get(i)).Where(c => c.Ball == 8).OrderByDescending(c => c.Year).FirstOrDefault()
 				?? catalog.Get(list.First(i => !owned.Contains(i)));
-			CardInfo outside = fa.FirstOrDefault(c => !c.Foreigner && !owned.Contains(c.Idx) && !list.Contains(c.Idx));
-			CardInfo foreignFa = fa.FirstOrDefault(c => c.Foreigner && !owned.Contains(c.Idx));
+			CardInfo outside = fa.FirstOrDefault(c => !global::Ma9MServer.FaMarket.IsForeign(c) && !owned.Contains(c.Idx) && !list.Contains(c.Idx));
+			CardInfo foreignFa = fa.FirstOrDefault(c => global::Ma9MServer.FaMarket.IsForeign(c) && !owned.Contains(c.Idx));
 			if (foreignFa != null)
 			{
 				Ma9MPacket.PKS_SC_POPUP no = Ask("ma9m:v2:fa:" + foreignFa.Idx);

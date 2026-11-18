@@ -44,6 +44,36 @@ public class Ma9MTapShield : MonoBehaviour
 		shield.AddComponent<Ma9MTapShield>().m_until = Time.realtimeSinceStartup + Seconds;
 	}
 
+	// Ma9M (engine session, 2026-11-18, AI tester 쌍방울 23 / 남은일 A4): a screen that comes up by itself (the 확인하지 않은
+	// 결과 screen, sent there on the way back to the lobby) is covered the same way for its first moment, so the taps meant
+	// for the lobby's menu don't press its buttons and rows. Taps only meet the shield; the back key still works.
+	public static Ma9MTapShield Cover(UIPanel panel, float seconds)
+	{
+		if (panel == null || panel.transform.parent == null)
+		{
+			return null;
+		}
+		GameObject shield = new GameObject("Ma9MTapShield");
+		shield.layer = panel.gameObject.layer;
+		Transform t = shield.transform;
+		t.parent = panel.transform.parent;
+		t.localRotation = Quaternion.identity;
+		t.localScale = Vector3.one;
+		t.localPosition = new Vector3(0f, 0f, panel.transform.localPosition.z - 5f);
+		BoxCollider box = shield.AddComponent<BoxCollider>();
+		box.isTrigger = true;
+		box.size = new Vector3(4000f, 4000f, 0f);
+		Ma9MTapShield s = shield.AddComponent<Ma9MTapShield>();
+		s.m_until = Time.realtimeSinceStartup + seconds;
+		return s;
+	}
+
+	// Keeps the shield up for at least this long from now.
+	public void HoldAtLeast(float seconds)
+	{
+		m_until = Mathf.Max(m_until, Time.realtimeSinceStartup + seconds);
+	}
+
 	private void Update()
 	{
 		if (Time.realtimeSinceStartup >= m_until)

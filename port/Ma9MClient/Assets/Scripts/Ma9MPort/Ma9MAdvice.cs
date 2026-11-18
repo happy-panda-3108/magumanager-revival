@@ -122,15 +122,12 @@ public static class Ma9MAdvice
 	// 적용 and 취소 goes through the pages and back to the first.
 	private static void Ask(string title, string[] pages, string ok)
 	{
-		int lines = 1;
-		foreach (string page in pages)
-		{
-			lines = Mathf.Max(lines, page.Split('\n').Length);
-		}
-		Ma9MBookPopup p = Ma9MBookPopup.Create(Mathf.Max(0, lines - 4) * 17f);
+		// 2026-11-18 (남은일목록 A7, NC 버그 26 "자동 편성 (팀컬러 유지) 제목이 창 위 테두리에 붙음"): it grew by a guessed 17 per line
+		// with the text at 13, stretching the whole box (its title band too). Now as every popup (CLAUDE.md 11): the body size,
+		// wrapped at the box, grown for the tallest page with the box drawn in three pieces, scrolling past the tallest.
+		Ma9MBookPopup p = Ma9MBookPopup.Create(0f);
 		p.Title.text = title;
-		p.Content.text = pages[0];
-		p.Content.transform.localScale = new Vector3(13f, 13f, 1f);
+		p.FitPages(pages);
 		bool answered = false;
 		p.OnClose = delegate
 		{
@@ -153,7 +150,7 @@ public static class Ma9MAdvice
 			more = p.AddButton("자세히", 0f, p.BottomRow, 0.85f, delegate
 			{
 				shown = (shown + 1) % pages.Length;
-				p.Content.text = pages[shown];
+				p.ShowPage(pages[shown]);
 				if (more != null)
 				{
 					// The page shown now, then where the button goes (2026-11-13, AI testers LG 78·kt 51: "자세히 2/2" named the next
@@ -170,10 +167,11 @@ public static class Ma9MAdvice
 	public static void AskLineup(Action refresh)
 	{
 		// One line more since 2026-11-12 (user 10:4x: 선수보호 cards are fixed, server AutoLineup Locked).
-		Ma9MBookPopup p = Ma9MBookPopup.Create(17f);
+		// 2026-11-18 (A7): the body size and a fitted box as the result window (it was text at 12 in a box grown by a guess).
+		Ma9MBookPopup p = Ma9MBookPopup.Create(0f);
 		p.Title.text = "자동 편성";
 		p.Content.text = "가진 카드로 볼 상한 안에서 가장 강한 1군을 계산합니다.\n팀컬러 유지: 지금 작동하는 팀컬러가 그대로 남는 편성만\n자유롭게: 팀컬러가 바뀌어도 가장 강한 편성\n선수보호를 건 1군 선수는 그 자리 그대로 둡니다.\n(적용 전에 바뀌는 선수를 보여 드립니다)";
-		p.Content.transform.localScale = new Vector3(12f, 12f, 1f);
+		p.FitContent();
 		p.AddButton("팀컬러 유지", -135f, p.BottomRow, 0.85f, delegate
 		{
 			p.Close();

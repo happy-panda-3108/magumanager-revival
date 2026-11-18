@@ -91,25 +91,39 @@ public static class Ma9MRosterPicks
 
 	// The cards that pass every button's picks and the positions left out (the balls and teams out are the lists' own
 	// SortMemory.Excluded, as before).
+	// singleYear / singleTeam: the lists' old single year and team filter (IsFilters / FilterValues), −1 for none; they join the picks
+	// here (2026-11-18) so FA and 레전드 cards are let through the same way.
 	public static List<T> Apply<T>(Ma9MSortMemory.RosterList m, List<T> cards, bool batter, Func<T, int> idx, MultiSortedDictionary<int, T> pos,
-		MultiSortedDictionary<int, T> year, MultiSortedDictionary<int, T> team, MultiSortedDictionary<int, T> ball)
+		MultiSortedDictionary<int, T> year, MultiSortedDictionary<int, T> team, MultiSortedDictionary<int, T> ball, int singleYear = -1, int singleTeam = -1)
 	{
 		IEnumerable<T> result = cards;
+		HashSet<int> teamPicks = With(Ma9MSortMemory.Picks(m, SortPopup.eSortType.Team), singleTeam);
 		foreach ((SortPopup.eSortType type, MultiSortedDictionary<int, T> dict) in new[]
 		{
 			(SortPopup.eSortType.Position, pos), (SortPopup.eSortType.Year, year), (SortPopup.eSortType.Team, team), (SortPopup.eSortType.Ball, ball)
 		})
 		{
-			HashSet<int> picks = Ma9MSortMemory.Picks(m, type);
+			HashSet<int> picks = (type == SortPopup.eSortType.Team) ? teamPicks : (type == SortPopup.eSortType.Year) ? With(Ma9MSortMemory.Picks(m, type), singleYear) : Ma9MSortMemory.Picks(m, type);
 			if (picks != null && picks.Count > 0 && dict != null)
 			{
 				HashSet<int> keep = Members(dict, picks.Select(v => Key(type, v, batter)), idx);
 				if (type == SortPopup.eSortType.Team)
 				{
-					// FA 선수카드 (2026-11-15): an FA card also under its source card's club (Ma9MSortMemory.FaSourceTeam).
+					// FA 선수카드 (2026-11-15): an FA card also under its source card's club, and (11-18) under our own club.
 					foreach (T c in cards)
 					{
-						if (picks.Contains(Ma9MSortMemory.FaSourceTeam(idx(c))))
+						if (Ma9MSortMemory.TeamIn(picks, idx(c)))
+						{
+							keep.Add(idx(c));
+						}
+					}
+				}
+				else if (type == SortPopup.eSortType.Year && teamPicks.Count > 0)
+				{
+					// (2026-11-18) An FA or 레전드 card under a picked club, whatever its season.
+					foreach (T c in cards)
+					{
+						if (Ma9MSortMemory.YearFree(teamPicks, idx(c)))
 						{
 							keep.Add(idx(c));
 						}
@@ -124,6 +138,29 @@ public static class Ma9MRosterPicks
 			result = result.Where(c => !gone.Contains(idx(c)));
 		}
 		return result.ToList();
+	}
+
+	private static HashSet<int> With(HashSet<int> picks, int single)
+	{
+		HashSet<int> all = (picks != null) ? new HashSet<int>(picks) : new HashSet<int>();
+		if (single >= 0)
+		{
+			all.Add(single);
+		}
+		return all;
+	}
+
+	// The single filter of a type that Apply takes over (year, team), or −1.
+	public static int Single(bool[] isFilters, int[] filterValues, SortPopup.eSortType type)
+	{
+		int f = FilterIndex(type);
+		return (f >= 0 && f < isFilters.Length && isFilters[f]) ? filterValues[f] : -1;
+	}
+
+	// The single filters the lists leave to Apply (year 2, team 3).
+	public static bool ByApply(int filterIndex)
+	{
+		return filterIndex == FilterIndex(SortPopup.eSortType.Year) || filterIndex == FilterIndex(SortPopup.eSortType.Team);
 	}
 
 	private static HashSet<int> Members<T>(MultiSortedDictionary<int, T> dict, IEnumerable<int> keys, Func<T, int> idx)

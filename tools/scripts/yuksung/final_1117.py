@@ -29,6 +29,8 @@ OUT = r"C:\Ma9MProject\docs\육성표\한셀_1117_최종"
 COACH_XLSX = r"C:\Ma9MProject\docs\육성표\1107\육성표_1107_{}.xlsx"
 COACH24 = r"C:\Ma9MProject\docs\육성표\1113_24롯데\육성표_1113_24롯데.xlsx"
 MARK = " ★11/17"
+TAG = "11/17"                    # the date in notes and titles
+BASE = "육성표_1117_{}_최종"
 
 LABEL = {"01롯데": "2001 롯데", "11롯데": "2011 롯데", "93롯데": "1993 롯데", "25LG": "2025 LG", "12삼성": "2012 삼성",
          "97쌍방울": "1997 쌍방울", "96쌍방울": "1996 쌍방울", "01현대": "2001 현대", "24롯데": "2024 롯데"}
@@ -210,7 +212,7 @@ def spec(al, spec_dir, books=None):
                 a = al[book][c['name']]
                 blk = dict(name=c['name'], grade=b.GRADE[c['cardgrade']], base=b.card_base(c), coach=a['coach'] or '',
                            training=a['training'], renewal=a['renewal'])
-                comment = (f"11/17 최종: FA '{c['year'][2:]} {c['name']} 영입 — {why}. 덱 시즌 국내 FA 중 두 명 짝 1위({conf['win']}%). "
+                comment = (f"{TAG} 최종: FA '{c['year'][2:]} {c['name']} 영입 — {why}. {conf.get('fa_note') or '덱 시즌 국내 FA 중 두 명 짝 1위(' + conf['win'] + '%)'}. "
                            f"재계약은 FA 규칙대로 한 번에 +5(6번)라 이 칸의 재계약 줄은 그 값입니다. 특강·트레이닝·재계약은 이 자리에서 새로 잰 값(20만 경기)으로 배분했습니다.")
                 src = f"FA {c['name']}({who}) 새 칸: 특강 {a['coach']} 트레이닝 {a['training']} 재계약 {a['renewal']}"
             else:
@@ -220,17 +222,17 @@ def spec(al, spec_dir, books=None):
                     a = al[book][who]
                     blk.update(coach=a['coach'] or '', training=a['training'], renewal=a['renewal'])
                     moved = change_text(names, blk['base'], a['card']) if kind == 'P' else ''
-                    comment = (f"11/17 최종: {why}. 새 보직 기준으로 특강·트레이닝·재계약을 다시 계산했습니다(20만 경기)."
+                    comment = (f"{TAG} 최종: {why}. 새 보직 기준으로 특강·트레이닝·재계약을 다시 계산했습니다(20만 경기)."
                                + (f" 기본은 포지션 변경 전 카드값이고, 바뀐 보직에서는 {moved}." if moved else "")
                                + " 이미 한 재계약 보너스는 되돌릴 수 없으니, 한 것은 그대로 두고 남은 것만 이 칸대로 하세요.")
                     src = f"{who} 다시 계산: 특강 {a['coach']} 트레이닝 {a['training']} 재계약 {a['renewal']}"
                 else:
-                    comment = f"11/17 최종: {why}." + (" " + strip(mine['comment']) if mine.get('comment') else "")
+                    comment = f"{TAG} 최종: {why}." + (" " + strip(mine['comment']) if mine.get('comment') else "")
                     src = f"{who} 자리만 옮김(숫자 그대로)"
             write_block(values, fills, fonts, notes, kind, r, blk, slot + MARK, comment)
             report.append(f"  {kind} {at} 칸 → {src} [{slot}]")
         title = cells.get('B2') or ''
-        values.append(['B2', title + ' · 최종 11/17(FA·포지션 변경, ★ 칸만 바뀜)'])
+        values.append(['B2', title + f' · 최종 {TAG}(FA·포지션 변경, ★ 칸만 바뀜)'])
         # 스탯 가치: the newly measured players under the rows already there.
         stat = sheet_rows(path, '스탯 가치')
         row = 34
@@ -243,10 +245,10 @@ def spec(al, spec_dir, books=None):
                 continue
             nm = alloc.BAT if a['kind'] == 'B' else alloc.PIT
             shown = ' / '.join(f"{nm[k]} {a['shown'][k]}" for k in range(6) if a['shown'][k] is not None and a['g9'][k] is not None)
-            line = [a['slot'] + ' (11/17)', name + (' (FA)' if a.get('fa') else ''), a['ball']] + [a['g9'][k] for k in range(6)] + [a['coach'] or '', shown]
+            line = [a['slot'] + f' ({TAG})', name + (' (FA)' if a.get('fa') else ''), a['ball']] + [a['g9'][k] for k in range(6)] + [a['coach'] or '', shown]
             extra += [['스탯 가치', f"{'ABCDEFGHIJK'[j]}{row}", v] for j, v in enumerate(line)]
             row += 1
-        base_name = f"육성표_1117_{book}_최종"
+        base_name = BASE.format(book)
         s = {'src': path, 'out_dir': OUT, 'base': base_name, 'sheet': b.SHEET, 'values': values, 'fills': fills, 'fonts': fonts,
              'comments': notes, 'extra': extra}
         out = os.path.join(spec_dir, f"spec_{book}.json")

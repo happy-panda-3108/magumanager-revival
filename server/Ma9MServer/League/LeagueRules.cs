@@ -51,6 +51,12 @@ namespace Ma9MServer
 			if (on) NewStructure = true;
 		}
 
+		// Shared leagues in every tier (user 2026-11-18 01:0x: "이제부터는 같은 리그가 되면 최대한 유저 계정들끼리 매칭되게끔해줘 기존에는
+		// 챔피언스 리그만 그렇게 하고 있었는데 이제 슬슬 만나게 할거야"): at 편성 the real teams going to the same tier play one shared
+		// league (LeagueService.FormLeagues); a team alone in its tier gets a league of its own as before. MA9M_SHARED_ALL=0 in
+		// run_server.bat goes back to 챔피언스 only.
+		public static readonly bool SharedAll = Environment.GetEnvironmentVariable("MA9M_SHARED_ALL") != "0";
+
 		public static int Tiers => Seven ? 7 : NewStructure ? 6 : 5;
 		// 메이저 (3 with five or six tiers, 4 with seven).
 		public static int MajorTier => Seven ? 4 : 3;

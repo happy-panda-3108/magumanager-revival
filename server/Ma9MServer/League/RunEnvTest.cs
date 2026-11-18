@@ -270,8 +270,9 @@ namespace Ma9MServer
 					foreach (GameCard g in teams[i].Order.Concat(teams[i].Pitchers).Where(g => g != null)) g.Condition = (1 + g.Condition) * OverCapStrength - 1;
 				}
 			}
-			TraitEffects.Effect[] traits = s.Clubs.Select(c => c.IsHuman ? TraitEffects.Of(c.Owner)
-				: TraitEffects.FromPoints(AiTeamOf(s, c)?.Traits ?? new Dictionary<byte, byte>())).ToArray();
+			double cor = BallEffect.CorOf(s);
+			TraitEffects.Effect[] traits = s.Clubs.Select(c => c.IsHuman ? TraitEffects.Of(c.Owner, cor)
+				: TraitEffects.FromPoints(AiTeamOf(s, c)?.Traits ?? new Dictionary<byte, byte>(), cor)).ToArray();
 			return (teams, lineups, traits);
 		}
 	}

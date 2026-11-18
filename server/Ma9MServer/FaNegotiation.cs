@@ -170,7 +170,8 @@ namespace Ma9MServer
 			return c;
 		}
 
-		private static string Season(DateTime now) => LeagueCalendar.CycleStart(now).ToString(SeasonFormat, CultureInfo.InvariantCulture);
+		// The FA 시장 list's period (FaMarket.ListPeriod, 11-18): a 결렬 holds until the next list.
+		private static string Season(DateTime now) => FaMarket.ListPeriod(now).ToString(SeasonFormat, CultureInfo.InvariantCulture);
 
 		private static bool BrokenOff(uint user, int idx)
 		{

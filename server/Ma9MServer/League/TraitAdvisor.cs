@@ -182,7 +182,7 @@ namespace Ma9MServer
 
 			TeamValue.Parts Value(Dictionary<byte, byte> points)
 			{
-				TraitEffects.Effect e = TraitEffects.FromPoints(points) ?? new TraitEffects.Effect();
+				TraitEffects.Effect e = TraitEffects.FromPoints(points, cor) ?? new TraitEffects.Effect();
 				GameTeam t = CopyTeam(teams[me]);
 				TraitEffects.Raise(t, e);
 				SeasonModel m = CardGame.Build(t, teams[other], env);
@@ -506,7 +506,7 @@ namespace Ma9MServer
 			double[] wins = new double[sets.Count];
 			for (int k = 0; k < sets.Count; k++)
 			{
-				TraitEffects.Effect e = TraitEffects.FromPoints(sets[k]);
+				TraitEffects.Effect e = TraitEffects.FromPoints(sets[k], league.Cor);
 				GameTeam mine = CopyTeam(teams[me]);
 				TraitEffects.Raise(mine, e);
 				double w = 0;
@@ -561,7 +561,7 @@ namespace Ma9MServer
 			double[][] each = new double[sets.Count][];
 			for (int k = 0; k < sets.Count; k++)
 			{
-				TraitEffects.Effect e = TraitEffects.FromPoints(sets[k]);
+				TraitEffects.Effect e = TraitEffects.FromPoints(sets[k], league.Cor);
 				GameTeam mine = CopyTeam(teams[me]);
 				TraitEffects.Raise(mine, e);
 				double[] one = each[k] = new double[total];

@@ -106,7 +106,7 @@ namespace Ma9MServer
 			{
 				return RosterHandlers.Catalog.All.Where(c => c.IsFA).OrderBy(c => c.Idx).Select(c => c.Idx).ToList();
 			}
-			string season = LeagueCalendar.CycleStart(now).ToString(SeasonFormat, CultureInfo.InvariantCulture);
+			string season = ListPeriod(now).ToString(SeasonFormat, CultureInfo.InvariantCulture);
 			lock (s_lock)
 			{
 				List<int> stored = Load(user, season);
@@ -118,7 +118,7 @@ namespace Ma9MServer
 				using (SqliteConnection c = Open())
 				using (SqliteCommand cmd = c.CreateCommand())
 				{
-					// REPLACE: a list of an older rule is drawn again (Load gave null for it).
+					// Only when the period has no list yet (Load); the rule drawn by is kept in the row.
 					cmd.CommandText = "INSERT OR REPLACE INTO fa_market (user_code, cycle_start, cards, colour_picks, entries, made, rule) VALUES ($u, $s, $c, $n, $e, $m, $r)";
 					cmd.Parameters.AddWithValue("$r", Rule);
 					cmd.Parameters.AddWithValue("$u", (long)user);
@@ -134,12 +134,19 @@ namespace Ma9MServer
 			}
 		}
 
+		// The list's period (user 11-18 00:4x: "무조건 시즌이 바뀌기 전 오전 11시 및 오후 11시부터 명단이 초기화 되고, 다음 오후 11시 또는 오전
+		// 11시가 되기 전까지 해당 명단을 유지하는걸로 해줘"; asked after the 11-17 23:59 restart redrew the season's lists for rule 4):
+		// from the next season's 편성 (LeagueCalendar.FormAt, an hour before it starts — 11:00 or 23:00) to the following one, keyed
+		// by that season's start. Kept whatever happens in between (a restart, a new rule: a new rule takes the next period).
+		// FaNegotiation's 결렬 counts by the same period.
+		public static DateTime ListPeriod(DateTime now) => LeagueCalendar.CycleStart(now + (LeagueCalendar.Cycle - LeagueCalendar.FormAt));
+
 		private static List<int> Load(uint user, string season)
 		{
 			using SqliteConnection c = Open();
 			using SqliteCommand cmd = c.CreateCommand();
-			cmd.CommandText = "SELECT cards FROM fa_market WHERE user_code = $u AND cycle_start = $s AND rule >= $r";
-			cmd.Parameters.AddWithValue("$r", Rule);
+			// Any rule's list of the period stays (until 11-18 00:4x, a list of an older rule was drawn again at the next look).
+			cmd.CommandText = "SELECT cards FROM fa_market WHERE user_code = $u AND cycle_start = $s";
 			cmd.Parameters.AddWithValue("$u", (long)user);
 			cmd.Parameters.AddWithValue("$s", season);
 			object v = cmd.ExecuteScalar();
@@ -158,7 +165,12 @@ namespace Ma9MServer
 			Lineup l = RosterHandlers.Db.GetLineup(user);
 			HashSet<(bool, int)> fielded = (l?.Batters ?? Array.Empty<int>()).Concat(l?.Pitchers ?? Array.Empty<int>()).Where(i => i != 0)
 				.Select(i => RosterHandlers.Catalog.Get(i)).Where(c => c != null).Select(c => (c.IsBatter, c.Sidx)).ToHashSet();
-			List<CardInfo> free = RosterHandlers.Catalog.All.Where(c => c.IsFA && !c.Foreigner && !owned.Contains(c.Idx) && !fielded.Contains((c.IsBatter, c.Sidx))).ToList();
+			// 11-18 (AI tester 효율파 12회차: '19·'20 황재균 on one list): one card a player, and none of a player the team holds as an FA
+			// already (two of one player cannot both play, RosterHandlers.FaProblem).
+			HashSet<(bool, int)> heldFa = RosterHandlers.Db.GetCards(user).Select(c => RosterHandlers.Catalog.Get(c.Idx)).Where(c => c != null && c.IsFA)
+				.Select(c => (c.IsBatter, c.Sidx)).ToHashSet();
+			List<CardInfo> free = RosterHandlers.Catalog.All.Where(c => c.IsFA && !IsForeign(c) && !owned.Contains(c.Idx) && !fielded.Contains((c.IsBatter, c.Sidx))
+				&& !heldFa.Contains((c.IsBatter, c.Sidx))).ToList();
 			int[] entries = TeamColors.MarketEntries(user);
 			// Rule 4 (user 11-17 21:1x, asked whether the share is of the main club or of the others: "01롯데가 메인이면, 01롯데를 강화하기
 			// 위해 01롯데가 아닌 01년도의 랜덤 FA4장을 뽑아. 삼성올스타면 삼성올스타를 강화하기 위해 삼성이 아닌 FA선수 4명이 무작위로
@@ -168,10 +180,39 @@ namespace Ma9MServer
 			// Of the entry's scope too (a batter for a 타자진 entry, a pitcher for a 투수진 one; rules 1-3 let a batter count for a 투수진).
 			bool Fits(CardInfo c) => entries.Any(e => TeamColors.IsMemberOf(e, c) && TeamColors.InScopeOf(e, c)
 				&& !(RosterHandlers.Catalog.Get(c.SourceIdx) is CardInfo s && !s.IsFA && TeamColors.IsOwnClubOf(e, s)));
-			List<CardInfo> picks = Shuffled(free.Where(Fits).ToList()).Take(TeamColorPicks).ToList();
+			List<CardInfo> picks = OnePerPlayer(Shuffled(free.Where(Fits).ToList()), new HashSet<(bool, int)>()).Take(TeamColorPicks).ToList();
 			int colour = picks.Count;
-			picks.AddRange(Shuffled(free.Where(c => !picks.Contains(c)).ToList()).Take(TeamColorPicks + RandomPicks - picks.Count));
+			HashSet<(bool, int)> taken = picks.Select(c => (c.IsBatter, c.Sidx)).ToHashSet();
+			picks.AddRange(OnePerPlayer(Shuffled(free.Where(c => !picks.Contains(c)).ToList()), taken).Take(TeamColorPicks + RandomPicks - picks.Count));
 			return (picks.Select(c => c.Idx).ToList(), colour, entries);
+		}
+
+		// 11-18 (user 14:1x: "FA 선수 명단에 외국인 선수들은 빼달라고 부탁을 했거든?? 그게 반영이 안 된 것 같아"): the card tables mark a
+		// player foreign season by season and miss it in a few seasons ('06 브라운A, '19 소사, '17 로하스A, '07 서튼, '11 고든, '03 프랭클린);
+		// of the FA cards '06 브라운A could be drawn. A player counts as foreign when any of his cards says so.
+		private static HashSet<(bool, int)> s_foreignPlayers;
+
+		internal static bool IsForeign(CardInfo c)
+		{
+			if (c.Foreigner)
+			{
+				return true;
+			}
+			HashSet<(bool, int)> set = s_foreignPlayers ??= RosterHandlers.Catalog.All.Where(x => x.Foreigner).Select(x => (x.IsBatter, x.Sidx)).ToHashSet();
+			return set.Contains((c.IsBatter, c.Sidx));
+		}
+
+		// The first card of each player in the order given, past those in `taken`.
+		private static IEnumerable<CardInfo> OnePerPlayer(List<CardInfo> cards, HashSet<(bool, int)> taken)
+		{
+			HashSet<(bool, int)> seen = new HashSet<(bool, int)>(taken);
+			foreach (CardInfo c in cards)
+			{
+				if (seen.Add((c.IsBatter, c.Sidx)))
+				{
+					yield return c;
+				}
+			}
 		}
 
 		private static List<CardInfo> Shuffled(List<CardInfo> list)
@@ -297,7 +338,7 @@ namespace Ma9MServer
 				return "FA 시장에 없는 선수입니다.";
 			}
 			// Rule 3 (11-17): foreign players are not offered (a held one stays).
-			if (card.Foreigner)
+			if (IsForeign(card))
 			{
 				return "외국인 선수는 FA 시장에 나오지 않습니다.";
 			}

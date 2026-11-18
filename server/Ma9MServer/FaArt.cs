@@ -17,8 +17,9 @@ namespace Ma9MServer
 	//     for any FA card of the team still without its picture (a club change, cards signed before this); then the script is started at
 	//     BelowNormal without a window when MA9M_FA_ART = the repo folder (run_server.bat; test servers leave it unset and only write the
 	//     list). One run at a time; lines added meanwhile start another run when it ends. The script skips pictures that exist.
-	//   - the app (ClientMark) gets POPUP type ListType [club, idx, idx, …] at each lobby visit: its FA cards whose picture is there. It
-	//     draws only those from fa\ (Ma9MFaArt); everything else, and other teams' cards, keep the FA art.
+	//   - the app (ClientMark) gets POPUP type ListType [club, idx, idx, …, idx_club, …] at each lobby visit: its FA cards whose picture
+	//     is there, then (11-18, Others) the other real clubs' FA cards of its league. It draws those from fa\ (Ma9MFaArt); everything
+	//     else (AI clubs, other leagues) keeps the FA art.
 	public static class FaArt
 	{
 		public const byte ListType = 34;
@@ -92,6 +93,44 @@ namespace Ma9MServer
 			}
 		}
 
+		// The other real clubs' FA cards in the user's league as "<idx>_<club>" (2026-11-18, user 23:5x: "01롯데 계정에서 볼 때는 97쌍방울의
+		// 김경원이 FA팀으로 보이네? 이걸 쌍방울로 보이게끔 할 수 있을까?? 즉, 타팀이 보는 내 FA도 구단 유니폼을 입은걸로 보였으면 해"): only
+		// those whose picture is there (a club's own lobby visit and its signings make them; any still missing goes onto the list now),
+		// and no card two clubs both hold (which uniform would be a guess). The app draws them in that club's uniform (Ma9MFaArt); an
+		// older app's int parse skips the entries.
+		private static IEnumerable<string> Others(uint user)
+		{
+			LeagueState s = LeagueService.Store?.Load(user);
+			if (s == null || s.Clubs.Count == 0)
+			{
+				return Enumerable.Empty<string>();
+			}
+			Dictionary<int, int> owner = new Dictionary<int, int>();
+			HashSet<int> twice = new HashSet<int>();
+			foreach (LeagueClub c in s.Clubs.Where(c => c.IsHuman && c.Owner != user).GroupBy(c => c.Owner).Select(g => g.First()))
+			{
+				int club = ClubOf(c.Owner);
+				if (club < 0)
+				{
+					continue;
+				}
+				foreach (int i in RosterHandlers.Db.GetCards(c.Owner).Select(x => x.Idx).Distinct().Where(i => RosterHandlers.Catalog.Get(i)?.IsFA == true))
+				{
+					if (!File.Exists(FacePath(i, club)))
+					{
+						Enqueue(i, club);
+						continue;
+					}
+					if (owner.TryGetValue(i, out int had) && had != club)
+					{
+						twice.Add(i);
+					}
+					owner[i] = club;
+				}
+			}
+			return owner.Where(kv => !twice.Contains(kv.Key)).Select(kv => $"{kv.Key}_{kv.Value}").ToList();
+		}
+
 		// LobbyHandlers.EnterMain: the team's FA cards with their picture (to the app), the others onto the list.
 		public static void OnLobby(GameSession session)
 		{
@@ -113,7 +152,8 @@ namespace Ma9MServer
 				{
 					Ma9MPacket.PKS_SC_POPUP popup = new Ma9MPacket.PKS_SC_POPUP();
 					popup.Type.n = ListType;
-					popup.Messages.array = new[] { club.ToString() }.Concat(ready.Select(i => i.ToString())).Select(s => new PLongString { str = s }).ToArray();
+					popup.Messages.array = new[] { club.ToString() }.Concat(ready.Select(i => i.ToString())).Concat(Others(user))
+						.Select(s => new PLongString { str = s }).ToArray();
 					session.Send(popup);
 				}
 			}

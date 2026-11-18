@@ -107,6 +107,65 @@ public class Ma9MTextBox : MonoBehaviour
 		return extra;
 	}
 
+	// A popup that turns pages (Ma9MAdvice 자동 편성·특성 추천 [자세히]; 2026-11-18 남은일목록 A7, NC 버그 26: grown by a guessed 17 per
+	// line with the text at 13, the box's title band stretched and the title stood on its top edge): sized for the tallest page
+	// as FitPopup does, then page 0 shown. Turn pages with SetText. Returns how much the popup grew.
+	public static float FitPopupPages(UILabel content, string[] pages)
+	{
+		if (content == null || pages == null || pages.Length == 0)
+		{
+			return 0f;
+		}
+		int tallest = 0;
+		float best = -1f;
+		for (int i = 0; i < pages.Length; i++)
+		{
+			content.text = pages[i] ?? string.Empty;
+			float h = Prepare(content, PopupTextWidth);
+			if (h > best)
+			{
+				best = h;
+				tallest = i;
+			}
+		}
+		content.text = pages[tallest] ?? string.Empty;
+		float extra = FitPopup(content);
+		SetText(content, pages[0] ?? string.Empty);
+		return extra;
+	}
+
+	// New text in a label already fitted (FitPopup / FitPopupPages): a scrolling box starts again at the top with its bar and
+	// travel for this text, so textcheck sees the real height.
+	public static void SetText(UILabel label, string text)
+	{
+		if (label == null)
+		{
+			return;
+		}
+		label.text = text;
+		Ma9MTextBox t = label.GetComponent<Ma9MTextBox>();
+		if (t == null && label.transform.parent != null)
+		{
+			t = label.transform.parent.GetComponent<Ma9MTextBox>();
+		}
+		if (t == null)
+		{
+			return;
+		}
+		float h = HeightOf(label);
+		t.ContentHeight = h;
+		if (t.Scrolls)
+		{
+			t.m_scroll = 0f;
+			t.m_max = Mathf.Max(0f, h - t.Size.y + 2f * ScrollPad);
+			if (t.m_bar != null)
+			{
+				t.m_bar.transform.localScale = new Vector3(BarWidth, Mathf.Max(16f, t.Size.y * Mathf.Min(1f, t.Size.y / Mathf.Max(1f, h))), 1f);
+			}
+			t.Place();
+		}
+	}
+
 	// The popup's other parts above the message go up, those below go down, the box (PopupBack) gets taller.
 	private static void Grow(UILabel content, float extra)
 	{

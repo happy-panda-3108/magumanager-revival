@@ -350,7 +350,9 @@ public class Ma9MSeasonResult : MonoBehaviour
 		bool close = I(m_data, "kind") == 1;
 		float top = 126f, row = 27f;
 		string[] heads = { "순위", "구단", "승", "패", "무", "승률", close ? "다음 시즌" : "결과" };
-		float[] xs = { -362f, -300f, -128f, -92f, -56f, -8f, 62f };
+		// 2026-11-18 (AI testers kt 12회차 버그 16, 두산 13회차): "포스트시즌" at 62 ran into the right-hand box (x 125); the column
+		// starts at 30 now, clear of 승률 (ends near 10), and the five letters end near 95.
+		float[] xs = { -362f, -300f, -128f, -92f, -56f, -8f, 30f };
 		for (int i = 0; i < heads.Length; i++)
 		{
 			Text(page, heads[i], new Vector3(xs[i], top, ZText), 13f, Grey, i == 1 || i == 6 ? UIWidget.Pivot.Left : UIWidget.Pivot.Center);

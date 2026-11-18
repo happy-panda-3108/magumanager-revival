@@ -191,10 +191,10 @@ namespace Ma9MServer
 				Item = PlayerManageHandlers.Basic, Description = "선수 한 명의 컨디션 +1칸, 24시간(리그 72경기).\n팀 로스터 > 선수관리에서 사용, 동시에 5명까지" });
 			list.Add(new Product { Index = 304, Tab = 3, Order = 4, Image = "shop_cond_2", Type = "선수관리", Name = "중급 컨디션 회복제", Cost = 300_000, Kind = Kind.Training,
 				Item = PlayerManageHandlers.Middle, Description = "선수 한 명의 컨디션 +2칸, 24시간(리그 72경기).\n팀 로스터 > 선수관리에서 사용, 동시에 5명까지" });
-			// 특별강좌 (user, 2026-10-22): 초기화권 100만, 행운권 40만 MP (LessonHandlers).
-			list.Add(new Product { Index = 305, Tab = 3, Order = 5, Image = "shop_lesson_reset", Type = "특별강좌", Name = "특별강좌 초기화권", Cost = 1_000_000, Kind = Kind.Training,
+			// 특별강좌 (user, 2026-10-22): 초기화권 100만, 행운권 40만 MP (LessonHandlers). Names "특강 …권" since 2026-11-18 (남은일목록 C2).
+			list.Add(new Product { Index = 305, Tab = 3, Order = 5, Image = "shop_lesson_reset", Type = "특별강좌", Name = "특강 초기화권", Cost = 1_000_000, Kind = Kind.Training,
 				Item = LessonHandlers.Reset, Description = "선수 한 명의 특별수강 결과를 지우고 다시 수강하게 합니다.\n결과가 있는 선수를 신청할 때 사용" });
-			list.Add(new Product { Index = 306, Tab = 3, Order = 6, Image = "shop_lesson_lucky", Type = "특별강좌", Name = "특별강좌 행운권", Cost = 400_000, Kind = Kind.Training,
+			list.Add(new Product { Index = 306, Tab = 3, Order = 6, Image = "shop_lesson_lucky", Type = "특별강좌", Name = "특강 행운권", Cost = 400_000, Kind = Kind.Training,
 				Item = LessonHandlers.Lucky, Description = "특별수강 주 능력치 +5 확률 30% → 60%.\n수강신청 화면에서 사용" });
 			// 포지션 변경 (user, 2026-10-24): 초기화권 80만 MP (PositionChangeHandlers).
 			list.Add(new Product { Index = 307, Tab = 3, Order = 7, Image = "shop_pos_reset", Type = "포지션 변경", Name = "포지션 변경 초기화권", Cost = 800_000, Kind = Kind.Training,

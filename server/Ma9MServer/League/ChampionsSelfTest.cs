@@ -140,6 +140,9 @@ namespace Ma9MServer
 			int topCap = LeagueRules.BallCap[LeagueRules.ChampionsTier];
 			Check(members.All(m => after.First(t => t.code == m.UserCode).grade == 9 && RosterHandlers.MaxCostOf(m.UserCode) == topCap && TeamPropertyHandlers.AvailableCp(m.UserCode) == topCp),
 				$"members: league grade 9 (CHAMPIONS slot), cap {topCap}, {topCp} CP ({LeagueRules.Tiers} tiers now)");
+			// The lobby notes (NoteSpareCp since 11-15: "올라 … 남은 nCP") of the members who came up are seen now, as in the lobby; the
+			// check after the next 편성 is about that 편성's notes only.
+			foreach (LeagueState m in members) TeamPropertyHandlers.TakeTrimNotice(m.UserCode);
 
 			// 3. The season's first two hours (6 slots), played once for every member.
 			Tick(next + TimeSpan.FromHours(2) - TimeSpan.FromMinutes(1));
@@ -243,9 +246,12 @@ namespace Ma9MServer
 			List<LeagueState> again = going.Select(store.Load).ToList();
 			List<LeagueState> stayed = again.Where(s => closed2[s.UserCode].NextTier == LeagueRules.ChampionsTier).ToList();
 			List<LeagueState> down = again.Where(s => closed2[s.UserCode].NextTier == LeagueRules.GateTier).ToList();
+			// Who went down: a league of its own, or (LeagueRules.SharedAll, 11-18) with two or more one shared 레전드 league.
+			bool downShared = LeagueRules.SharedAll && down.Count >= 2;
 			Check(stayed.All(s => s.Tier == LeagueRules.ChampionsTier && s.Share != null && s.Share != a.Share && s.Share == stayed[0].Share && s.Start == next + LeagueCalendar.Cycle)
-					&& down.All(s => s.Tier == LeagueRules.GateTier && s.Share == null && s.Clubs.Count(c => c.IsHuman) == 1
-						&& s.Clubs.Where(c => !c.IsUser).All(c => c.AiKey >= 0 && AiTeams.Deck(LeagueRules.GateTier, c.AiKey)?.Name == c.Name)),
+					&& down.All(s => s.Tier == LeagueRules.GateTier
+						&& (downShared ? s.Share != null && s.Share == down[0].Share && s.Clubs.Count(c => c.IsHuman) == down.Count : s.Share == null && s.Clubs.Count(c => c.IsHuman) == 1)
+						&& s.Clubs.Where(c => !c.IsHuman).All(c => c.AiKey >= 0 && AiTeams.Deck(LeagueRules.GateTier, c.AiKey)?.Name == c.Name)),
 				$"next 편성: stayed {string.Join(", ", stayed.Select(s => s.Clubs[s.MyIndex].Name))} ({stayed.FirstOrDefault()?.Share}), down to {LeagueRules.TierNames[LeagueRules.GateTier]} {string.Join(", ", down.Select(s => s.Clubs[s.MyIndex].Name))}"
 					+ $" with {LeagueRules.TierNames[LeagueRules.GateTier]} decks {string.Join(", ", down.Take(1).SelectMany(s => s.Clubs.Where(c => !c.IsUser)).Select(c => c.Name))}");
 			// Who went down kept 20 CP of traits (the deepest taken off) and gets the notice once; who stayed kept all 23.

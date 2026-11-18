@@ -108,7 +108,7 @@ namespace Ma9MServer
 			// TCSIM_FA_DOMESTIC=1 (user 2026-11-17 02:0x: "외국인 선수는 안 넣는게 맞는 것 같음. 국내선수들로만 나오게 해주고 … 국내선수FA로
 			// 계산해서 다시 우선순위를 찾아주고"): domestic FA cards only (CardInfo.Foreigner), as the FA 시장 offers them from 11-17.
 			bool domestic = Environment.GetEnvironmentVariable("TCSIM_FA_DOMESTIC") == "1";
-			List<Cand> fas = s_data.Catalog.All.Where(c => c.IsFA && (onlyYear == 0 || c.Year == onlyYear) && (!domestic || !c.Foreigner)).OrderBy(c => c.Idx).Select(c => AnyCard(c.Idx)).Where(c => c != null).ToList();
+			List<Cand> fas = s_data.Catalog.All.Where(c => c.IsFA && (onlyYear == 0 || c.Year == onlyYear) && (!domestic || !FaMarket.IsForeign(c))).OrderBy(c => c.Idx).Select(c => AnyCard(c.Idx)).Where(c => c != null).ToList();
 			bool chain = FaChain;
 			// TCSIM_FA_DEPTH=n (user 2026-11-17 10:2x: "01롯데처럼 두 칸 이상의 연쇄를 6가지 덱이 전부 적용해서 다시 재봅시다"): chains of up to n
 			// moves — the man the FA displaces moves on, the man there moves on too, … and the last one leaves. Keys "<fa>@SP5>RP2>RP4"

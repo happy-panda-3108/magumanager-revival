@@ -131,16 +131,17 @@ namespace Ma9MServer
 		private static string s_tablePath;
 
 		// ma9_itemlist rows (ItemCatalog), type 10 LESSON: used on the 특별강좌 screen, not in the inventory.
+		// 2026-11-18 (남은일목록 C2, AI tester 두산 7회차: "특별강좌 행운권"과 "특강 즉시 완료권"이 섞임): one name for all three, "특강 …권".
 		public static IEnumerable<ItemDef> Items()
 		{
 			yield return new ItemDef
 			{
-				Index = Reset, Name = "특별강좌 초기화권", Type = ItemType.Lesson, TypeText = "특별강좌 아이템", File = "lesson_reset",
+				Index = Reset, Name = "특강 초기화권", Type = ItemType.Lesson, TypeText = "특별강좌 아이템", File = "lesson_reset",
 				Desc = "선수 한 명의 특별수강 결과를 지우고 다시 수강하게 합니다. 특별강좌에서 결과가 있는 선수를 신청할 때 씁니다."
 			};
 			yield return new ItemDef
 			{
-				Index = Lucky, Name = "특별강좌 행운권", Type = ItemType.Lesson, TypeText = "특별강좌 아이템", File = "lesson_lucky",
+				Index = Lucky, Name = "특강 행운권", Type = ItemType.Lesson, TypeText = "특별강좌 아이템", File = "lesson_lucky",
 				Desc = "특별수강의 주 능력치가 +5로 나올 확률을 30%에서 60%로 올립니다. 특별강좌 수강신청 화면에서 씁니다."
 			};
 			yield return new ItemDef

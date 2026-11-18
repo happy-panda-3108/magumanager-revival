@@ -124,26 +124,68 @@ namespace Ma9MServer
 			.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(x => x.Split(':')).Where(x => x.Length == 2)
 			.ToDictionary(x => byte.Parse(x[0]), x => double.Parse(x[1], System.Globalization.CultureInfo.InvariantCulture));
 
-		// The team's saved traits as one effect (null when it has none).
-		public static Effect Of(uint userCode)
+		// 공인구별 투수 특성 (systems session, 2026-11-18; user 23:2x "빅볼에서만 타자 특성이 약간 더 유리하게 만들고, 나머지는 투수 특성이
+		// 약간 유리하게 만듭시다. 유리하게 만드는 것도 거의 51:49 또는 50.5 : 49.5 이정도 수준으로 해주고, 유저가 타자쪽 타이틀을 갖고
+		// 싶으면 타자특성, 투수쪽 타이틀을 도전하면 투수특성을 찍어서 자유도를 높이는식으로"): the pitching tree's (121-140) per-point
+		// amounts times this, by the band of the season's ball (SeasonBall.Bands: 스몰볼, 노말볼, 빅볼; the standard ball of 비기너-더블A and
+		// the exhibitions is 노말볼), so the whole pitching tree is worth about 1.03 times the batting tree (50.75 : 49.25) with 스몰볼
+		// and 노말볼 and about 0.97 times with 빅볼. Measured 11-18 on 10 real clubs with V3 alone: 0.977 / 0.993 / 1.001
+		// (docs\특성균형_1115.md). MA9M_TRAIT_BALL=0 = V3 as it was; MA9M_TRAIT_BALL_PITCH="s,n,b" (dev) other factors.
+		public static readonly bool BallShares = V3 && Environment.GetEnvironmentVariable("MA9M_TRAIT_BALL") != "0";
+
+		private static readonly double[] PitchByBand = ParseBand(Environment.GetEnvironmentVariable("MA9M_TRAIT_BALL_PITCH")) ?? new[] { 1.054, 1.037, 0.970 };
+
+		private static double[] ParseBand(string text)
 		{
-			return FromPoints(TeamPropertyHandlers.Points(userCode));
+			string[] parts = (text ?? string.Empty).Split(',');
+			if (parts.Length != 3)
+			{
+				return null;
+			}
+			double[] v = new double[3];
+			for (int i = 0; i < 3; i++)
+			{
+				if (!double.TryParse(parts[i], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out v[i]))
+				{
+					return null;
+				}
+			}
+			return v;
 		}
 
-		public static Effect FromPoints(Dictionary<byte, byte> points)
+		// The pitching tree's factor for a season ball (반발계수; NaN = the standard ball).
+		public static double PitchScale(double cor)
+		{
+			if (!BallShares)
+			{
+				return 1;
+			}
+			double c = double.IsNaN(cor) ? SeasonBall.StandardCor : cor;
+			return PitchByBand[SeasonBall.BandOf(SeasonBall.StandardRuns + BallEffect.RunsOff(c))];
+		}
+
+		// The team's saved traits as one effect (null when it has none). cor: the season's ball (BallEffect.CorOf; the standard
+		// ball when there is no league season).
+		public static Effect Of(uint userCode, double cor = SeasonBall.StandardCor)
+		{
+			return FromPoints(TeamPropertyHandlers.Points(userCode), cor);
+		}
+
+		public static Effect FromPoints(Dictionary<byte, byte> points, double cor = SeasonBall.StandardCor)
 		{
 			if (points == null || points.Count == 0)
 			{
 				return null;
 			}
 			Effect e = new Effect();
+			double pitch = PitchScale(cor);
 			foreach ((byte index, byte p) in points)
 			{
 				if (!(V3 ? PerPointV3 : V2 ? PerPointV2 : PerPoint).TryGetValue(index, out (string key, double value)[] parts))
 				{
 					continue;
 				}
-				double scale = s_scale.TryGetValue(index, out double sc) ? sc : 1;
+				double scale = (s_scale.TryGetValue(index, out double sc) ? sc : 1) * (index >= 121 ? pitch : 1);
 				foreach ((string key, double value) in parts)
 				{
 					Add(e, key, value * p * scale);

@@ -59,9 +59,37 @@ public static class Ma9MSortMemory
 		return (src != null && src.teamcode != (int)eTeamName.FA) ? src.teamcode : -1;
 	}
 
+	// 2026-11-18 (user 23:0x "FA 선수 영입하게 되면 계약관리나 보유선수, 특강 필터링에서 같은 구단으로 취급해서 보이게 할 수 있을까?? 24롯데
+	// 선수만 보는데 FA 선수는 따로 봐야해서 불편함, 레전드도 마찬가지로 어떤 년도든 같은 구단 필터링 안에서 계속 보이게 해줬으면 함"): an FA card
+	// (only signed ones are held) also counts for our own club, whose uniform it wears (Ma9MFaArt.Club), and an FA or 레전드 card that
+	// the team picks take in stays whatever the year picks say (YearFree).
 	public static bool TeamIn(ICollection<int> teams, TRRow_PlayerCard card)
 	{
-		return card != null && (teams.Contains(card.teamcode) || (card.teamcode == (int)eTeamName.FA && teams.Contains(FaSourceTeam(card.idx))));
+		if (card == null || teams == null)
+		{
+			return false;
+		}
+		if (teams.Contains(card.teamcode))
+		{
+			return true;
+		}
+		return card.teamcode == (int)eTeamName.FA && (teams.Contains(FaSourceTeam(card.idx)) || (Ma9MFaArt.Club >= 0 && teams.Contains(Ma9MFaArt.Club)));
+	}
+
+	public static bool TeamIn(ICollection<int> teams, int idx)
+	{
+		return TeamIn(teams, ResourceManager.g_playerTable.FindPlayer(idx));
+	}
+
+	// A card the year picks do not hold back: an FA or 레전드 card under one of the picked clubs.
+	public static bool YearFree(ICollection<int> teams, TRRow_PlayerCard card)
+	{
+		return card != null && teams != null && teams.Count > 0 && (card.teamcode == (int)eTeamName.FA || (int)card.cardgrade == 5) && TeamIn(teams, card);
+	}
+
+	public static bool YearFree(ICollection<int> teams, int idx)
+	{
+		return teams != null && teams.Count > 0 && YearFree(teams, ResourceManager.g_playerTable.FindPlayer(idx));
 	}
 
 	private const string Prefix = "Ma9M_Sort/";

@@ -167,6 +167,12 @@ public class Ma9MHustle : MonoBehaviour
 	public static string HighlightReturn()
 	{
 		string s = BroadcastNet.pastScene;
+		// Ma9M (2026-11-18): a board's 하이라이트 goes back to that board (Ma9MBoardReturn), the 확인하지 않은 결과 one too.
+		if (Ma9MBoardReturn.ReturnScene(s) != null)
+		{
+			Ma9MBoardReturn.Arm();
+			return s;
+		}
 		return s == "Scene_ScheduleAndResult" || s == "Scene_PostSeason" ? s : "Scene_MainLobby";
 	}
 

@@ -532,6 +532,19 @@ public class Ma9MBookPopup : MonoBehaviour
 		BottomRow -= extra * 0.5f;
 	}
 
+	// The same for a message in pages (2026-11-18, A7): sized for the tallest page, page 0 shown; ShowPage turns them.
+	public void FitPages(string[] pages)
+	{
+		float extra = Ma9MTextBox.FitPopupPages(Content, pages);
+		TitleY += extra * 0.5f;
+		BottomRow -= extra * 0.5f;
+	}
+
+	public void ShowPage(string text)
+	{
+		Ma9MTextBox.SetText(Content, text);
+	}
+
 	// click: a tap; press: down / up (for holding). Returns the button's label.
 	public UILabel AddButton(string text, float x, float y, float scale, Action click, Action<bool> press = null)
 	{

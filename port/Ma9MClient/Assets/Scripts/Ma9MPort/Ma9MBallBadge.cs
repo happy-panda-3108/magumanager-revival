@@ -69,7 +69,9 @@ public static class Ma9MBallBadge
 		Transform parent = title.transform.parent;
 		Bounds b = NGUIMath.CalculateRelativeWidgetBounds(parent, title.transform);
 		float d = Mathf.Max(18f, b.size.y * 1.3f);
-		return Put(title, band, new Vector3(b.min.x - 6f - d / 2f, b.center.y, title.transform.localPosition.z), d);
+		// At the letters' middle, not the label box's (2026-11-18, user's capture of the standings: the ball sat about 12 px below
+		// "홈런볼배 프로야구 순위표"; the box runs a line height, 1.5 letters, below the top, and the letters fill its upper part).
+		return Put(title, band, new Vector3(b.min.x - 6f - d / 2f, b.center.y + b.size.y * 0.3f, title.transform.localPosition.z), d);
 	}
 
 	// A badge of diameter d at pos in the font label's parent; the label gives the font and depth. Any badge put there before goes first.

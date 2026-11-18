@@ -140,7 +140,12 @@ namespace Ma9MServer
 		private static int AiSlot(LeagueState s, LeagueClub c) => c.Index < s.MyIndex ? c.Index : c.Index - 1;
 
 		// An AI club's team: its team-year deck (메이저, 챔피언스), else the tier's fixed club for its place (null for a real team).
-		private static AiTeam AiTeamOf(LeagueState s, LeagueClub c) => c.IsHuman ? null : c.AiKey >= 0 ? AiTeams.Deck(s.Tier, c.AiKey) : AiTeams.Get(s.Tier, AiSlot(s, c));
+		// AiKey ≤ −2 (shared leagues of a fixed-club tier, 2026-11-18): the tier's fixed club in slot −2 − AiKey, the same in every
+		// member's copy (AiSlot counts places around the user's own club, which differs from copy to copy).
+		private static AiTeam AiTeamOf(LeagueState s, LeagueClub c) => c.IsHuman ? null : c.AiKey >= 0 ? AiTeams.Deck(s.Tier, c.AiKey)
+			: c.AiKey <= FixedKeyBase ? AiTeams.Get(s.Tier, FixedKeyBase - c.AiKey) : AiTeams.Get(s.Tier, AiSlot(s, c));
+
+		private const int FixedKeyBase = -2;
 
 		// League clubs follow their fixed AI team (also turns leagues made before the fixed teams into
 		// theirs, keeping the standings). Returns whether anything changed.
@@ -170,6 +175,9 @@ namespace Ma9MServer
 			AdvanceShared(now, teams);
 			// The AI clubs and decks for a season whose 편성 is due (RenewAi); a cycle still playing somewhere holds its 편성.
 			HashSet<DateTime> waiting = RenewAi(now, teams);
+			// Each team's own steps; run again after 편성 so a league made there plays its due games in the same tick (2026-11-18).
+			void PlayTeams()
+			{
 			foreach ((uint code, string name, byte emblem, byte grade) in teams)
 			{
 				LeagueState s = s_store.Load(code);
@@ -246,16 +254,23 @@ namespace Ma9MServer
 						continue;
 					}
 					if (s.Start + LeagueCalendar.FormAt > now) break;
-					// 챔피언스 leagues are made for every club going there at once (FormChampions, after this loop).
-					if (s.NextTier == LeagueRules.ChampionsTier) break;
+					// 챔피언스 leagues (and with LeagueRules.SharedAll every tier's, 2026-11-18) are made for every club going there at
+					// once (FormChampions, after this loop).
+					if (LeagueRules.SharedAll || s.NextTier == LeagueRules.ChampionsTier) break;
 					if (waiting.Contains(s.Start)) break;
 					s = Form(s, name, emblem);
 				}
 				if (played > 0) ServerLog.Info($"league: {name} played {played} slot(s), season {s.Season} game {s.LastGame} ({LeagueRules.TierNames[s.Tier]})");
 			}
-			// 챔피언스 편성 once every league of the cycle that can still send a club there has closed; a league made now
-			// plays its due games at once (after downtime).
-			if (FormChampions(now, teams, waiting)) AdvanceShared(now, teams);
+			}
+			PlayTeams();
+			// 편성 (챔피언스, and every tier with LeagueRules.SharedAll) once every league of the cycle has closed; a league made
+			// now plays its due games at once (after downtime): the shared ones here, a club's own in the steps run again.
+			if (FormChampions(now, teams, waiting))
+			{
+				AdvanceShared(now, teams);
+				PlayTeams();
+			}
 			// Connected apps whose top bar shows an older game get it again (TopBar.PushLeague, 2026-11-09).
 			TopBar.PushLeague();
 		}
@@ -449,22 +464,32 @@ namespace Ma9MServer
 		// cycle that can still send one there (메이저 and 챔피언스) has closed (a 한국시리즈 past game 7 keeps its league open
 		// till 59:30); two minutes before the next season it goes ahead without the late ones (they then get a league of
 		// their own). Returns whether a league was made.
+		// Every tier (LeagueRules.SharedAll, user 2026-11-18): the clubs going to the same tier form shared leagues the same way, once
+		// every league of the cycle has closed; a club alone in its tier gets a league of its own (Form), as before.
 		private static bool FormChampions(DateTime now, List<(uint code, string name, byte emblem, byte grade)> teams, HashSet<DateTime> waiting)
 		{
 			List<(LeagueState s, string name, byte emblem)> states = teams.Select(t => (s: s_store.Load(t.code), t.name, t.emblem)).Where(x => x.s != null).ToList();
 			bool formed = false;
-			foreach (IGrouping<DateTime, (LeagueState s, string name, byte emblem)> cycle in states
-				.Where(x => x.s.NextTier == LeagueRules.ChampionsTier && x.s.Start + LeagueCalendar.FormAt <= now).GroupBy(x => x.s.Start))
+			foreach (IGrouping<(DateTime start, int tier), (LeagueState s, string name, byte emblem)> cycle in states
+				.Where(x => x.s.NextTier >= 0 && (LeagueRules.SharedAll || x.s.NextTier == LeagueRules.ChampionsTier) && x.s.Start + LeagueCalendar.FormAt <= now)
+				.GroupBy(x => (x.s.Start, x.s.NextTier)))
 			{
-				DateTime start = cycle.Key;
+				DateTime start = cycle.Key.start;
+				int tier = cycle.Key.tier;
 				if (waiting.Contains(start)) continue;   // the AI decks are made again first (RenewAi)
-				bool open = states.Any(x => x.s.Start == start && x.s.NextTier < 0 && x.s.Tier >= LeagueRules.GateTier);
+				bool open = states.Any(x => x.s.Start == start && x.s.NextTier < 0 && (LeagueRules.SharedAll || x.s.Tier >= LeagueRules.GateTier));
 				if (open && now < start + LeagueCalendar.Cycle - TimeSpan.FromMinutes(2)) continue;
 				List<(LeagueState s, string name, byte emblem)> going = cycle.OrderBy(x => x.s.UserCode).ToList();
+				if (going.Count == 1 && tier != LeagueRules.ChampionsTier)
+				{
+					Form(going[0].s, going[0].name, going[0].emblem);
+					formed = true;
+					continue;
+				}
 				int leagues = (going.Count + LeagueRules.Clubs - 1) / LeagueRules.Clubs;
 				for (int k = 0; k < leagues; k++)
 				{
-					FormShared(going.Where((x, i) => i % leagues == k).ToList(), start + LeagueCalendar.Cycle, k);
+					FormShared(going.Where((x, i) => i % leagues == k).ToList(), start + LeagueCalendar.Cycle, k, tier);
 				}
 				formed = true;
 			}
@@ -480,18 +505,25 @@ namespace Ma9MServer
 
 		// One shared league from game 1 at start: the members in random places, team-year decks in the others (none of the
 		// members' own team-years), every member's copy with its own club as the user's.
-		private static void FormShared(List<(LeagueState s, string name, byte emblem)> members, DateTime start, int k)
+		// tier (2026-11-18): any tier. A deck tier (AiTeams.HasDecks) fills the free places with its team-year decks as 챔피언스 does;
+		// 비기너 and 루키 with some of the tier's fixed clubs (AiKey FixedKeyBase − slot, the same club in every copy).
+		private static void FormShared(List<(LeagueState s, string name, byte emblem)> members, DateTime start, int k, int tier)
 		{
-			string share = $"C{start:yyyyMMddHHmm}-{k}";
-			Random rnd = new Random(start.Year * 100_000 + start.DayOfYear * 100 + start.Hour * 4 + k);
+			bool champions = tier == LeagueRules.ChampionsTier;
+			string share = champions ? $"C{start:yyyyMMddHHmm}-{k}" : $"S{start:yyyyMMddHHmm}-{tier}-{k}";
+			Random rnd = new Random(start.Year * 100_000 + start.DayOfYear * 100 + start.Hour * 4 + k + (champions ? 0 : 7919 * (tier + 1)));
 			HashSet<(int year, int team)> own = members.SelectMany(m => AiTeams.TeamYearsOf(LineupCards(m.s.UserCode))).ToHashSet();
 			IEnumerable<int> DeckCards(AiTeam d)
 			{
 				Lineup l = Lineup.Parse(d.Lineup);
 				return l.Batters.Concat(l.Pitchers).Where(i => i != 0);
 			}
-			List<AiTeam> decks = AiTeams.Decks(LeagueRules.ChampionsTier).Where(d => !own.Contains(AiTeams.TeamYearOf(DeckCards(d))))
-				.OrderBy(_ => rnd.Next()).Take(LeagueRules.Clubs - members.Count).ToList();
+			bool deckTier = champions || AiTeams.HasDecks(tier);
+			List<AiTeam> decks = deckTier
+				? AiTeams.Decks(tier).Where(d => !own.Contains(AiTeams.TeamYearOf(DeckCards(d)))).OrderBy(_ => rnd.Next()).Take(LeagueRules.Clubs - members.Count).ToList()
+				: new List<AiTeam>();
+			List<int> fixedSlots = deckTier ? new List<int>()
+				: Enumerable.Range(0, LeagueRules.Clubs - 1).OrderBy(_ => rnd.Next()).Take(LeagueRules.Clubs - members.Count).ToList();
 			int[] places = Enumerable.Range(0, LeagueRules.Clubs).OrderBy(_ => rnd.Next()).ToArray();
 			uint aiBase = members[0].s.UserCode;
 			List<LeagueClub> clubs = new List<LeagueClub>();
@@ -513,6 +545,12 @@ namespace Ma9MServer
 					AiTeam d = decks[i - members.Count];
 					clubs.Add(new LeagueClub { Index = at, Name = d.Name, Emblem = d.Emblem, Owner = AiOwner(aiBase, at), Lineup = d.Lineup, Ball = d.Ball, AiKey = AiTeams.KeyOf(d) });
 				}
+				else if (i - members.Count < fixedSlots.Count)
+				{
+					int slot = fixedSlots[i - members.Count];
+					AiTeam t = AiTeams.Get(tier, slot);
+					clubs.Add(new LeagueClub { Index = at, Name = t.Name, Emblem = t.Emblem, Owner = AiOwner(aiBase, at), Lineup = t.Lineup, Ball = t.Ball, AiKey = FixedKeyBase - slot });
+				}
 				else
 				{
 					// Fewer decks than places (not enough built): the highest fixed clubs fill in (메이저's; 루키's with six tiers).
@@ -525,7 +563,7 @@ namespace Ma9MServer
 			{
 				LeagueState next = new LeagueState
 				{
-					UserCode = m.s.UserCode, Tier = LeagueRules.ChampionsTier, Season = m.s.Season + 1, Start = start, NextGame = 1, FirstGame = 1, LastGame = 0,
+					UserCode = m.s.UserCode, Tier = tier, Season = m.s.Season + 1, Start = start, NextGame = 1, FirstGame = 1, LastGame = 0,
 					PostSlot = 1, NextTier = -1, Share = share
 				};
 				foreach (LeagueClub c in clubs)
@@ -537,11 +575,13 @@ namespace Ma9MServer
 					next.Clubs.Add(x);
 				}
 				s_store.Save(next);
-				s_store.SetTeamGrade(m.s.UserCode, LeagueRules.TierGrade[LeagueRules.ChampionsTier]);
+				s_store.SetTeamGrade(m.s.UserCode, LeagueRules.TierGrade[tier]);
+				// A team that went down keeps only the traits the new league's CP allows (as NewLeague).
+				if (m.s.Tier > tier) TeamPropertyHandlers.TrimToCp(m.s.UserCode, LeagueRules.TraitPoints[tier], $"{LeagueRules.TierNames[tier]} 리그로 내려가");
 				// CP left to spend in the new league: the lobby says so once (systems session, 2026-11-15).
-				TeamPropertyHandlers.NoteSpareCp(m.s.UserCode, m.s.Tier < LeagueRules.ChampionsTier ? LeagueRules.TierNames[LeagueRules.ChampionsTier] : null);
+				TeamPropertyHandlers.NoteSpareCp(m.s.UserCode, m.s.Tier < tier ? LeagueRules.TierNames[tier] : null);
 			}
-			ServerLog.Info($"league: 챔피언스 {share} formed from {start:MM-dd HH:mm}: {string.Join(", ", clubs.Select(c => $"{c.Index}:{c.Name}{(c.IsHuman ? "(계정)" : string.Empty)}"))}");
+			ServerLog.Info($"league: {LeagueRules.TierNames[tier]} {share} formed from {start:MM-dd HH:mm}: {string.Join(", ", clubs.Select(c => $"{c.Index}:{c.Name}{(c.IsHuman ? "(계정)" : string.Empty)}"))}");
 		}
 
 		private static LeagueState NewLeague(uint user, string name, byte emblem, int tier, int season, DateTime start, int firstGame)
@@ -909,8 +949,10 @@ namespace Ma9MServer
 				}
 			}
 			// 팀 특성, outside the league reference: a real team's saved points, each AI club's 90% build.
-			TraitEffects.Effect[] traits = s.Clubs.Select(c => c.IsHuman ? TraitEffects.Of(c.Owner)
-				: TraitEffects.FromPoints(AiTeamOf(s, c)?.Traits ?? new Dictionary<byte, byte>())).ToArray();
+			// The pitching tree's share follows the season's ball (TraitEffects.PitchScale, systems session 2026-11-18).
+			double traitCor = BallEffect.CorOf(s);
+			TraitEffects.Effect[] traits = s.Clubs.Select(c => c.IsHuman ? TraitEffects.Of(c.Owner, traitCor)
+				: TraitEffects.FromPoints(AiTeamOf(s, c)?.Traits ?? new Dictionary<byte, byte>(), traitCor)).ToArray();
 			if (raw) return (teams, lineups, traits);
 			// League reference over the whole league.
 			TeamStrength.ApplyLeagueReference(teams);

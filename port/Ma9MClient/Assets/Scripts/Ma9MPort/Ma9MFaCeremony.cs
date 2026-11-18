@@ -290,7 +290,8 @@ public class Ma9MFaCeremony : MonoBehaviour
 		// Fewer words rather than smaller letters when long names would need a third line (user 11-17 18:1x: "글씨 크기를 조절하기
 		// 보다는" … "스크롤을 생성할지, 글씨 양을 줄일지"): the "(이하 …)" parts go first.
 		string club = m_info.toClub ?? "우리 구단", who = m_info.playerName ?? "선수";
-		string intro = club + "(이하 \"구단\")과 " + who + "(이하 \"선수\")는 다음과 같이 계약한다.";
+		// The particles follow the names before the brackets (11-18, tester 두산 불편 52: "잠실허슬두(이하 "구단")과" → "와").
+		string intro = club + "(이하 \"구단\")" + (Batchim(club) ? "과 " : "와 ") + who + "(이하 \"선수\")" + (Batchim(who) ? "은" : "는") + " 다음과 같이 계약한다.";
 		UILabel introLabel = Text(paper, intro, new Vector3(-pw * 0.5f + 34f, ph * 0.5f - 104f, -1f), 13f, soft, UIWidget.Pivot.Left, pw - 68f, 2);
 		if (introLabel.transform.localScale.x < 13f - 0.01f)
 		{
@@ -472,9 +473,9 @@ public class Ma9MFaCeremony : MonoBehaviour
 		// On the terms ribbon's right end (11-17: above it the hint sat on the answer).
 		UILabel hint = Settle(Text(m_scene, "탭하여 계속", new Vector3(GameRight - 56f, m_min.y + 40f, ZText - 1f), 13f, new Color(1f, 1f, 1f, 0.85f), UIWidget.Pivot.Center));
 		StartCoroutine(Blink(hint));
-		float end = Time.time + 12f;
+		// On only at a tap, like the contract (11-18, tester 두산 불편 50: "탭하여 계속" closed by itself after 12 s).
 		m_tapped = false;
-		while (!m_tapped && !m_finished && Time.time < end)
+		while (!m_tapped && !m_finished)
 		{
 			yield return null;
 		}

@@ -74,6 +74,11 @@ namespace Ma9MServer
 				// Dev (systems session, 2026-11-15): 공인구 draws, storage and popup text (SeasonBall); use a copy.
 				Environment.Exit(SeasonBall.SelfTest(Path.Combine(dataDir, "ma9m.db")));
 			}
+			if (Array.IndexOf(args, "--sharedtest") >= 0)
+			{
+				// Dev (systems session, 2026-11-18): shared leagues in every tier (LeagueRules.SharedAll) — 편성, a season, the next 편성; use a copy.
+				Environment.Exit(SharedSelfTest.Run(db, gameData, Path.Combine(dataDir, "ma9m.db")));
+			}
 			if (Array.IndexOf(args, "--championstest") >= 0)
 			{
 				// Dev (systems session, 2026-10-28): 챔피언스 — the close, the shared league's 편성, a season of it and the next 편성; use a copy.

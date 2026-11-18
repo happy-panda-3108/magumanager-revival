@@ -1003,7 +1003,8 @@ namespace Ma9MServer
 			int[] opps = Enumerable.Range(0, x.Teams.Length).Where(j => j != x.Me).ToArray();
 			GameEnv env = s_data.Env;
 			LeagueState s = x.S;
-			TraitEffects.Effect[] traits = s.Clubs.Select(c => c.IsHuman ? TraitEffects.Of(c.Owner) : TraitEffects.FromPoints(AiTeamOf(s, c)?.Traits ?? new Dictionary<byte, byte>())).ToArray();
+			// The pitching tree's share by the season's ball, as the league plays it (TraitEffects.PitchScale, 2026-11-18).
+			TraitEffects.Effect[] traits = s.Clubs.Select(c => c.IsHuman ? TraitEffects.Of(c.Owner, x.Cor) : TraitEffects.FromPoints(AiTeamOf(s, c)?.Traits ?? new Dictionary<byte, byte>(), x.Cor)).ToArray();
 			double[] wins = new double[lineups.Count];
 			double[][] each = new double[lineups.Count][];
 			for (int k = 0; k < lineups.Count; k++)
