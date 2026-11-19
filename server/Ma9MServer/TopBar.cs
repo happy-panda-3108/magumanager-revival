@@ -61,7 +61,10 @@ namespace Ma9MServer
 				int shown = Math.Min(s.NextGame, LeagueRules.Games);
 				info.in_broadcast.n = 0;
 				bool othersGame = false;
-				if (LeagueHandlers.BroadcastWindow(s, now) is (int live, double left))
+				// 2026-11-19 (user 21:3x, 11-18 question 6 — AI testers NC 28 · LG 106 · 쌍방울 · 자급자족: a red 경기중 for another club's
+				// postseason game): "우리 팀 경기가 아니면 다음 경기까지의 시간이 나오는걸로 합시다". Only the user's own game is 경기중; in a
+				// slot of the others' series the bar counts down to the club's next game (the else branch).
+				if (LeagueHandlers.BroadcastWindow(s, now) is (int live, double left) && !OthersGame(s, live))
 				{
 					// The game started less than 5 minutes ago: 경기중 and the 중계 button, also after another menu
 					// (user, 2026-10-21). The time is what is left of the 5 minutes; then the client asks again.

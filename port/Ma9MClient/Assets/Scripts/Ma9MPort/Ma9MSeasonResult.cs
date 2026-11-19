@@ -43,6 +43,25 @@ public class Ma9MSeasonResult : MonoBehaviour
 		return true;
 	}
 
+	// Dev (remote "seasonresult <file>", systems session 2026-11-19): the screen with a result from a file, in the lobby.
+	public static string Test(string file)
+	{
+		string json;
+		try
+		{
+			json = System.IO.File.ReadAllText(file, System.Text.Encoding.UTF8).Trim();
+		}
+		catch (Exception e)
+		{
+			return "error " + e.Message;
+		}
+		if (!Enqueue(json))
+		{
+			return "error not a result (JSON object)";
+		}
+		return TryShow() ? "ok shown" : "ok queued (the lobby shows it when it can)";
+	}
+
 	// Opens the next result; false while the lobby or another popup is in the way (the lobby tries again).
 	public static bool TryShow()
 	{
@@ -201,14 +220,10 @@ public class Ma9MSeasonResult : MonoBehaviour
 		{
 			Add("최종 순위", PageStandings);
 			List<JsonData> titles = A(data, "titles");
-			if (titles.Exists(t => !B(t, "p")))
-			{
-				Add("타자 타이틀", page => PageTitles(page, titles.FindAll(t => !B(t, "p"))));
-			}
-			if (titles.Exists(t => B(t, "p")))
-			{
-				Add("투수 타이틀", page => PageTitles(page, titles.FindAll(t => B(t, "p"))));
-			}
+			// 2026-11-19 23:0x (user: "시상식용 계단 같은걸 쓰잖아? 거기에 카드를 올려놓고, 1~3등이 어떤 성적으로 1~3등인지, 소속팀은 어디인지"):
+			// four titles to a page, each on a podium (PageTitles).
+			AddTitlePages("타자 타이틀", titles.FindAll(t => !B(t, "p")));
+			AddTitlePages("투수 타이틀", titles.FindAll(t => B(t, "p")));
 			if (Get(data, "mvp") != null && A(Get(data, "mvp"), "a").Count > 0)
 			{
 				Add("리그 MVP", PageMvp);
@@ -234,6 +249,18 @@ public class Ma9MSeasonResult : MonoBehaviour
 	{
 		m_names.Add(name);
 		m_builders.Add(builder);
+	}
+
+	private const int PodiumsPerPage = 4;
+
+	private void AddTitlePages(string name, List<JsonData> titles)
+	{
+		int pages = (titles.Count + PodiumsPerPage - 1) / PodiumsPerPage;
+		for (int p = 0; p < pages; p++)
+		{
+			List<JsonData> part = titles.GetRange(p * PodiumsPerPage, Mathf.Min(PodiumsPerPage, titles.Count - p * PodiumsPerPage));
+			Add(pages > 1 ? name + " " + (p + 1) + "/" + pages : name, page => PageTitles(page, part));
+		}
 	}
 
 	private void Show(int page)
@@ -329,6 +356,10 @@ public class Ma9MSeasonResult : MonoBehaviour
 
 	private void Update()
 	{
+		if (m_pops.Count > 0)
+		{
+			PopStep();
+		}
 		if (m_money != null && m_moneyAt > 0f)
 		{
 			float t = Mathf.Clamp01((Time.realtimeSinceStartup - m_moneyAt) / 1.2f);
@@ -357,7 +388,8 @@ public class Ma9MSeasonResult : MonoBehaviour
 		{
 			Text(page, heads[i], new Vector3(xs[i], top, ZText), 13f, Grey, i == 1 || i == 6 ? UIWidget.Pivot.Left : UIWidget.Pivot.Center);
 		}
-		Box(page, new Vector3(-150f, top - 14f, ZBox), 470f, 1f, new Color(1f, 1f, 1f, 0.25f));
+		// The line and my club's band reach x 100 (from 85): "포스트시즌" ends near 95 (textcheck, tester_1119g: 15 px past the band).
+		Box(page, new Vector3(-143f, top - 14f, ZBox), 486f, 1f, new Color(1f, 1f, 1f, 0.25f));
 		JsonData mine = null;
 		for (int i = 0; i < clubs.Count; i++)
 		{
@@ -367,7 +399,7 @@ public class Ma9MSeasonResult : MonoBehaviour
 			if (me)
 			{
 				mine = c;
-				Box(page, new Vector3(-150f, y, ZMark), 470f, row - 3f, new Color(1f, 0.8f, 0.2f, 0.22f));
+				Box(page, new Vector3(-143f, y, ZMark), 486f, row - 3f, new Color(1f, 0.8f, 0.2f, 0.22f));
 			}
 			Color colour = me ? Gold : Color.white;
 			int w = I(c, "w"), l = I(c, "l");
@@ -391,53 +423,178 @@ public class Ma9MSeasonResult : MonoBehaviour
 			Text(page, I(mine, "r") + "위 · " + I(mine, "w") + "승 " + I(mine, "l") + "패 " + I(mine, "d") + "무", new Vector3(250f, -16f, ZText), 14f, Grey, UIWidget.Pivot.Center);
 		}
 		string verdict = S(m_data, "verdict");
-		Text(page, verdict, new Vector3(250f, -62f, ZText), verdict.Length > 4 ? 26f : 36f, verdict == "강등" ? Down : Gold, UIWidget.Pivot.Center, 236f);
-		Text(page, S(m_data, "verdict2"), new Vector3(250f, -102f, ZText), 13f, Color.white, UIWidget.Pivot.Center, 236f);
-		Text(page, S(m_data, "next"), new Vector3(250f, -142f, ZText), 13f, Sky, UIWidget.Pivot.Center, 236f, 2);
+		string stakes = S(m_data, "verdict3");
+		// With the stakes line the lower lines move up a little to make room (tester_1119g: four lines from -102 down filled the box).
+		float lift = stakes.Length > 0 ? 8f : 0f;
+		Text(page, verdict, new Vector3(250f, -62f + lift, ZText), verdict.Length > 4 ? 26f : 36f, verdict == "강등" ? Down : Gold, UIWidget.Pivot.Center, 236f);
+		Text(page, S(m_data, "verdict2"), new Vector3(250f, -102f + lift, ZText), 13f, Color.white, UIWidget.Pivot.Center, 236f);
+		// 2026-11-19 23:0x (user: "포스트시즌 최종 4위 안이면 트리플A 승격" 한 줄 … "그리고 11월을 아래로 내려서 좀 쉽게 읽히도록"): what the
+		// post-season decides (server LeagueAwards.PostStakes), and the date on a line of its own ("포스트시즌: 준플레이오프부터 · 11월 /
+		// 18일 01:00" broke inside the date).
+		if (stakes.Length > 0)
+		{
+			// Two lines on purpose, broken before the tier (tester_1119g: one line did not fit the 236 and wrapped as "…트리플A / 승격").
+			Text(page, stakes.Replace(" 안이면 ", " 안이면\n"), new Vector3(250f, -120f, ZText), 13f, Up, UIWidget.Pivot.Center, 236f, 2);
+		}
+		Text(page, Ma9MDateLine(S(m_data, "next")), new Vector3(250f, -157f, ZText), 13f, Sky, UIWidget.Pivot.Center, 236f, 2);
 	}
 
-	// Up to eight titles, four to a row: the winner's card, name and club, the value, 2위 and 3위, and what my club got.
+	// "포스트시즌: 준플레이오프부터 · 11월 18일 01:00" → the date on the second line.
+	private static string Ma9MDateLine(string next)
+	{
+		int cut = next.LastIndexOf(" · ", StringComparison.Ordinal);
+		return cut > 0 ? next.Substring(0, cut) + "\n" + next.Substring(cut + 3) : next;
+	}
+
+	// 2026-11-19 23:0x (user: "보통 시상식 같은 경우 올림픽이나 다른 인게임 시상식에서도 그렇지만 시상식용 계단 같은걸 쓰잖아? 거기에 카드를
+	// 올려놓고, 1~3등이 어떤 성적으로 1~3등인지, 소속팀은 어디인지 이런식으로 나왔으면 함. 지금 결산 이미지는 정보를 한 눈에 보기는 편하지만,
+	// 시상식이라는 이미지는 없음"): up to four titles, two to a row, each a podium — 2위 on the left, 1위 in the middle on the highest
+	// step, 3위 on the right; on each step the card, the player, his record and his club. What my club got from the title is on the
+	// title's line as "우리 구단 +62만 MP" (11-18 question 7, AI tester LG: the old "+62만" under the winner's card read as his own prize).
+	// The cards come up onto the steps one by one, 3위 first (PopIn).
+	private const float CellW = 376f, CellH = 160f;
+
+	private static readonly Color[] StepColour =
+	{
+		new Color(0.78f, 0.6f, 0.16f, 0.92f),   // 1위 gold
+		new Color(0.56f, 0.6f, 0.68f, 0.92f),   // 2위 silver
+		new Color(0.6f, 0.38f, 0.2f, 0.92f)     // 3위 bronze
+	};
+
+	// 23:5x (user: "등수 1, 2, 3을 시상대 박스 가운데 정렬로 … 한 가운데에 등수가 박혀있는 느낌으로, 그리고 17 만 있는게 아니라 17승, 24홀드,
+	// 197탈삼진 이런식으로 … 공동 1위가 있는 경우 둘 다 1등 시상대를 쓰게하고 시상대에 빈칸이 없게끔 해줘. 공동 2위의 경우 둘 다 2등 시상대를
+	// 쓰게 하고"): the three steps hold the first three players in rank order — the middle, then the left, then the right — and each
+	// step is as high and coloured as its player's rank (two co-winners: two gold steps, the next player on the third). A step only
+	// stands where a player does. The rank is set in the middle of its step, embossed; the record carries its unit (17승, 197탈삼진,
+	// 타율 .374).
+	private static readonly float[] StepHigh = { 36f, 27f, 20f };
+
+	private static readonly float[] StepDigit = { 24f, 19f, 15f };
+
+	// The unit after a counting record; the rate titles (타율, 평균자책, WHIP …) put their name before the number instead.
+	private static readonly Dictionary<string, string> RecordUnit = new Dictionary<string, string>
+	{
+		{ "홈런", "홈런" }, { "타점", "타점" }, { "득점", "득점" }, { "안타", "안타" }, { "도루", "도루" },
+		{ "승리", "승" }, { "탈삼진", "탈삼진" }, { "홀드", "홀드" }, { "세이브", "세이브" }
+	};
+
 	private void PageTitles(GameObject page, List<JsonData> titles)
 	{
-		const float cellW = 186f, cellH = 154f;
-		for (int i = 0; i < titles.Count && i < 8; i++)
+		for (int i = 0; i < titles.Count && i < PodiumsPerPage; i++)
 		{
 			JsonData t = titles[i];
-			float cx = -279f + (i % 4) * cellW, cy = 56f - (i / 4) * (cellH + 4f);
+			string title = S(t, "n");
+			float cx = -190f + (i % 2) * (CellW + 4f), cy = 60f - (i / 2) * (CellH + 6f);
 			List<JsonData> first = A(t, "a"), second = A(t, "b"), third = A(t, "c");
 			int got = I(t, "mp") * first.FindAll(w => B(w, "me")).Count + I(t, "mp2") * second.FindAll(w => B(w, "me")).Count + I(t, "mp3") * third.FindAll(w => B(w, "me")).Count;
-			bool mineFirst = first.Exists(w => B(w, "me"));
-			Box(page, new Vector3(cx, cy, ZBox), cellW - 6f, cellH - 4f, mineFirst ? new Color(0.5f, 0.38f, 0.05f, 0.55f) : new Color(0f, 0f, 0f, 0.38f));
-			Text(page, S(t, "n"), new Vector3(cx - 84f, cy + 62f, ZText), 16f, Sky, UIWidget.Pivot.Left);
-			Text(page, S(t, "v"), new Vector3(cx + 84f, cy + 62f, ZText), 18f, Color.white, UIWidget.Pivot.Right);
+			bool mine = got > 0;
+			Box(page, new Vector3(cx, cy, ZBox), CellW, CellH, mine ? new Color(0.42f, 0.32f, 0.05f, 0.5f) : new Color(0f, 0f, 0f, 0.38f));
+			float headY = cy + CellH / 2f - 14f, left = cx - CellW / 2f + 10f;
+			UILabel head = Text(page, title, new Vector3(left, headY, ZText), 16f, Sky, UIWidget.Pivot.Left);
+			if (mine)
+			{
+				Text(page, "우리 구단 +" + Man(got) + " MP", new Vector3(cx + CellW / 2f - 10f, headY, ZText), 13f, Gold, UIWidget.Pivot.Right);
+			}
 			if (first.Count == 0)
 			{
-				Text(page, "수상자 없음", new Vector3(cx, cy, ZText), 13f, Grey, UIWidget.Pivot.Center);
+				Text(page, "수상자 없음", new Vector3(cx, cy + 6f, ZText), 15f, Grey, UIWidget.Pivot.Center);
+				Text(page, S(t, "v"), new Vector3(cx, cy - 18f, ZText), 12f, Grey, UIWidget.Pivot.Center, CellW - 40f);
 				continue;
 			}
-			JsonData winner = first[0];
-			Card(page, I(winner, "c"), new Vector3(cx - 52f, cy - 10f, ZText), 0.66f);
-			float x = cx - 10f;
-			Text(page, S(winner, "n"), new Vector3(x, cy + 36f, ZText), 15f, B(winner, "me") ? Gold : Color.white, UIWidget.Pivot.Left, 92f);
-			Text(page, "'" + I(winner, "y").ToString("00") + " " + S(winner, "t"), new Vector3(x, cy + 20f, ZText), 11f, Grey, UIWidget.Pivot.Left, 92f);
-			int more = first.Count - 1 + I(t, "xa");
-			if (more > 0)
+			// The players in rank order with their rank and record: 1위 (all listed winners), 2위, 3위.
+			List<KeyValuePair<JsonData, int>> ranked = new List<KeyValuePair<JsonData, int>>();
+			first.ForEach(w => ranked.Add(new KeyValuePair<JsonData, int>(w, 1)));
+			second.ForEach(w => ranked.Add(new KeyValuePair<JsonData, int>(w, 2)));
+			third.ForEach(w => ranked.Add(new KeyValuePair<JsonData, int>(w, 3)));
+			int winners = first.Count + I(t, "xa");
+			// A tie the steps cannot all show: how many share it, by the title's name.
+			string shared = winners > 1 ? "공동 1위 " + winners + "명" : second.Count > 1 ? "공동 2위 " + second.Count + "명" : string.Empty;
+			if (shared.Length > 0)
 			{
-				Text(page, "공동 " + (first.Count > 1 ? S(first[1], "n") : string.Empty) + (more > 1 ? " 외 " + (more - 1) + "명" : string.Empty), new Vector3(x, cy + 6f, ZText), 11f, Grey, UIWidget.Pivot.Left, 92f);
+				Text(page, shared, new Vector3(left + head.relativeSize.x * 16f + 8f, headY, ZText), 12f, Grey, UIWidget.Pivot.Left);
 			}
-			float y = cy - 10f;
-			foreach (KeyValuePair<string, List<JsonData>> place in new[] { new KeyValuePair<string, List<JsonData>>("2위 ", second), new KeyValuePair<string, List<JsonData>>("3위 ", third) })
+			string[] value = { S(t, "v"), S(t, "v2"), S(t, "v3") };
+			float floor = cy - CellH / 2f + 4f;
+			// Middle, left, right.
+			float[] slotX = { cx, cx - 122f, cx + 122f };
+			for (int slot = 0; slot < 3 && slot < ranked.Count; slot++)
 			{
-				if (place.Value.Count > 0)
-				{
-					JsonData who = place.Value[0];
-					Text(page, place.Key + S(who, "n") + (place.Value.Count > 1 ? " 외" : string.Empty), new Vector3(x, y, ZText), 11f, B(who, "me") ? Gold : Grey, UIWidget.Pivot.Left, 92f);
-					y -= 15f;
-				}
+				JsonData p = ranked[slot].Key;
+				int rank = ranked[slot].Value, r = rank - 1;
+				float x = slotX[slot], high = StepHigh[r], top = floor + high;
+				Box(page, new Vector3(x, floor + high / 2f, ZBox), 112f, high, StepColour[r]);
+				Box(page, new Vector3(x, top - 1f, ZMark), 112f, 2f, new Color(1f, 1f, 1f, 0.35f));
+				UILabel digit = Text(page, rank.ToString(), new Vector3(x, floor + high / 2f, ZText), StepDigit[r], Color.white, UIWidget.Pivot.Center);
+				digit.effectStyle = UILabel.Effect.Shadow;
+				digit.effectColor = new Color(0f, 0f, 0f, 0.55f);
+				// The card and its lines rise together from the step (PopIn): the card on the left of the step, its lines on the right,
+				// from the card's top down — the player, the record, the club (two lines if long).
+				GameObject stand = NGUITools.AddChild(page);
+				stand.name = "Place" + rank;
+				stand.transform.localPosition = new Vector3(x, top, 0f);
+				const float cardScale = 0.46f, cardH = 127f * cardScale;
+				Card(stand, I(p, "c"), new Vector3(-36f, cardH / 2f + 1f, ZText), cardScale);
+				const float textX = -13f, textW = 77f;
+				float cardTop = cardH + 1f;
+				Text(stand, S(p, "n"), new Vector3(textX, cardTop - 7f, ZText), 13f, B(p, "me") ? Gold : Color.white, UIWidget.Pivot.Left, textW);
+				Record(stand, title, value[r], new Vector3(textX, cardTop - 24f, ZText), textW);
+				Text(stand, S(p, "t"), new Vector3(textX, cardTop - 42f, ZText), 11f, B(p, "me") ? Gold : Grey, UIWidget.Pivot.Left, textW, 2);
+				// The right step first, then the left, then the middle.
+				PopIn(stand.transform, i * 0.25f + (slot == 2 ? 0f : slot == 1 ? 0.12f : 0.24f));
 			}
-			if (got > 0)
+		}
+	}
+
+	// "17승", "197탈삼진"; a rate title's name in small grey before its number ("타율 .374", "평균자책 1.34").
+	private void Record(GameObject parent, string title, string value, Vector3 pos, float width)
+	{
+		if (string.IsNullOrEmpty(value))
+		{
+			return;
+		}
+		string unit;
+		if (RecordUnit.TryGetValue(title, out unit))
+		{
+			Text(parent, value + unit, pos, 14f, Sky, UIWidget.Pivot.Left, width);
+			return;
+		}
+		UILabel name = Text(parent, title, pos, 11f, Grey, UIWidget.Pivot.Left);
+		float w = name.relativeSize.x * 11f + 3f;
+		Text(parent, value, pos + new Vector3(w, 0f, 0f), 14f, Sky, UIWidget.Pivot.Left, Mathf.Max(20f, width - w));
+	}
+
+	// ---- the cards rising onto the steps ---------------------------------------------------------------------------
+
+	private readonly List<KeyValuePair<Transform, float>> m_pops = new List<KeyValuePair<Transform, float>>();
+
+	private const float PopTime = 0.3f;
+
+	private void PopIn(Transform stand, float delay)
+	{
+		stand.localScale = new Vector3(1f, 0.001f, 1f);
+		m_pops.Add(new KeyValuePair<Transform, float>(stand, Time.realtimeSinceStartup + delay));
+	}
+
+	private void PopStep()
+	{
+		float now = Time.realtimeSinceStartup;
+		for (int k = m_pops.Count - 1; k >= 0; k--)
+		{
+			Transform stand = m_pops[k].Key;
+			if (stand == null)
 			{
-				Text(page, "+" + Man(got) + " MP", new Vector3(x, cy - 58f, ZText), 14f, Gold, UIWidget.Pivot.Left);
+				m_pops.RemoveAt(k);
+				continue;
+			}
+			float t = Mathf.Clamp01((now - m_pops[k].Value) / PopTime);
+			// Up from the step with a little overshoot (ease-out-back).
+			float u = t - 1f;
+			float s = 1f + 2.70158f * u * u * u + 1.70158f * u * u;
+			stand.localScale = new Vector3(1f, Mathf.Max(0.001f, s), 1f);
+			if (t >= 1f)
+			{
+				stand.localScale = Vector3.one;
+				m_pops.RemoveAt(k);
 			}
 		}
 	}
@@ -550,7 +707,10 @@ public class Ma9MSeasonResult : MonoBehaviour
 		return box;
 	}
 
-	// A label in the lobby popup's font. width > 0: longer text is shrunk to it (one line) or wrapped (lines > 1).
+	private const float LetterRise = 0.4f;
+
+	// A label in the lobby popup's font, its letters centred on pos (LetterRise). width > 0: longer text is shrunk to it (one line) or
+	// wrapped (lines > 1).
 	private UILabel Text(GameObject parent, string text, Vector3 pos, float size, Color colour, UIWidget.Pivot pivot, float width = 0f, int lines = 1)
 	{
 		GameObject go = UnityEngine.Object.Instantiate(m_popup.label_SubDescription.gameObject) as GameObject;
@@ -569,7 +729,11 @@ public class Ma9MSeasonResult : MonoBehaviour
 		// The pivot before the place: this NGUI's pivot setter moves the widget so its picture stays where it was
 		// (set after the place, every column of the first draft was off by half its own width).
 		label.pivot = pivot;
-		go.transform.localPosition = pos;
+		// 2026-11-19 23:5x (user: "순위, 엠블렘, 기타 등등의 글들이 높이가 안 맞는 것 같은데, 그리고 띠상자 바깥으로 글이 삐져 나가는 것 같음 …
+		// 매번 지적 대상인데, 변하는게 없어"): this font's letters stand 0.4 × the size above a centre-pivot label's place (measured on
+		// tester_1119h: 15 pt names 9 px over their row and its emblem, the 20 pt "1" 12 px over its step's middle). Placed that much
+		// lower, a label's letters are centred where it is put — on its row, its band, its step.
+		go.transform.localPosition = pos - new Vector3(0f, LetterRise * size, 0f);
 		if (width > 0f && lines <= 1)
 		{
 			// One line that is too long: smaller letters, down to 60 %.

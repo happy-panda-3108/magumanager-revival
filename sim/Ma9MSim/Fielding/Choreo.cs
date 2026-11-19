@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Ma9MSim.Fielding
 {
@@ -24,11 +25,16 @@ namespace Ma9MSim.Fielding
 		private readonly int[] m_tagSeg = new int[4];   // per runner slot: his Tag segment (-1 none)
 		private readonly double[] m_lateBall = new double[4];   // per runner slot: a throw drawn late for him (NaN none)
 		private readonly RunnerSkill[] m_runSk = new RunnerSkill[4];
+		// Bunts (2026-11-19): who takes a throw at first, second and third when it is not the usual man (-1 the usual,
+		// Receiver), and the runner a throw is a tag play on (-1 none: by the usual rule).
+		private readonly int[] m_cover = { -1, -1, -1, -1 };
+		private int m_tagRunner = -1;
 
 		public PlayScript Build(BallPlan plan, in BallPlan.Result r, FieldOutcome o, Defence d, BatterRun batter, RunnerSkill[] run, bool[] on)
 		{
 			s = new PlayScript { Ball = plan.Ball };
 			D = d;
+			ClearBunt();
 			for (int f = 0; f < Geometry.FielderCount; f++)
 			{
 				m_pos[f] = d.Pos[f];
@@ -98,6 +104,7 @@ namespace Ma9MSim.Fielding
 		{
 			s = new PlayScript { Ball = new BattedBall { Ev = 0, La = 0, H = 45 } };
 			D = d;
+			ClearBunt();
 			for (int f = 0; f < Geometry.FielderCount; f++)
 			{
 				m_pos[f] = d.Pos[f];
@@ -162,6 +169,212 @@ namespace Ma9MSim.Fielding
 			s.Add(safe ? SegKind.Safe : SegKind.Out, actor, tag, tag + 0.8, bag, bag, arg: toBase);
 			s.End = (float)(tag + 1.6);
 			return s;
+		}
+
+		// ------------------------------------------------------------------ bunts
+
+		// A bunt, as the engine called it (user, 2026-11-19: "번트 장면때 투수가 뛰어와서 공을 잡은 상황이야. 근데 어디에도 공을
+		// 던지지 않고 10초정도 가만히 있다가 아웃카운트가 올라가더라"). Bunts had no script: the broadcast's own AI played them
+		// from four fixed presets that named the pitcher a backup on every one and then also sent him to cover a base (home,
+		// on the bunts to the catcher and to the pitcher), so whoever picked it up was not the man asked to throw it.
+		//   kind: SacBunt (the batter out at first, the runners up a base), BuntForce (the lead runner forced at the next
+		//   base, the batter safe at first), BuntHit (beaten out, everybody safe). dest: the engine's (PlayInfo.Dest).
+		//   h (0 the first-base line, 90 the third-base line) and stop (metres from the plate where it would die) place it.
+		// Who fields it: whoever gets the throw to first there soonest (BallPlan.MakeGround), with the corners in and
+		// charging and the pitcher coming down off the mound — the catcher on a dribbler in front of the plate, the pitcher
+		// on one back up the middle, the first and third basemen down their lines. With the first baseman charging, the
+		// second baseman covers first and the shortstop second; a third baseman who does not field it goes back to his bag.
+		public const double BuntLa = -20;
+
+		public PlayScript Bunt(Defence d, BatterRun batter, RunnerSkill[] run, bool[] on, int[] dest, Ma9MSim.PlayKind kind, double h, double stop)
+		{
+			Defence bd = BuntDefence(d, on, kind);
+			h = Math.Clamp(h, 2, 88);
+			BattedBall ball = new BattedBall { Ev = (float)BuntEv(stop), La = (float)BuntLa, H = (float)h };
+			BallPlan plan = BallPlan.Make(ball, bd, batter);
+			int f = plan.Fielder;
+			P at = plan.FieldPoint;
+			double tAt = plan.FieldTime;
+			if (stop < 1)
+			{
+				// A dribbler dead in front of the plate (the tables' slowest ball still rolls 6-7 m): it stops a few metres out
+				// and the catcher pounces on it.
+				f = Geometry.C;
+				at = P.Polar(2.6 + 0.8 * (h * 7 % 1), h);
+				tAt = Math.Max(0.6, bd.F[f].RunTime(Math.Max(0, bd.Pos[f].Dist(at) - 1.0)) + 0.1);
+			}
+			if (f < 0 || Geometry.IsOutfielder(f)) return null;
+			// A ball that has died before anyone gets there (a bunt nobody looked for) waits for him: he picks it up when
+			// he gets to it at his own pace.
+			double reachT = bd.F[f].RunTime(Math.Max(0, bd.Pos[f].Dist(at) - 1.0));
+			if (tAt < reachT + 0.05) tAt = reachT + 0.05;
+			BallPlan.Result r = new BallPlan.Result
+			{
+				Fielder = f, At = at, T = tAt, How = Catch.Charging,
+				Class = kind == Ma9MSim.PlayKind.BuntHit ? 1 : 0, InfieldHit = kind == Ma9MSim.PlayKind.BuntHit
+			};
+			FieldOutcome o = new FieldOutcome { Kind = kind, Ball = r, Hit = kind == Ma9MSim.PlayKind.BuntHit ? 1 : 0 };
+			for (int i = 0; i < 4; i++) o.Dest[i] = i == 0 || on[i] ? dest[i] : 0;
+			o.Outs = Enumerable.Range(0, 4).Count(i => (i == 0 || on[i]) && o.Dest[i] >= 5);
+
+			s = new PlayScript { Ball = ball };
+			D = bd;
+			ClearBunt();
+			for (int g = 0; g < Geometry.FielderCount; g++)
+			{
+				m_pos[g] = bd.Pos[g];
+				m_free[g] = bd.F[g].React;
+				m_busy[g] = false;
+			}
+			for (int i = 0; i < 4; i++) { m_tagSeg[i] = -1; m_lateBall[i] = double.NaN; m_runSk[i] = i == 0 ? batter.R : run[i]; }
+			// Covers: first by the second baseman (the first baseman by first when the second baseman has it), second by the
+			// shortstop (the second baseman when the shortstop has it), third by the third baseman (the shortstop when he has it).
+			// (A bunt nobody looked for: the first baseman never charged and takes it at his own bag.)
+			m_cover[1] = f == Geometry.B2 || (kind == Ma9MSim.PlayKind.BuntHit && f != Geometry.B1) ? Geometry.B1 : Geometry.B2;
+			m_cover[2] = f == Geometry.SS ? Geometry.B2 : Geometry.SS;
+			m_cover[3] = f == Geometry.B3 ? Geometry.SS : Geometry.B3;
+
+			// The play: on the batter at first, or on the lead runner (BuntForce) at the base he was forced to.
+			int slot = 0, baseNo = 1;
+			if (kind == Ma9MSim.PlayKind.BuntForce)
+			{
+				for (int b = 3; b >= 1; b--)
+				{
+					if (on[b] && o.Dest[b] >= 5 && o.Dest[b] <= 7) { slot = b; baseNo = o.Dest[b] - 4; break; }
+				}
+				if (slot == 0) return null;
+				// Not forced (first base was open): the man covering puts the tag on him.
+				bool forced = slot == 1 || (slot == 2 && on[1]) || (slot == 3 && on[1] && on[2]);
+				if (!forced) m_tagRunner = slot;
+			}
+			FielderSkill fs = bd.F[f];
+			P q = r.At;
+			double tg = r.T + 0.12;
+			double turn = baseNo == 2 && (f == Geometry.B1 || f == Geometry.Pit || f == Geometry.C) ? Resolver.Turn2 : 0;
+			double release = tg + fs.Release + turn;
+			double arrive = release + q.Dist(Geometry.Base[baseNo]) / fs.Arm;
+			int cover = m_cover[baseNo];
+			double coverAt = bd.F[cover].RunTime(bd.Pos[cover].Dist(Geometry.Base[baseNo]));
+			arrive = Math.Max(arrive, coverAt + 0.05);
+			o.Throws.Add(new Throw { From = f, Base = baseNo, Relay = -1, Runner = slot, Out = slot != 0 || o.Dest[0] >= 5, Arrive = arrive, Release = release, FromPoint = q });
+
+			// The runners: the batter out of the box a touch quicker after a bunt; the others go as it is put down.
+			o.Track[0] = new RunnerTrack { Set = true, From = 0, To = 1, Start = Math.Max(0.1, batter.Start - 0.08), Out = o.Dest[0] >= 5, End = double.NaN };
+			for (int b = 1; b <= 3; b++)
+			{
+				if (!on[b]) continue;
+				int dd = o.Dest[b];
+				o.Track[b] = dd == 0
+					? new RunnerTrack { Set = true, From = b, To = b, Start = double.NaN, Off = Resolver.Lead[b], Hold = true, End = double.NaN }
+					: new RunnerTrack { Set = true, From = b, To = dd >= 5 ? dd - 4 : dd, Start = 0.05, Off = Resolver.Lead[b], V0 = 1.5, Out = dd >= 5, End = double.NaN };
+			}
+
+			double held = BattedBall(plan, r, o);
+			double last = Throws(o, f, held, plan, r);
+			BuntHelpers(f, q, baseNo, last);
+			Runners(plan, r, o, batter, run, on, last);
+			s.End = Math.Max(s.End, (float)(last + 1.2));
+			return s;
+		}
+
+		private void ClearBunt()
+		{
+			for (int b = 0; b < 4; b++) m_cover[b] = -1;
+			m_tagRunner = -1;
+		}
+
+		// The fielders as a bunt is put down: the corners in (charging as it is shown; on a bunt nobody looked for, at their
+		// usual depth), the first baseman off the bag he held the runner on, the pitcher a few strides down off the mound,
+		// the middle infielders cheating toward the bags they cover. The corners are already moving (no read).
+		public static Defence BuntDefence(Defence d, bool[] on, Ma9MSim.PlayKind kind)
+		{
+			Defence b = new Defence { Extra = d.Extra };
+			Array.Copy(d.F, b.F, d.F.Length);
+			Array.Copy(d.Pos, b.Pos, d.Pos.Length);
+			bool surprise = kind == Ma9MSim.PlayKind.BuntHit;
+			// The pitcher is still finishing his delivery (a beat to get going); the catcher is right there.
+			b.Pos[Geometry.Pit] = P.Polar(16, 45);
+			b.Pos[Geometry.C] = new P(-1.0, -1.0);
+			b.F[Geometry.Pit].React = 0.35;
+			b.F[Geometry.C].React = 0.15;
+			b.Pos[Geometry.B3] = surprise ? P.Polar(28, 79) : on[2] && !on[1] ? P.Polar(23, 81) : P.Polar(19, 80);
+			b.Pos[Geometry.B1] = surprise ? P.Polar(27, 11) : on[1] ? P.Polar(22, 7) : P.Polar(20, 10);
+			b.Pos[Geometry.B2] = surprise ? b.Pos[Geometry.B2] : P.Polar(31, 17);
+			b.Pos[Geometry.SS] = surprise ? b.Pos[Geometry.SS] : P.Polar(34, 60);
+			if (!surprise)
+			{
+				b.F[Geometry.B1].React = 0.02;
+				b.F[Geometry.B3].React = 0.02;
+			}
+			return b;
+		}
+
+		// Exit speed that leaves a bunt (BuntLa) dead about `stop` metres out (the slowest the tables have: 10 m/s, ~6.7 m).
+		public static double BuntEv(double stop)
+		{
+			double Stop(double ev)
+			{
+				double d0 = Math.Max(0.5, Flight.Carry(ev, BuntLa));
+				double v = Flight.LandSpeed(ev, BuntLa) * Flight.HopKeep;
+				return Flight.GroundStop(v, d0);
+			}
+			double lo = Flight.EvMin, hi = 30;
+			if (Stop(lo) >= stop) return lo;
+			for (int k = 0; k < 30; k++)
+			{
+				double mid = (lo + hi) / 2;
+				if (Stop(mid) < stop) lo = mid; else hi = mid;
+			}
+			return (lo + hi) / 2;
+		}
+
+		// Where the engine's bunt went (its place is the broadcast's to choose; the result is the engine's):
+		// a sacrifice back to the pitcher, down either line or a dribbler the catcher takes; a bunt the lead runner is
+		// forced on is a firm one at the pitcher or a corner (not at the third baseman when the force is at third: he has to
+		// take that throw); one beaten out is dead on the third-base line or pushed past the pitcher.
+		public static (double h, double stop) BuntSpot(Ma9MSim.PlayKind kind, bool[] on, int[] dest, ref Rng g)
+		{
+			double u = g.Next(), a = g.Next(), c = g.Next();
+			switch (kind)
+			{
+				case Ma9MSim.PlayKind.BuntForce:
+				{
+					bool atThird = on[2] && dest[2] == 7;
+					if (u < (atThird ? 0.6 : 0.5)) return (38 + 14 * a, 13 + 3 * c);       // firm, at the pitcher
+					if (atThird || u < 0.8) return (10 + 10 * a, 12 + 3 * c);                // down the first-base line
+					return (70 + 8 * a, 12 + 2 * c);                                          // down the third-base line
+				}
+				case Ma9MSim.PlayKind.BuntHit:
+					if (u < 0.6) return (81 + 5 * a, 9 + 2.5 * c);                            // dead on the third-base line
+					return (24 + 8 * a, 15 + 2 * c);                                          // pushed past the pitcher
+				default:
+					if (u < 4.0 / 11) return (36 + 18 * a, 10 + 3 * c);                       // back to the pitcher
+					if (u < 7.0 / 11) return (72 + 12 * a, 9 + 3 * c);                        // down the third-base line
+					if (u < 10.0 / 11) return (8 + 12 * a, 9 + 3 * c);                        // down the first-base line
+					return (35 + 30 * a, 0);                                                  // a dribbler in front of the plate
+			}
+		}
+
+		// Everybody else on a bunt: the second baseman to first and the shortstop to second if no throw took them there, the
+		// third baseman back to third, the catcher to the plate; the right fielder backs up the throw to first, the centre
+		// fielder one to second, the left fielder one to third.
+		private void BuntHelpers(int fielder, P from, int thrownTo, double last)
+		{
+			// Each as far as he gets by then (an outfielder backing up does not run on after the play).
+			void Go(int g, P to, double by)
+			{
+				if (m_busy[g] || g == fielder || to.Dist(m_pos[g]) < 0.5) return;
+				Approach(g, to, by + 0.8, 0.3);
+				m_busy[g] = true;
+			}
+			double by = Math.Max(1.5, last);
+			if (m_cover[1] >= 0) Go(m_cover[1], BagSpot(1), by);
+			Go(m_cover[2] >= 0 ? m_cover[2] : Geometry.SS, BagSpot(2), by);
+			Go(Geometry.B3, BagSpot(3), by);
+			Go(Geometry.C, BagSpot(0), by);
+			P bag = Geometry.Base[thrownTo];
+			int back = thrownTo == 1 ? Geometry.RF : thrownTo == 2 ? Geometry.CF : Geometry.LF;
+			Go(back, Toward(Toward(bag, from, -12), m_pos[back], 2), by);
 		}
 
 		// ------------------------------------------------------------------ the batted ball
@@ -466,8 +679,9 @@ namespace Ma9MSim.Fielding
 		// MA9M_SECOND_COVER=0: the shortstop takes every throw in to second without a relay, as before 2026-11-11 (comparisons).
 		private static readonly bool OldSecondCover = Environment.GetEnvironmentVariable("MA9M_SECOND_COVER") == "0";
 
-		private static int Receiver(int baseNo, int thrower, P from, int cut)
+		private int Receiver(int baseNo, int thrower, P from, int cut)
 		{
+			if (baseNo >= 1 && baseNo <= 3 && m_cover[baseNo] >= 0 && m_cover[baseNo] != thrower) return m_cover[baseNo];
 			bool outfield = Geometry.IsOutfielder(thrower) || cut >= 0;
 			switch (baseNo)
 			{
@@ -540,7 +754,7 @@ namespace Ma9MSim.Fielding
 				// The runner from second thrown at third after the throw to first is never forced there (Resolver.SecondOnThrowToFirst
 				// plays it only with first base empty): the third baseman tags him (2026-11-11, user: "3루에 던져서 태그까지").
 				bool tagPlay = Geometry.IsOutfielder(th.From) || th.Relay >= 0 || (th.Base == 0 && !(th.Runner == 3 && o.Track[1].Set && o.Track[2].Set))
-					|| (th.Base == 3 && th.Runner == 2 && ti > 0 && o.Throws[0].Base == 1);
+					|| (th.Base == 3 && th.Runner == 2 && ti > 0 && o.Throws[0].Base == 1) || (m_tagRunner >= 1 && th.Runner == m_tagRunner);
 				double ballAt = th.Arrive - (Geometry.IsOutfielder(th.From) ? Tag : 0);
 				double late = 0;
 				if (!th.Out && !th.Wild && th.Runner >= 0 && th.Runner < 4)

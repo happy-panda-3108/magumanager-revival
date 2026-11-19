@@ -50,7 +50,21 @@ namespace Ma9MServer
 			List<string> lines = new List<string>();
 			if (ending.Count > 0)
 			{
-				lines.Add($"오늘 자정에 계약이 끝나는 1군 선수 {ending.Count}명");
+				// 2026-11-19 (user 21:3x, 11-18 question 16 — AI tester NC 80: "오늘 자정" read as the midnight just gone): the date and
+				// the time left, "11월 20일 0시(약 3시간 뒤)".
+				DateTime now = DateTime.Now, end = DateTime.Today.AddDays(1);
+				TimeSpan left = end - now;
+				string when = $"{end.Month}월 {end.Day}일 0시(약 {(left.TotalMinutes < 60 ? $"{Math.Max(1, (int)Math.Ceiling(left.TotalMinutes))}분" : $"{(int)Math.Round(left.TotalHours)}시간")} 뒤)";
+				string one = $"{when}에 계약이 끝나는 1군 선수 {ending.Count}명";
+				if (PopupText.Px(one) <= PopupText.Width)
+				{
+					lines.Add(one);
+				}
+				else
+				{
+					lines.Add($"계약이 끝나는 1군 선수 {ending.Count}명");
+					lines.Add($"끝나는 때: {when}");
+				}
 				lines.Add(Names(ending));
 			}
 			if (ended.Count > 0)
@@ -59,7 +73,7 @@ namespace Ma9MServer
 				if (ending.Count == 0) lines.Add(Names(ended));
 			}
 			lines.Add("팀 관리 > 계약관리에서 연장할 수 있습니다.");
-			if (ending.Count > 0 && lines.Count < 5) lines.Add("자정이 지나면 컨디션이 최하로 고정됩니다.");
+			if (ending.Count > 0 && lines.Count < 5) lines.Add("그때가 지나면 컨디션이 최하로 고정됩니다.");
 			return string.Join("\n", lines.Take(5));
 		}
 

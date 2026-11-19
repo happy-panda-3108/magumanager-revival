@@ -134,6 +134,32 @@ public class Ma9MTextBox : MonoBehaviour
 		return extra;
 	}
 
+	// The same for a popup that shows one of its pages (Ma9MPopupFit.Pages, a help's pages each in its own popup, 2026-11-19): sized for
+	// the tallest page, then `shown`.
+	public static float FitPopupTallest(UILabel content, string[] pages, string shown)
+	{
+		if (content == null || pages == null || pages.Length == 0)
+		{
+			return 0f;
+		}
+		string tallest = shown ?? string.Empty;
+		float best = -1f;
+		foreach (string page in pages)
+		{
+			content.text = page ?? string.Empty;
+			float h = Prepare(content, PopupTextWidth);
+			if (h > best)
+			{
+				best = h;
+				tallest = page ?? string.Empty;
+			}
+		}
+		content.text = tallest;
+		float extra = FitPopup(content);
+		SetText(content, shown ?? string.Empty);
+		return extra;
+	}
+
 	// New text in a label already fitted (FitPopup / FitPopupPages): a scrolling box starts again at the top with its bar and
 	// travel for this text, so textcheck sees the real height.
 	public static void SetText(UILabel label, string text)

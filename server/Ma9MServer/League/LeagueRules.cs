@@ -207,7 +207,11 @@ namespace Ma9MServer
 		public static int Reward(int tier, int runsFor, int runsAgainst) =>
 			(int)Math.Round((runsFor > runsAgainst ? WinMp : runsFor == runsAgainst ? TieMp : LossMp) * RewardMult[tier]);
 
-		private static readonly string[] Sponsors = { "마구매니저", "홈런볼", "MP주머니", "드림", "레전드", "퓨처스" };
+		// 2026-11-19 (user 21:0x, AI testers 쌍방울·LG: "레전드배" in 트리플A read as the 레전드 리그): "실제 기업들 이름을 살짝 바꿔서
+		// 지어서 해보는건 어떨까 "팔도"에서 "칠도" 라던가 스폰서로 있었던 기업들의 가명을 사용합시다" — the KBO title sponsors from 2000 in
+		// order (삼성증권, 삼성 PAVV, CJ 마구마구, 롯데카드, 팔도, 한국야쿠르트, 타이어뱅크, 신한은행), each a little changed. Five letters at
+		// most, as long as the old "마구매니저", so the standings and scoreboard titles stay in their rows. Season 5 (11-18 12:00) is 칠도.
+		private static readonly string[] Sponsors = { "삼송증권", "삼송파부", "CZ마구마구", "롯떼카드", "칠도", "요쿠르트", "타이야뱅크", "심한은행" };
 
 		public static string Sponsor(int season) => Sponsors[(season - 1) % Sponsors.Length];
 

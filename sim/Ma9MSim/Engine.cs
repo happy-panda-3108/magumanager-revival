@@ -1149,6 +1149,11 @@ namespace Ma9MSim
 				}
 			}
 			play.Runs = scoredNow.Count;
+			if (m_buntSide != null)
+			{
+				if (kind is PlayKind.SacBunt or PlayKind.BuntForce or PlayKind.BuntHit) BuntScript(m_buntSide, kind);
+				m_buntSide = null;
+			}
 			rec.Play(play);
 		}
 
@@ -1286,6 +1291,7 @@ namespace Ma9MSim
 						outs++;
 						AddOut(fld, pitcher);
 					}
+					m_buntSide = fld;   // its 3D script once EndPlay has the runners (BuntScript)
 					goto AfterPlay;
 				}
 				// Context beyond talent: the home club's park, the platoon matchup and the pitch

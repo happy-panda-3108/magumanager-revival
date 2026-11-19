@@ -37,7 +37,8 @@ namespace Ma9MServer
 
 		private static readonly string[] TermNames = { "주전 자리를 약속하겠습니다", "우리는 우승에 도전하는 팀입니다", "옛 동료들이 함께 뜁니다", "계약 기간을 늘려 드리겠습니다 (+2시즌)" };
 
-		public const int Turns = 4, StartGauge = 40, RenewalGauge = 55, TopGauge = 110, MinPct = 75, MaxPct = 130;
+		// 11-19 23:0x (user: "지금은 또 협상하는 난이도가 너무 쉬워진 것으로 보임"): the talk starts lower (40 → 35, a renewal 55 → 45).
+		public const int Turns = 4, StartGauge = 35, RenewalGauge = 45, TopGauge = 110, MinPct = 75, MaxPct = 130;
 
 		// 1시즌 = 리그 한 바퀴 2.5일. Every FA contract starts at 4시즌(10일); the negotiation's events change it: the 계약 기간 card adds 2시즌
 		// (6시즌 15일), the raises and cuts move the 계약금 (user 11-17 15:xx via the engine session: "FA선수 계약기간은 기본 4시즌(10일)에
@@ -64,6 +65,7 @@ namespace Ma9MServer
 			public int Base;
 			public string Agent;
 			public bool Last;
+			public int Raises;   // 계약금을 올린 횟수 (each raise after the first counts for less, 11-19 23:0x)
 			public readonly HashSet<Term> Used = new HashSet<Term>();
 			public DateTime At = DateTime.UtcNow;
 		}
@@ -100,7 +102,80 @@ namespace Ma9MServer
 				PRIMARY KEY (user_code, card_idx, cycle_start));
 				CREATE TABLE IF NOT EXISTS fa_top (
 				user_code INTEGER NOT NULL, card_idx INTEGER NOT NULL, until TEXT NOT NULL,
+				PRIMARY KEY (user_code, card_idx));
+				CREATE TABLE IF NOT EXISTS fa_nego_pause (
+				user_code INTEGER NOT NULL, card_idx INTEGER NOT NULL, cycle_start TEXT NOT NULL, state TEXT NOT NULL, at TEXT NOT NULL,
 				PRIMARY KEY (user_code, card_idx))";
+			cmd.ExecuteNonQuery();
+		}
+
+		// ---- A negotiation left half-way (user 11-19 21:3x, 11-18 question 1 — AI testers 효율파 · LG 105: [그만두기] and open again started
+		// afresh, so the player's answers could be tried first): "FA 협상을 그만두면 만족도, 남은 대화 수를 기억해서 리세마라를 할 수 없게끔".
+		// Every turn is kept (fa_nego_pause) until the next FA list (Season), and opening the same player again goes on from there: the
+		// gauge, the price, the turns used, the cards played, the last offer, a deal reached but not signed. Gone with the signing, the
+		// 결렬, or the next list. ----
+
+		private static void SavePause(uint user, Talk t)
+		{
+			int used = t.Used.Aggregate(0, (m, x) => m | (1 << (int)x));
+			string state = string.Join(",", t.Gauge, t.Pct, t.Turn, used, t.Long ? 1 : 0, t.Promise ? 1 : 0, t.Last ? 1 : 0, t.Renewal ? 1 : 0, t.Base, t.Raises);
+			using SqliteConnection c = Open();
+			using SqliteCommand cmd = c.CreateCommand();
+			cmd.CommandText = "INSERT OR REPLACE INTO fa_nego_pause (user_code, card_idx, cycle_start, state, at) VALUES ($u, $i, $s, $st, $a)";
+			cmd.Parameters.AddWithValue("$u", (long)user);
+			cmd.Parameters.AddWithValue("$i", t.Idx);
+			cmd.Parameters.AddWithValue("$s", Season(DateTime.Now));
+			cmd.Parameters.AddWithValue("$st", state);
+			cmd.Parameters.AddWithValue("$a", DateTime.Now.ToString("o", CultureInfo.InvariantCulture));
+			cmd.ExecuteNonQuery();
+		}
+
+		private static Talk LoadPause(uint user, int idx)
+		{
+			string state = null, cycle = null;
+			using (SqliteConnection c = Open())
+			using (SqliteCommand cmd = c.CreateCommand())
+			{
+				cmd.CommandText = "SELECT state, cycle_start FROM fa_nego_pause WHERE user_code = $u AND card_idx = $i";
+				cmd.Parameters.AddWithValue("$u", (long)user);
+				cmd.Parameters.AddWithValue("$i", idx);
+				using SqliteDataReader r = cmd.ExecuteReader();
+				if (r.Read())
+				{
+					state = r.GetString(0);
+					cycle = r.GetString(1);
+				}
+			}
+			if (state == null)
+			{
+				return null;
+			}
+			if (cycle != Season(DateTime.Now))
+			{
+				DropPause(user, idx);
+				return null;
+			}
+			string[] p = state.Split(',');
+			if (p.Length < 9)
+			{
+				return null;
+			}
+			int I(int k) => k < p.Length && int.TryParse(p[k], NumberStyles.Integer, CultureInfo.InvariantCulture, out int v) ? v : 0;
+			Talk t = new Talk { Idx = idx, Gauge = I(0), Pct = I(1), Turn = I(2), Long = I(4) == 1, Promise = I(5) == 1, Last = I(6) == 1, Renewal = I(7) == 1, Base = I(8), Raises = I(9) };
+			foreach (Term x in Enum.GetValues(typeof(Term)).Cast<Term>().Where(x => (I(3) & (1 << (int)x)) != 0))
+			{
+				t.Used.Add(x);
+			}
+			return t;
+		}
+
+		private static void DropPause(uint user, int idx)
+		{
+			using SqliteConnection c = Open();
+			using SqliteCommand cmd = c.CreateCommand();
+			cmd.CommandText = "DELETE FROM fa_nego_pause WHERE user_code = $u AND card_idx = $i";
+			cmd.Parameters.AddWithValue("$u", (long)user);
+			cmd.Parameters.AddWithValue("$i", idx);
 			cmd.ExecuteNonQuery();
 		}
 
@@ -339,6 +414,26 @@ namespace Ma9MServer
 				Early(session, user, card, basePrice, daysLeft);
 				return;
 			}
+			// The same player again in this list period: on from where it was left.
+			Talk paused = LoadPause(user, idx);
+			if (paused != null && paused.Renewal == renewal)
+			{
+				paused.Bent = (Bent)(((card.Sidx * 31) + card.Year) & 3);
+				paused.Agent = Speaker(card);
+				paused.At = DateTime.UtcNow;
+				s_talks[user] = paused;
+				ServerLog.Info($"[{session.Id}] FA {(renewal ? "재계약 " : string.Empty)}협상 이어서: {card.Year} {card.Name} ({idx}), 게이지 {paused.Gauge}, {paused.Turn}/{Turns}번, {paused.Pct}%{(paused.Last ? ", 마지막 제안" : string.Empty)}");
+				if (paused.Gauge >= 100)
+				{
+					Strike(session, user, paused, card, "다시 오셨군요. 아까 이야기가 다 됐었죠.");
+					return;
+				}
+				int ps = paused.Long ? LongSeasons : Seasons;
+				SendTurn(session, paused, card, paused.Last
+					? $"다시 오셨군요. 제 마지막 조건은 그대로입니다.\n{ps}시즌, {Man(PriceOf(paused))} MP. 이 이상은 양보 못 합니다."
+					: "다시 오셨군요. 아까 하던 이야기를 이어 가죠.", 0);
+				return;
+			}
 			Talk t = new Talk
 			{
 				Idx = idx,
@@ -362,6 +457,7 @@ namespace Ma9MServer
 					_ => $"옛 동료들이 있는 팀이라면 마음이 움직일 것 같습니다.\n{Seasons}시즌, {Man(PriceOf(t))} MP를 원합니다."
 				};
 			ServerLog.Info($"[{session.Id}] FA {(renewal ? "재계약 " : string.Empty)}협상 시작: {card.Year} {card.Name} ({idx}), {BentNames[(int)t.Bent]}, 기준 {basePrice:N0} MP");
+			SavePause(user, t);
 			SendTurn(session, t, card, open, 0);
 		}
 
@@ -388,6 +484,7 @@ namespace Ma9MServer
 			{
 				s_talks.Remove(user);
 				RecordBreak(user, idx);
+				DropPause(user, idx);
 				Done(session, t.Renewal ? "FA 재계약 협상" : "FA 협상", $"{line}\n\n협상이 결렬됐습니다. 이번 시즌에는 {card.Name} 선수와 다시 만날 수 없습니다.", false);
 				return;
 			}
@@ -401,9 +498,11 @@ namespace Ma9MServer
 				// The last offer: what is left of the gauge in price (5%p a 10 points short), within the bounds.
 				t.Last = true;
 				t.Pct = Math.Min(MaxPct, t.Pct + (int)Math.Ceiling((100 - t.Gauge) / 10.0) * 5);
+				SavePause(user, t);
 				SendTurn(session, t, card, $"{line}\n좋아요, 제 마지막 조건입니다. {(t.Long ? LongSeasons : Seasons)}시즌, {Man(PriceOf(t))} MP. 이 이상은 양보 못 합니다.", delta);
 				return;
 			}
+			SavePause(user, t);
 			SendTurn(session, t, card, line, delta);
 		}
 
@@ -415,13 +514,30 @@ namespace Ma9MServer
 			{
 				if (t.Pct >= MaxPct)
 				{
-					return (5, "돈은 그만하면 됐습니다. 다른 이야기를 해 보죠.");
+					return t.Bent == Bent.Money ? (0, "돈은 그만하면 됐습니다. 다른 이야기를 해 보죠.") : (-5, "자꾸 돈 이야기만 하시네요. 제가 듣고 싶은 건 그게 아닙니다.");
 				}
 				t.Pct = Math.Min(MaxPct, t.Pct + 10);
-				int d = t.Bent == Bent.Money ? 30 : 20;
-				return (d, t.Bent == Bent.Money ? "역시 돈 이야기가 제일 빠르네요." : "성의는 알겠습니다.");
+				// 2026-11-19 (user 21:3x: "금액 추가를 제외한, 계약기간 연장, 우승 도전, 옛 동료 있음 등등이 되게 효과가 미미"): a raise counts for
+				// less than the conditions a player cares about (TermEffect). 23:0x ("지금은 또 협상하는 난이도가 너무 쉬워진 것으로 보임"): each
+				// raise after the first counts for less again — money first 30 · 20 · 10, the others 12 · 6 · 3, a player who cares for his
+				// team-mates 8 · 4 · 0. With the best cards for his bent and the best situation (TermEffect) each bent can still reach
+				// 크게 만족 (110): money 35+30+20+15+12, 주전 35+40+15+12+15, 우승 35+45+12+8+12, 의리 35+45+15+8+8.
+				int k = Math.Min(2, t.Raises++);
+				if (t.Bent == Bent.Money)
+				{
+					return (new[] { 30, 20, 10 }[k], new[] { "역시 돈 이야기가 제일 빠르네요.", "좋습니다. 조금 더 마음이 가네요.", "돈은 이쯤이면 됐습니다." }[k]);
+				}
+				if (t.Bent == Bent.Loyal)
+				{
+					return (new[] { 8, 4, 0 }[k], new[] { "성의는 알겠습니다. 그런데 저는 돈 때문에 움직이는 사람은 아닙니다.", "돈을 더 주신다고 마음이 크게 바뀌진 않습니다.", "돈 이야기는 그만하시죠." }[k]);
+				}
+				return (new[] { 12, 6, 3 }[k], new[] { "성의는 알겠습니다. 그런데 돈이 전부는 아니죠.", "돈을 더 주신다고 마음이 크게 바뀌진 않습니다.", "돈 이야기는 이쯤 하시죠." }[k]);
 			}));
-			foreach (Term term in Enum.GetValues(typeof(Term)).Cast<Term>().Where(x => !t.Used.Contains(x)).Take(2))
+			// 2026-11-19 (user 21:3x, 11-18 question 10 — AI tester LG 105: a player who cares for his old team-mates had no 옛 동료 card on the
+			// first turn): "성향에 맞는 버튼이 먼저 나오게". The card of his bent comes first while unused, then the rest in their order.
+			Term? liked = t.Bent switch { Bent.Win => Term.Title, Bent.Play => Term.Starter, Bent.Loyal => Term.Mates, _ => (Term?)null };
+			IEnumerable<Term> order = Enum.GetValues(typeof(Term)).Cast<Term>().OrderBy(x => liked.HasValue && x == liked.Value ? 0 : 1).ThenBy(x => (int)x);
+			foreach (Term term in order.Where(x => !t.Used.Contains(x)).Take(2))
 			{
 				Term x = term;
 				list.Add((TermNames[(int)x], () => { t.Used.Add(x); return TermEffect(user, t, card, x); }));
@@ -445,43 +561,149 @@ namespace Ma9MServer
 
 		private static (int, string) TermEffect(uint user, Talk t, CardInfo card, Term term)
 		{
+			// 2026-11-19 (user 21:3x: "금액 추가를 제외한, 계약기간 연장, 우승 도전, 옛 동료 있음 등등이 되게 효과가 미미 … 팀 상황별 대사도 더
+			// 세분화"): the card of the player's bent is worth the most (up to +40), the others +8~+20 — as much as a raise (+15) for a player
+			// who does not put money first —, and the words follow the team's situation.
+			// 23:0x (user: "선수가 만족하는 대답이 아닌 경우 -로 작용하는 상호작용도 괜찮을 것 같음 … 지금은 또 협상하는 난이도가 너무 쉬워진
+			// 것으로 보임"): a card that does not suit the player or the team's situation now costs satisfaction (−5 … −15), a card of
+			// another bent is worth +3 … +15, and the talk starts lower (StartGauge 35, was 40). The best four moves for a player's bent and a
+			// fitting team still reach 100; a weak team or the wrong cards end at the last offer (a higher price) instead.
 			switch (term)
 			{
 			case Term.Starter:
+			{
 				t.Promise = true;
-				return t.Bent == Bent.Play ? (35, "주전이라면 이야기가 달라지죠. 정말 기쁩니다!") : (10, "주전이야 당연히 그래야죠.");
+				// A promise the 1군 cannot keep yet (both FA places taken, kt 82) counts for little, or against the club.
+				Lineup l = RosterHandlers.Db.GetLineup(user);
+				int fas = l == null ? 0 : l.Batters.Concat(l.Pitchers).Where(i => i != 0).Select(i => RosterHandlers.Catalog.Get(i)).Count(c => c != null && c.IsFA && c.Idx != card.Idx);
+				bool full = !t.Renewal && fas >= CardInfo.MaxFaInFirstTeam;
+				switch (t.Bent)
+				{
+				case Bent.Play:
+					return full ? (10, "주전을 약속하신다니 기쁘긴 한데… 1군 FA 자리가 벌써 꽉 찼던데요? 그 약속, 믿기 어렵네요.")
+						: (40, "주전이라면 이야기가 달라지죠. 경기에 나갈 수만 있다면 뭐든 하겠습니다!");
+				case Bent.Money:
+					return full ? (-10, "1군 FA 자리도 꽉 찼는데 주전이요? 그런 말보다 돈 이야기를 하시죠.")
+						: (-5, "주전은 당연한 거고요. 제가 듣고 싶은 건 돈 이야기입니다.");
+				default:
+					return full ? (-10, "1군 FA 자리가 꽉 찬 걸 다 아는데 주전 약속이요? 지키지도 못할 약속은 하지 마시죠.")
+						: (8, "주전 자리를 보장해 주신다니 마음이 놓이네요.");
+				}
+			}
 			case Term.Title:
 			{
-				LeagueState s = LeagueService.Store?.Load(user);
-				double strength = 0.3;
-				string where = "지금 리그";
-				if (s != null)
-				{
-					int top = Math.Max(1, LeagueRules.TierNames.Length - 1);
-					int n = Math.Max(2, s.Clubs.Count);
-					int rank = Math.Max(1, s.RankOf(s.MyIndex));
-					strength = 0.6 * Math.Clamp(s.Tier, 0, top) / top + 0.4 * (1.0 - (rank - 1) / (double)(n - 1));
-					where = $"{LeagueRules.TierNames[Math.Clamp(s.Tier, 0, LeagueRules.TierNames.Length - 1)]} {rank}위";
-				}
-				int d = t.Bent == Bent.Win ? 10 + (int)Math.Round(25 * strength) : 5 + (int)Math.Round(5 * strength);
-				string line = strength >= 0.6 ? $"{where} 구단이라… 우승 반지가 보이네요." : strength >= 0.35 ? $"{where}라면 해 볼 만하겠네요." : $"{where}에서 우승이요? 글쎄요.";
+				// A weak club calling itself a contender: against it (Win −15 … +45, the others −10 … +15).
+				(double strength, string line) = TitleView(user);
+				int d = t.Bent == Bent.Win ? (int)Math.Round(-15 + 60 * strength) : (int)Math.Round(-10 + 25 * strength);
 				return (d, line);
 			}
 			case Term.Mates:
 			{
-				Lineup l = RosterHandlers.Db.GetLineup(user);
-				CardInfo src = RosterHandlers.Catalog.Get(card.SourceIdx);
-				int club = src?.TeamCode ?? card.HomeTeam;
-				int mates = l == null ? 0 : l.Batters.Concat(l.Pitchers).Where(i => i != 0).Select(i => RosterHandlers.Catalog.Get(i))
-					.Count(c => c != null && !c.IsFA && c.Year == card.Year && c.TeamCode == club && c.Sidx != card.Sidx);
-				int d = t.Bent == Bent.Loyal ? (mates == 0 ? -5 : Math.Min(30, 6 * mates)) : Math.Min(10, 2 * mates);
-				string line = mates == 0 ? "같이 뛰던 얼굴이 하나도 없네요." : $"{mates}명이나 같이 뛰던 동료가 있다니 반갑네요.";
+				List<CardInfo> mates = MatesOf(user, card);
+				int n = mates.Count;
+				// Who they are (AI tester 두산 56: "옛 동료 2명"이 누구인지 없음): two names, then "외 n명".
+				string names = string.Join(", ", mates.Take(2).Select(c => $"{c.Name}")) + (n > 2 ? $" 외 {n - 2}명" : string.Empty);
+				int d = t.Bent == Bent.Loyal ? (n == 0 ? -15 : Math.Min(45, 12 + 11 * (n - 1))) : n == 0 ? -5 : Math.Min(12, 4 * n);
+				string line = n == 0 ? (t.Bent == Bent.Loyal ? "같이 뛰던 얼굴이 하나도 없는데 옛 동료라니요? 실망입니다." : "같이 뛰던 얼굴이 하나도 없는데요? 무슨 말씀이신지…")
+					: n == 1 ? $"{names} 선수가 있군요. 아는 얼굴이 있으니 반갑네요."
+					: n <= 3 ? $"{names}… {n}명이나 같이 뛰던 동료가 있다니 반갑네요."
+					: $"{names}까지… 거의 그때 그 팀이네요! 꼭 같이 뛰고 싶습니다.";
 				return (d, line);
 			}
 			default:
+			{
 				t.Long = true;
-				return (15, $"{LongSeasons}시즌({DaysOf(LongSeasons)}일) 보장이라면 안심하고 뛸 수 있겠네요.");
+				string span = $"{LongSeasons}시즌({DaysOf(LongSeasons)}일)";
+				// Security counts most for a player who wants to play; one who cares for his mates wants them there too; a contender wants a
+				// club that can win; a money man would rather sign again later at a higher price.
+				switch (t.Bent)
+				{
+				case Bent.Money:
+					return (-10, $"{span}이나 묶이라고요? 다음 계약 때 제 값을 받는 게 낫습니다.");
+				case Bent.Win:
+				{
+					double strength = TitleView(user).strength;
+					return strength >= 0.6 ? (12, $"{span}이면 이 팀에서 우승을 노릴 시간은 충분하겠네요.")
+						: strength >= 0.35 ? (5, $"{span}이요? 그동안 우승할 수 있는 팀이 되어 있으면 좋겠네요.")
+						: (-5, $"이 전력으로 {span}이요? 오래 묶이고 싶지는 않네요.");
+				}
+				case Bent.Loyal:
+					return MatesOf(user, card).Count > 0 ? (15, $"옛 동료들과 {span}이라니, 좋습니다. 오래 같이 뛰고 싶네요.")
+						: (5, $"{span} 보장은 고맙지만, 아는 얼굴이 하나도 없으니…");
+				default:
+					return (15, $"{span} 보장이라면 안심하고 뛸 수 있겠네요.");
+				}
 			}
+			}
+		}
+
+		// The player's old team-mates in our 1군: the same club and year, not FA copies, not himself.
+		private static List<CardInfo> MatesOf(uint user, CardInfo card)
+		{
+			Lineup l = RosterHandlers.Db.GetLineup(user);
+			CardInfo src = RosterHandlers.Catalog.Get(card.SourceIdx);
+			int club = src?.TeamCode ?? card.HomeTeam;
+			return l == null ? new List<CardInfo>() : l.Batters.Concat(l.Pitchers).Where(i => i != 0).Select(i => RosterHandlers.Catalog.Get(i))
+				.Where(c => c != null && !c.IsFA && c.Year == card.Year && c.TeamCode == club && c.Sidx != card.Sidx).ToList();
+		}
+
+		// 우리는 우승에 도전하는 팀입니다 (user 11-19 21:3x: "우승 도전 팀이라고 했을 때 계약 당시 순위를 기준으로 하고 있어서 좀 애매한 것 같음.
+		// 리그 시작도 안 했는데 7등으로 배정 받으면 7위팀이 우승? 이러면서 만족해 하지 않는 모습"): the club's chance as the player sees it —
+		// the tier (40%: a bigger stage) and the club's place (60%): before the season has games, its 1군 balls against the other clubs'
+		// (the paper strength); as games are played the standings take over (all of it from 60 games). The words follow the moment of
+		// the season, the place and the tier.
+		private static (double strength, string line) TitleView(uint user)
+		{
+			LeagueState s = LeagueService.Store?.Load(user);
+			if (s == null || s.Clubs.Count < 2 || s.MyIndex < 0 || s.MyIndex >= s.Clubs.Count)
+			{
+				return (0.3, "우승이요? 아직 어떤 팀인지 잘 모르겠네요.");
+			}
+			int topTier = Math.Max(1, LeagueRules.TierNames.Length - 1);
+			int tier = Math.Clamp(s.Tier, 0, topTier);
+			string tierName = LeagueRules.TierNames[tier];
+			int n = s.Clubs.Count;
+			// The paper strength: our 1군 now against the clubs' stored 1군.
+			Lineup mine = RosterHandlers.Db.GetLineup(user);
+			int myBalls = mine == null ? s.Clubs[s.MyIndex].Ball : RosterHandlers.LineupBalls(mine);
+			int ballRank = 1 + s.Clubs.Count(c => c.Index != s.MyIndex && c.Ball > myBalls);
+			int played = s.GamesPlayed;
+			int standRank = Math.Max(1, s.RankOf(s.MyIndex));
+			bool over = s.NextGame > LeagueRules.Games;
+			double w = over ? 1.0 : Math.Clamp(played / 60.0, 0.0, 1.0);
+			double rank = w * standRank + (1 - w) * ballRank;
+			double place = 1.0 - (rank - 1) / (n - 1);
+			double strength = 0.4 * tier / topTier + 0.6 * place;
+			string stage = tier >= topTier ? "챔피언스 리그 우승이라면 선수로서 최고의 무대죠. "
+				: tier >= topTier - 1 ? $"{tierName} 리그 우승이면 큰 무대네요. "
+				: tier <= 1 ? $"{tierName} 리그 우승이라… 저한테는 조금 작은 무대네요. "
+				: string.Empty;
+			string view;
+			if (played < 10 && !over)
+			{
+				// Before the season (or its first days): the paper strength.
+				view = ballRank <= 2 ? $"시즌 전이라 순위는 아직이지만, 전력만 보면 리그 {ballRank}위권이네요. 우승 후보 맞습니다."
+					: ballRank <= 4 ? $"시즌 전 전력은 리그 {ballRank}위 정도군요. 제가 가면 우승도 노려 볼 만하겠네요."
+					: ballRank <= 7 ? $"시즌 전 전력은 리그 중간(약 {ballRank}위)이네요. 우승이라기엔 아직 부족해 보입니다."
+					: "시즌 전 전력이 리그 아래쪽인데 우승이요? 저 혼자로는 어렵겠는데요.";
+			}
+			else if (over)
+			{
+				view = standRank == 1 ? "올 시즌 1위 팀이었죠. 그 기세라면 다음 시즌도 기대됩니다."
+					: standRank <= 4 ? $"올 시즌 {standRank}위로 마친 팀이라면 해 볼 만합니다."
+					: $"올 시즌 {standRank}위였는데 우승이요? 다음 시즌엔 달라지겠죠?";
+			}
+			else
+			{
+				string when = played < 50 ? "시즌 초반" : played < 110 ? "시즌 중반" : "시즌 막바지";
+				view = standRank == 1 ? $"{when}에 1위 팀이라니, 반지 낄 준비를 해야겠네요."
+					: standRank <= 3 ? $"{when} {standRank}위, 선두권이네요. 제가 가면 1위도 노려 볼 만합니다."
+					: standRank <= 5 ? $"{when} {standRank}위라… 가을야구는 보이는데 우승까지는 한 걸음 더 필요하겠네요."
+					: standRank <= 8 ? $"{when} {standRank}위면 중위권인데, 우승은 좀 먼 이야기 같네요."
+					: played >= 110 ? $"시즌 막바지에 {standRank}위인데 우승 도전이요? 농담이시죠?"
+					: $"지금 {standRank}위인데 우승이요? 글쎄요, 남은 경기가 많긴 하지만요.";
+			}
+			return (strength, stage + view);
 		}
 
 		private static int PriceOf(Talk t) => (int)((long)t.Base * t.Pct / 100 / 10_000 * 10_000);
@@ -489,6 +711,8 @@ namespace Ma9MServer
 		private static void Strike(GameSession session, uint user, Talk t, CardInfo card, string line)
 		{
 			s_talks.Remove(user);
+			// Kept with the deal's gauge: coming back before signing offers the same deal again (Start).
+			SavePause(user, t);
 			int seasons = t.Long ? LongSeasons : Seasons;
 			Deal deal = new Deal { Idx = t.Idx, Renewal = t.Renewal, Price = PriceOf(t), Days = DaysOf(seasons), Top = t.Gauge >= TopGauge, Promise = t.Promise };
 			s_deals[(user, t.Idx)] = deal;
@@ -506,7 +730,8 @@ namespace Ma9MServer
 			}
 			CardInfo card = RosterHandlers.Catalog.Get(idx);
 			t.Gauge = Math.Max(t.Gauge, 100);
-			Strike(session, user, t, card, "좋습니다. 그 조건으로 하죠.");
+			// 2026-11-19 (AI tester 두산 56: "좋습니다… 좋습니다"): Strike's signing line starts with 좋습니다 too.
+			Strike(session, user, t, card, "알겠습니다. 그 조건으로 하죠.");
 		}
 
 		// 정가로 바로 계약: the list price, 4시즌, no condition change.
@@ -551,6 +776,7 @@ namespace Ma9MServer
 			bool ok = !text.StartsWith("!", StringComparison.Ordinal);
 			if (ok)
 			{
+				DropPause(user, idx);
 				SetTop(user, idx, deal.Top);
 				// The top bar's MP (tester_1117g, 11-17 12:2x: it stayed at the old MP, and the next 미리 연장's "계약금 N MP" line, which the
 				// app counts from it, showed 5,790만 for a 4,290만 renewal).
@@ -576,6 +802,7 @@ namespace Ma9MServer
 				if (s_deals.TryGetValue((user, idx), out Deal d) && d.Renewal && d.At > DateTime.UtcNow.AddMinutes(-10))
 				{
 					s_deals.Remove((user, idx));
+					DropPause(user, idx);
 					return d;
 				}
 				return null;
@@ -642,7 +869,9 @@ namespace Ma9MServer
 				t.Idx.ToString(CultureInfo.InvariantCulture),
 				t.Last ? "last" : "turn",
 				delta.ToString(CultureInfo.InvariantCulture),
-				t.Renewal ? "1" : "0"
+				t.Renewal ? "1" : "0",
+				// [14] (2026-11-19): the before-signing line in the header (FaMarket.BriefLine); none for a renewal. Older apps read 14.
+				t.Renewal || card == null ? string.Empty : FaMarket.BriefLine(session.Team.UserCode, card)
 			};
 			Send(session, TurnType, m);
 		}

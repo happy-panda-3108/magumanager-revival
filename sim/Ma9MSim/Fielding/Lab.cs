@@ -39,6 +39,10 @@ namespace Ma9MSim.Fielding
 			{
 				Scripts(lib, opt, log);
 			}
+			if (what == "bunt")
+			{
+				Bunts(opt, log);
+			}
 			if (what == "couple" || what == "all")
 			{
 				Couple(lib, opt, log);
@@ -368,6 +372,111 @@ namespace Ma9MSim.Fielding
 				log($"  {kv.Key}: {kv.Value} ({100.0 * kv.Value / rep.Plays:F1}%)");
 				foreach (string ex in rep.Examples[kv.Key]) log("      " + ex);
 			}
+		}
+
+		// Bunt scripts (Choreo.Bunt, 2026-11-19) for the engine's three bunt results in every base state they happen in, the
+		// runners' Dest as the engine leaves them: ScriptCheck over all, who fields by where it went, "--dump N" prints the first
+		// N, "--exportdir <dir>" writes the first of each <kind>_<bases>_<fielder> (bases: bit 1 first, 2 second, 4 third)
+		// for -ma9mscriptfile, "--bases b" / "--kind SacBunt" limit them.
+		private static void Bunts(Dictionary<string, string> opt, Action<string> log)
+		{
+			int n = opt.TryGetValue("samples", out string s) ? int.Parse(s) : 3000;
+			int dump = opt.TryGetValue("dump", out string ds) ? int.Parse(ds) : 0;
+			string onlyKind = opt.TryGetValue("kind", out string ok) ? ok : null;
+			int onlyBases = opt.TryGetValue("bases", out string ob) ? int.Parse(ob) : -1;
+			opt.TryGetValue("exportdir", out string exDir);
+			Defence d = Defence.Average();
+			Choreo ch = new Choreo();
+			ScriptCheck.Report rep = new ScriptCheck.Report();
+			Rng rng = new Rng(1119);
+			Dictionary<string, int> who = new Dictionary<string, int>();
+			Dictionary<string, int> tally = new Dictionary<string, int>();
+			int shown = 0, none = 0;
+			Ma9MSim.PlayKind[] kinds = { Ma9MSim.PlayKind.SacBunt, Ma9MSim.PlayKind.BuntForce, Ma9MSim.PlayKind.BuntHit };
+			for (int i = 0; i < n; i++)
+			{
+				// The engine bunts with nobody out and a runner on first and/or second (third may be taken too).
+				int bases = 1 + (int)(rng.Next() * 7);
+				if ((bases & 3) == 0) continue;
+				if (onlyBases >= 0 && bases != onlyBases) continue;
+				double k = rng.Next();
+				Ma9MSim.PlayKind kind = k < 0.80 ? kinds[0] : k < 0.88 ? kinds[2] : kinds[1];
+				if (onlyKind != null && kind.ToString() != onlyKind) continue;
+				bool[] on = new bool[4];
+				for (int b = 1; b <= 3; b++) on[b] = (bases & (1 << (b - 1))) != 0;
+				int[] dest = BuntDest(kind, on);
+				BatterRun br = new BatterRun { R = RunnerSkill.For(Defence.RefRunX + (rng.Next() - 0.5) * 2), Lefty = rng.Next() < 0.38 };
+				RunnerSkill[] run = new RunnerSkill[4];
+				for (int b = 1; b <= 3; b++) run[b] = RunnerSkill.For(Defence.RefRunX + (rng.Next() - 0.5) * 2);
+				(double h, double stop) = Choreo.BuntSpot(kind, on, dest, ref rng);
+				PlayScript sc = ch.Bunt(d, br, run, on, dest, kind, h, stop);
+				string tag = $"#{i} {kind} on{bases} h{h:F0} stop{stop:F1} dest [{string.Join(",", dest)}]";
+				if (sc == null) { none++; log("no script: " + tag); continue; }
+				ScriptCheck.Check(sc, Choreo.BuntDefence(d, on, kind), rep, tag);
+				Seg first = sc.Segs.Where(g => g.Kind == SegKind.Catch && g.Actor < 9).OrderBy(g => g.T0).First();
+				string zone = h < 25 ? "1B line" : h < 60 ? (stop < 5 ? "plate" : "middle") : "3B line";
+				string key = $"{kind} {zone,-7} -> {Geometry.PosName[first.Actor]}";
+				who[key] = who.TryGetValue(key, out int c) ? c + 1 : 1;
+				Seg thr = sc.Segs.Where(g => g.Kind == SegKind.Throw).OrderBy(g => g.T0).FirstOrDefault();
+				string t2 = thr.Kind == SegKind.Throw ? $"{Geometry.PosName[thr.Actor]}->{Geometry.PosName[thr.Arg]} held {thr.T0 - first.T0:F2}s" : "no throw";
+				string tk = $"{kind} {t2.Split(' ')[0]}";
+				tally[tk] = tally.TryGetValue(tk, out int tc) ? tc + 1 : 1;
+				if (shown < dump)
+				{
+					shown++;
+					log($"--- {tag} end {sc.End:F2}: {Geometry.PosName[first.Actor]} at {first.T0:F2}s, {t2}");
+					foreach (Seg g in sc.Segs.OrderBy(g => g.T0)) log("    " + Actor(g.Actor) + " " + g);
+				}
+				if (exDir != null)
+				{
+					string file = System.IO.Path.Combine(exDir, $"{kind}_{bases}_{Geometry.PosName[first.Actor]}.bin");
+					if (!System.IO.File.Exists(file))
+					{
+						System.IO.File.WriteAllBytes(file, sc.Encode());
+						log($"exported {file}: {tag}");
+					}
+				}
+			}
+			log($"{rep.Plays} bunt scripts, {none} without one");
+			foreach (var kv in who.OrderBy(x => x.Key)) log($"  {kv.Key}: {kv.Value}");
+			foreach (var kv in tally.OrderBy(x => x.Key)) log($"  throw {kv.Key}: {kv.Value}");
+			foreach (var kv in rep.Count.OrderByDescending(x => x.Value))
+			{
+				log($"  {kv.Key}: {kv.Value} ({100.0 * kv.Value / Math.Max(1, rep.Plays):F1}%)");
+				foreach (string ex in rep.Examples[kv.Key]) log("      " + ex);
+			}
+		}
+
+		// The runners' Dest after a bunt, as Engine.cs plays it out and EndPlay records it (0 stays, 1-3 base, 4 scores,
+		// 5-8 out at first … home).
+		private static int[] BuntDest(Ma9MSim.PlayKind kind, bool[] on)
+		{
+			int[] at = { -1, on[1] ? 1 : -1, on[2] ? 2 : -1, on[3] ? 3 : -1 };   // where the runner from each base is (4 scored, 0 out)
+			bool b1 = on[1], b2 = on[2], b3 = on[3];
+			int[] dest = new int[4];
+			if (kind == Ma9MSim.PlayKind.BuntForce)
+			{
+				int lead = b2 ? 2 : 1;
+				at[lead] = 0;
+				if (lead == 2 && b1) at[1] = 2;
+				dest[0] = 1;
+			}
+			else
+			{
+				bool hit = kind == Ma9MSim.PlayKind.BuntHit;
+				if (hit ? b1 && b2 && b3 : b3 && b2) { at[3] = 4; b3 = false; }
+				if (b2 && !b3) { at[2] = 3; b3 = true; b2 = false; }
+				if (b1 && !b2) { at[1] = 2; }
+				dest[0] = hit ? 1 : 5;
+			}
+			for (int b = 1; b <= 3; b++)
+			{
+				if (!on[b]) continue;
+				dest[b] = at[b] == 0 ? 4 + Math.Min(4, b + 1) : at[b] == b ? 0 : at[b];
+				bool forced = b == 1 || (b == 2 && on[1]);
+				if (kind != Ma9MSim.PlayKind.BuntHit && forced && dest[b] == 0) dest[b] = b + 1;
+			}
+			return dest;
 		}
 
 		// Seconds from a fielder's catch to his first throw (-1 none).

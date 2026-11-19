@@ -204,7 +204,7 @@ public class Ma9MNegotiation : MonoBehaviour
 	private readonly List<Texture2D> m_made = new List<Texture2D>();
 
 	private GameObject m_board;
-	private UILabel m_title, m_turns, m_agentName, m_bentLabel, m_cardName, m_words, m_gaugeValue, m_terms, m_warn, m_hint, m_stamp;
+	private UILabel m_title, m_turns, m_agentName, m_bentLabel, m_cardName, m_words, m_gaugeValue, m_terms, m_warn, m_hint, m_stamp, m_info;
 	private UITexture m_bentPill, m_fill;
 	private readonly Btn[] m_choices = new Btn[4];
 	private readonly string[] m_choiceAction = new string[4];
@@ -250,6 +250,9 @@ public class Ma9MNegotiation : MonoBehaviour
 		Box(b, new Vector3(0f, BoardH * 0.5f - 45f, -0.5f), BoardW, 2f, new Color(Gold.r, Gold.g, Gold.b, 0.8f));
 		m_title = Text(b, m_renewal ? "FA 재계약 협상" : "FA 협상", new Vector3(-BoardW * 0.5f + 20f, BoardH * 0.5f - 22f, -1f), 21f, Gold, UIWidget.Pivot.Left, 300f);
 		m_turns = Text(b, string.Empty, new Vector3(BoardW * 0.5f - 20f, BoardH * 0.5f - 22f, -1f), 15f, Soft, UIWidget.Pivot.Right, 260f);
+		// 2026-11-19 (user 21:3x, 11-18 question 2 — AI tester 두산 48: the 1군 볼·팀컬러·1군 FA lines of the old offer window went with
+		// 1.0.57's straight-to-negotiation): one line in the header between the title and the turns (the server's 15th field).
+		m_info = Text(b, string.Empty, new Vector3(25f, BoardH * 0.5f - 22f, -1f), 13f, new Color(0.85f, 0.88f, 0.95f), UIWidget.Pivot.Center, 430f);
 
 		// Our club (11-17 12:2x, user: "에이전트 자리에 차라리 구단 엠블렘이 차지하고 조건을 선수가 제시하는게 좋아보임"): its emblem on a
 		// panel and its name; the club's lines are the four answers below.
@@ -299,7 +302,6 @@ public class Ma9MNegotiation : MonoBehaviour
 		// The gauge: 0-120, the deal at 100, very satisfied at 110.
 		float left = -GaugeW * 0.5f;
 		Text(b, "선수 만족도", new Vector3(left, 42f, -1f), 13f, Soft, UIWidget.Pivot.Left);
-		m_gaugeValue = Text(b, string.Empty, new Vector3(-left, 42f, -1f), 15f, Color.white, UIWidget.Pivot.Right);
 		Box(b, new Vector3(0f, 20f, 0.5f), GaugeW + 6f, 26f, new Color(0f, 0f, 0f, 0.6f));
 		m_fill = Box(b, new Vector3(left, 20f, 0f), 1f, 20f, new Color(0.9f, 0.3f, 0.25f, 1f));
 		m_fill.pivot = UIWidget.Pivot.Left;
@@ -309,7 +311,10 @@ public class Ma9MNegotiation : MonoBehaviour
 		Box(b, new Vector3(at110, 20f, -0.5f), 2f, 30f, Gold);
 		// Above the bar, beside the value (tester_1117d: under it, it ran into the terms line).
 		Text(b, "계약", new Vector3(at100, 42f, -1f), 11f, Color.white, UIWidget.Pivot.Center);
-		Box(b, new Vector3(at110, 38f, -1f), 8f, 8f, Gold).transform.localRotation = Quaternion.Euler(0f, 0f, 45f);
+		// 2026-11-19 (user 21:3x, 11-18 question 14 — AI testers NC 75 · kt 79: the value sat by the gold line at the bar's right, read as
+		// "금색 선 = 40"): the gold line is named, and the value rides the end of the fill (SetGauge).
+		Text(b, "최상", new Vector3(at110, 42f, -1f), 11f, Gold, UIWidget.Pivot.Center);
+		m_gaugeValue = Text(b, string.Empty, new Vector3(left + 5f, 20f, -1.2f), 14f, Color.white, UIWidget.Pivot.Left);
 		m_terms = Text(b, string.Empty, new Vector3(0f, -14f, -1f), 14f, Soft, UIWidget.Pivot.Center, 560f);
 		m_warn = Text(b, string.Empty, new Vector3(0f, -34f, -1f), 13f, new Color(1f, 0.45f, 0.4f), UIWidget.Pivot.Center, 560f);
 
@@ -413,6 +418,8 @@ public class Ma9MNegotiation : MonoBehaviour
 		Say(m[1]);
 		m_terms.text = m[3];
 		m_warn.text = string.Empty;
+		// [14] (servers from 2026-11-19): the before-signing line, empty for a renewal.
+		m_info.text = m.Length > 14 ? m[14] : string.Empty;
 		bool last = m[11] == "last";
 		for (int i = 0; i < 4; i++)
 		{
@@ -550,6 +557,12 @@ public class Ma9MNegotiation : MonoBehaviour
 			if (onDeal != null)
 			{
 				onDeal(info);
+			}
+			else
+			{
+				// 2026-11-19 (tester_1119f on the test server): an FA already signed, tapped again on the FA 시장 list (the list stays
+				// until the next one), opened as a renewal with no one to renew it, and [서명하기] only closed the screen.
+				PopupManager.ViewPopup1("FA 재계약", "이미 영입한 선수입니다.\n재계약은 팀 관리 > 계약관리에서\n[계약연장]으로 합니다.", Localization.instance.Get("OK"), null);
 			}
 			return;
 		}
@@ -690,6 +703,12 @@ public class Ma9MNegotiation : MonoBehaviour
 		m_fill.transform.localScale = new Vector3(Mathf.Max(1f, GaugeW * v / GaugeMax), 20f, 1f);
 		m_fill.color = v >= 110f ? Gold : v >= 100f ? new Color(0.35f, 0.85f, 0.4f) : v >= 70f ? new Color(0.55f, 0.8f, 0.3f) : v >= 40f ? new Color(0.95f, 0.65f, 0.2f) : new Color(0.9f, 0.3f, 0.25f);
 		m_gaugeValue.text = Mathf.RoundToInt(v).ToString();
+		// At the end of the fill: inside it once there is room (dark letters on the green and gold of a deal), just after it before.
+		float end = -GaugeW * 0.5f + GaugeW * v / GaugeMax;
+		bool inside = GaugeW * v / GaugeMax >= 36f;
+		m_gaugeValue.pivot = inside ? UIWidget.Pivot.Right : UIWidget.Pivot.Left;
+		m_gaugeValue.transform.localPosition = new Vector3(inside ? end - 5f : end + 5f, 20f, -1.2f);
+		m_gaugeValue.color = inside && v >= 100f ? Ink : Color.white;
 	}
 
 	// "+20" / "−15" rising from the gauge's end.

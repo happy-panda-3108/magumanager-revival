@@ -1183,8 +1183,8 @@ namespace Ma9MServer
 			else
 			{
 				string[] m = Msgs(p);
-				Check(p.Type.n == FaNegotiation.TurnType && m.Length == 14 && m[2] == FaNegotiation.StartGauge.ToString() && m[11] == "turn" && m[13] == "0"
-					&& !string.IsNullOrEmpty(m[4]) && !string.IsNullOrEmpty(m[7]), $"start {b.Year} {b.Name}: type {p.Type.n}: {Text(p)}");
+				Check(p.Type.n == FaNegotiation.TurnType && m.Length == 15 && m[2] == FaNegotiation.StartGauge.ToString() && m[11] == "turn" && m[13] == "0"
+					&& !string.IsNullOrEmpty(m[4]) && !string.IsNullOrEmpty(m[7]) && m[14].StartsWith("1군 볼 "), $"start {b.Year} {b.Name}: type {p.Type.n}: {Text(p)}");
 				for (int i = 0; i < 6 && p.Type.n == FaNegotiation.TurnType; i++)
 				{
 					p = Fan(b.Idx, "c3");
@@ -1200,14 +1200,26 @@ namespace Ma9MServer
 				Check(again.Type.n == FaNegotiation.DoneType && Text(again).Contains("결렬"), $"start again this season: {Text(again)}");
 			}
 
-			// 2. 그만두기: the talk is gone.
+			// 2. 그만두기: the talk is gone, but (11-19, user: "그만두면 만족도, 남은 대화 수를 기억해서 리세마라를 할 수 없게끔") opening the
+			// same player again goes on with the gauge, the turns and the cards played.
 			CardInfo c2 = free[free.Count - 2];
 			p = Fan(c2.Idx, "start");
 			if (p.Type.n == FaNegotiation.TurnType)
 			{
+				Ma9MPacket.PKS_SC_POPUP one = Fan(c2.Idx, "c1");
+				string[] om = Msgs(one);
+				Log($"  {c2.Name} c1 → type {one.Type.n}: {Text(one)}");
 				Send(new Ma9MPacket.PKS_CS_REQ_SCENE_TUTORIAL { scene_name = { str = $"ma9m:v2:fan:{c2.Idx}:quit" } });
 				Ma9MPacket.PKS_SC_POPUP gone = Fan(c2.Idx, "c0");
 				Check(gone.Type.n == FaNegotiation.DoneType && Text(gone).Contains("끝났거나"), $"quit, then a choice: {Text(gone)}");
+				if (one.Type.n == FaNegotiation.TurnType)
+				{
+					Ma9MPacket.PKS_SC_POPUP back = Fan(c2.Idx, "start");
+					string[] bm = Msgs(back);
+					Check(back.Type.n == FaNegotiation.TurnType && bm[1].StartsWith("다시 오셨군요") && bm[2] == om[2] && bm[9] == om[9] && bm[3] == om[3],
+						$"quit, then start again: on from gauge {om[2]}, {om[9]}: {Text(back)}");
+					Send(new Ma9MPacket.PKS_CS_REQ_SCENE_TUTORIAL { scene_name = { str = $"ma9m:v2:fan:{c2.Idx}:quit" } });
+				}
 			}
 
 			// 3. 협상 → 성사 → 서명.
@@ -1246,7 +1258,7 @@ namespace Ma9MServer
 			string[] em = Msgs(early);
 			int earlyPrice = ContractHandlers.FaCost(0, listPrice, days);
 			Check(early.Type.n == FaNegotiation.DealType && em[11] == "1" && em[6] == FaNegotiation.DaysOf(FaNegotiation.QuickSeasons).ToString()
-				&& em[7] == earlyPrice.ToString() && em[1].Contains("미리") && em[14].Contains("·"),
+				&& em[7] == earlyPrice.ToString() && em[1].Contains("벌써 연장") && em[14].Contains("·"),   // the line since 11-17 21:1x: "…벌써 연장하자고요?"
 				$"미리 연장 with {days} days left: {Text(early)} (want {earlyPrice:N0})");
 			string cs = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = Path.Combine(s_dataDir, "ma9m.db") }.ToString();
 			DateTime today = DateTime.Today;
@@ -1283,7 +1295,7 @@ namespace Ma9MServer
 			Check(refused.result.n == 1, $"EXTEND without a negotiation: result {refused.result.n}");
 			Ma9MPacket.PKS_SC_POPUP r = Fan(a.Idx, "start");
 			string[] rm = Msgs(r);
-			Check(r.Type.n == FaNegotiation.TurnType && rm.Length == 14 && rm[13] == "1" && rm[2] == FaNegotiation.RenewalGauge.ToString(), $"renewal talk: {Text(r)}");
+			Check(r.Type.n == FaNegotiation.TurnType && rm.Length == 15 && rm[13] == "1" && rm[14] == string.Empty && rm[2] == FaNegotiation.RenewalGauge.ToString(), $"renewal talk: {Text(r)}");
 			Ma9MPacket.PKS_SC_POPUP rq = Fan(a.Idx, "quick");
 			string[] rd = Msgs(rq);
 			Check(rq.Type.n == FaNegotiation.DealType && rd.Length >= 14 && rd[11] == "1" && rd[6] == FaNegotiation.DaysOf(FaNegotiation.QuickSeasons).ToString(), $"renewal 정가 바로: {Text(rq)}");
@@ -1325,8 +1337,21 @@ namespace Ma9MServer
 					p = Fan(top.Idx, step);
 					Log($"  {step} → type {p.Type.n}: gauge {Msgs(p).ElementAtOrDefault(p.Type.n == FaNegotiation.DealType ? 9 : 2)}, {Msgs(p).ElementAtOrDefault(1)?.Replace("\n", " | ")}");
 				}
-				Check(p.Type.n == FaNegotiation.DealType && Msgs(p)[10] == "1", $"크게 만족 deal: {Text(p)}");
-				if (p.Type.n == FaNegotiation.DealType)
+				// 2026-11-19 23:2x (user: "협상하는 난이도가 너무 쉬워진 것으로 보임"): 110 takes the bent's best cards and a strong club now
+				// (a 비기너 copy usually ends at the last offer). The 최상 flag is checked against the gauge reached; the 최상 signing
+				// only when it was reached.
+				bool dealt5 = p.Type.n == FaNegotiation.DealType;
+				int gauge5 = dealt5 && int.TryParse(Msgs(p).ElementAtOrDefault(9), out int g5) ? g5 : -1;
+				if (!dealt5)
+				{
+					Log($"  크게 만족 out of reach in this league (gauge {Msgs(p).ElementAtOrDefault(2)}, {Msgs(p).ElementAtOrDefault(11)}): {Text(p)}");
+					Send(new Ma9MPacket.PKS_CS_REQ_SCENE_TUTORIAL { scene_name = { str = $"ma9m:v2:fan:{top.Idx}:quit" } });   // no reply
+				}
+				else
+				{
+					Check(Msgs(p)[10] == (gauge5 >= FaNegotiation.TopGauge ? "1" : "0"), $"크게 만족 flag at gauge {gauge5}: {Text(p)}");
+				}
+				if (dealt5 && gauge5 >= FaNegotiation.TopGauge)
 				{
 					Ma9MPacket.PKS_SC_POPUP s2 = Fan(top.Idx, "sign");
 					long item = -1;

@@ -83,6 +83,8 @@ public class Ma9MHelp : MonoBehaviour
 			// 2026-11-15 FA (user 18:3x·18:46 via the engine session; server ContractHandlers.FaCost / FaBonusPerRenewal).
 			// 2026-11-17 FA 에이전트 재계약 협상 (server FaNegotiation; Ma9MNegotiation).
 			"FA 선수: 계약이 2일 이하로 남으면 [연장]이\n선수와의 재계약 협상이 됩니다.\n" +
+			// 2026-11-19 (user 21:3x: "협상을 하고, 스탯을 5점 찍는걸로 합시다"; ContractManage_Main.OnBtn_ExtendContract).
+			"합의한 뒤에 보너스 점수를 나누고\n[확인]을 누르면 재계약합니다.\n" +
 			// 2026-11-17 12:xx (user 11:5x "미리 연장하는 기능도 만듭시다"; server FaNegotiation.Early).
 			// 11-17 21:1x (user: "(웃돈) << 이 단어 안 보이게 … 불필요한 정보나 too much information은 도움말, 안내 멘트, 등등에 안
 			// 나왔으면 함"): no 웃돈, no 정가 percentages.
@@ -93,7 +95,8 @@ public class Ma9MHelp : MonoBehaviour
 		["Scene_PositionChange"] = () => new[]
 		{
 			"다른 보직으로 실제로 뛴 적이 있는 투수만\n그 보직으로 바꿀 수 있습니다(목록에 나온 선수).\n" +
-			"한 번에 40만 MP, 결과는 대성공 40% 또는 성공\n(실패는 없습니다).\n" +
+			// 2026-11-19 (AI tester NC 83, user 21:0x "바로 수정"): one name for the 3-card result, the 완벽성공!! of the result art.
+			"한 번에 40만 MP, 결과는 완벽성공 40% 또는 성공\n(실패는 없습니다).\n" +
 			"바뀐 보직이 경기에서 그 투수의 보직이 됩니다.",
 			"카드마다 한 번만 바꿀 수 있습니다.\n" +
 			"다시 하려면 포지션 변경 초기화권(상점 80만 MP)으로\n원래 보직·능력치로 되돌린 뒤 합니다.\n" +
@@ -101,12 +104,12 @@ public class Ma9MHelp : MonoBehaviour
 			"바뀐 능력치는 다음 쪽에 있습니다.",
 			"능력치 변화 (중계·셋업·마무리 → 선발)\n" +
 			"성공: 체력 +20, 구속 −2, 나머지 −1\n" +
-			"대성공: 체력 +20, 구속 −1, 나머지 +1\n" +
+			"완벽성공: 체력 +20, 구속 −1, 나머지 +1\n" +
 			"나머지 = 컨트롤 · 테크닉 · 구위 · P정신",
 			"능력치 변화 (선발 → 중계·셋업·마무리)\n" +
 			"성공: 체력 −25, 구속 +1, 나머지 −1\n" +
-			"대성공: 체력 −25, 구속 +2, 나머지 +1\n" +
-			"불펜끼리(예: 마무리 → 중계)\n성공: 체력 빼고 모두 −1 / 대성공: 컨트롤·테크닉·구위 +1"
+			"완벽성공: 체력 −25, 구속 +2, 나머지 +1\n" +
+			"불펜끼리(예: 마무리 → 중계)\n성공: 체력 빼고 모두 −1\n완벽성공: 컨트롤·테크닉·구위 +1"
 		},
 		["Scene_CoachingStaff"] = () => new[]
 		{
@@ -129,7 +132,8 @@ public class Ma9MHelp : MonoBehaviour
 			"코치는 100장까지 가질 수 있고, 선수 카드와 달리\n같은 코치가 또 나올 수 있습니다(팩·조합 모두).",
 			"면담실: 면담 시간은 0시~12시, 12시~24시입니다.\n" +
 			"수석코치 구단(계보)의 1군 선수 중 컨디션이\n나쁨·매우 나쁨인 선수가 찾아옵니다(후보 제외).\n" +
-			"한 시간대에 수석코치 등급만큼 옵니다.\n(노말 2 · 스페셜 3 · 레어 4 · 엘리트 5명)",
+			// 2026-11-19 23:0x (user: "최대 라는 단어를 추가합시다"; AI tester kt 12회차: 칸 4개에 1명만 와서 헷갈림).
+			"한 시간대에 최대 수석코치 등급만큼 옵니다.\n(노말 2 · 스페셜 3 · 레어 4 · 엘리트 5명)\n그런 선수가 적으면 빈 칸이 남습니다.",
 			"면담은 SP 150이 듭니다.\n끝나면 컨디션이 1~3단계 올라 12시간 갑니다.\n" +
 			"면담 효과가 남은 선수와 계약이 끝난 선수는\n오지 않습니다.\n" +
 			"면담실은 열 때마다 빈자리를 채웁니다.",
@@ -211,9 +215,15 @@ public class Ma9MHelp : MonoBehaviour
 			// 2026-11-17 FA 에이전트 협상 (user 09:3x; server FaNegotiation, Ma9MNegotiation, Ma9MFaCeremony).
 			"[FA 영입]을 누르면 선수와 계약을 협상합니다.\n" +
 			"계약금 올리기·깎기, 주전 보장·우승 도전·\n옛 동료·긴 계약 중에서 4번 골라\n선수 만족도 100을 채우면 합의입니다.\n" +
-			"선수 성향(돈·우승·주전·의리)에 맞는 제안이\n크게 먹힙니다.",
+			"선수 성향(돈·우승·주전·의리)에 맞는 제안이\n크게 먹히고, 그 제안이 먼저 나옵니다.\n" +
+			// 2026-11-19 23:0x (user: "선수가 만족하는 대답이 아닌 경우 -로 작용하는 상호작용도 괜찮을 것 같음"; server FaNegotiation.TermEffect).
+			"맞지 않는 제안은 오히려 만족도가 내려갑니다.\n" +
+			// 2026-11-19 (user 21:3x: "우승 도전 팀이라고 했을 때 계약 당시 순위를 기준으로 하고 있어서 좀 애매"; server FaNegotiation.TitleView).
+			"우승 도전은 리그 단계와 우리 전력으로 봅니다.\n시즌 초에는 1군 볼 합계 순위, 경기가 쌓이면 순위.",
 			"만족도 110(금색 선)을 넘겨 합의하면\n24시간 동안 컨디션 최상으로 뜁니다\n(컨디션 회복제 칸은 쓰지 않습니다).\n" +
 			"0 아래로 떨어지면 결렬: 이번 시즌에는\n그 선수와 다시 협상할 수 없습니다.\n" +
+			// 2026-11-19 (user 21:3x: "FA 협상을 그만두면 만족도, 남은 대화 수를 기억해서 리세마라를 할 수 없게끔"; server FaNegotiation SavePause).
+			"[그만두기]를 눌러도 만족도와 남은 대화는\n그대로 남아, 다시 열면 이어서 합니다.\n" +
 			"[정가로 바로 계약]: 정가에 4시즌(10일).",
 			// 2026-11-17 15:xx (user: "FA선수 계약기간은 기본 4시즌(10일)에 협상 중 계약 기간 추가, 계약금 추가, 감소 등이 이벤트로").
 			"정가: 8볼 1,500만 · 9볼 3,000만 MP.\n계약은 기본 4시즌(10일)이고, 협상으로\n계약금이 정가의 75~130% 사이에서 오르내리고\n기간을 늘리면(+2시즌) 6시즌(15일)이 됩니다.\n" +
@@ -576,6 +586,8 @@ public class Ma9MHelp : MonoBehaviour
 	private static void ShowPage(string[] pages, int i)
 	{
 		string title = pages.Length > 1 ? "도움말 (" + (i + 1) + "/" + pages.Length + ")" : "도움말";
+		// 2026-11-19 (user 21:3x, 11-18 question 8): every page in a box of the tallest page's height (Ma9MPopupFit.Pages).
+		Ma9MPopupFit.Pages = pages;
 		if (i < pages.Length - 1)
 		{
 			PopupManager.ViewPopup2(title, pages[i], "다음", "닫기", () => ShowPage(pages, i + 1), null);

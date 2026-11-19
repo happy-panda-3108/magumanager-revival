@@ -246,7 +246,7 @@ namespace Ma9MServer
 
 		public int SceneCount => m_scenes.Count;
 
-		// Scenes worth a dev look: homers by kind ("hr4" wall-scraper, "hr5" no-doubter).
+		// Scenes worth a dev look: homers by kind ("hr4" wall-scraper, "hr5" no-doubter), bunts, steals, a walk after a pitching change.
 		public readonly List<(int scene, string tag)> Events = new List<(int, string)>();
 
 		// Pitches thrown by model pitcher (the scenes' pitch counts), for the league's per-game lines
@@ -344,6 +344,15 @@ namespace Ma9MServer
 			if (sit == Sit.Bunt && preset != null)
 			{
 				Events.Add((m_scenes.Count, preset.Chase == FieldPos.B1 ? "bunt1b" : "bunt"));
+			}
+			// Dev (MA9M_EXHIBITION_WANT, 2026-11-19): a steal; a walk straight after a pitching change.
+			if (sit == Sit.Steal)
+			{
+				Events.Add((m_scenes.Count, "steal"));
+			}
+			if (sit == Sit.FourBall && m_scenes.Count > 0 && m_scenes[^1][0] == Sit.SpChangePitcher)
+			{
+				Events.Add((m_scenes.Count, "changewalk"));
 			}
 			// An extra-base hit to the outfield with runners on: the relay throw home.
 			if ((sit == Sit.Double || sit == Sit.Triple) && (p.Before[1] >= 0 || p.Before[2] >= 0))

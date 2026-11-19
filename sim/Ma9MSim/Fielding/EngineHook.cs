@@ -147,6 +147,40 @@ namespace Ma9MSim
 			play.Script = m_choreo.Steal(fld.Def ?? s_averageDefence, RunnerOf(runner), fromBase, safe).Encode();
 		}
 
+		// The 3D script of a bunt (2026-11-19: they had none and the broadcast's own AI left the pitcher holding the ball).
+		// The engine's call and its runners (PlayInfo.Dest, so call it once Dest is set); where it went is drawn from the
+		// play's own numbers, not the game's dice, so every result stays as it was.
+		private Side m_buntSide;
+		private int m_buntSeq;
+
+		private void BuntScript(Side fld, PlayKind kind)
+		{
+			if (!FieldEngine.On || rec == null || play.Before[0] < 0) return;
+			int batter = play.Before[0];
+			int hand = m.BatSide != null ? m.BatSide[batter] : 0;
+			bool lefty = hand == 1 || (hand == 2 && m.PitcherType != null && m.PitcherType[play.Pitcher] < 2);
+			BatterRun br = new BatterRun { R = RunnerOf(batter), Lefty = lefty };
+			RunnerSkill[] run = new RunnerSkill[4];
+			bool[] on = new bool[4];
+			for (int b = 1; b <= 3; b++)
+			{
+				on[b] = play.Before[b] >= 0;
+				if (on[b]) run[b] = RunnerOf(play.Before[b]);
+			}
+			Rng g = new Rng((ulong)(++m_buntSeq * 7919 + batter * 104729 + play.Pitcher * 1299709 + play.Team * 31));
+			(double h, double stop) = Choreo.BuntSpot(kind, on, play.Dest, ref g);
+			// Only the picture: whatever goes wrong here, the game goes on without it (the broadcast's own AI plays it).
+			try
+			{
+				PlayScript sc = m_choreo.Bunt(fld.Def ?? s_averageDefence, br, run, on, play.Dest, kind, h, stop);
+				if (sc != null) play.Script = sc.Encode();
+			}
+			catch (Exception)
+			{
+				play.Script = null;
+			}
+		}
+
 		// Card mode: each man's tools at the position he plays today (defence there, his 주력).
 		private Fielding.Defence BuildDefence(int[] at)
 		{

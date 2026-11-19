@@ -307,6 +307,43 @@ namespace Ma9MServer
 			return in1.Any(c => c.Ball >= need) ? head + $"{need}볼 이상 선수와 바꿔야 들어갑니다." : head + "지금 1군에는 볼 상한을 넘어 넣을 수 없습니다.";
 		}
 
+		// The negotiation screen's header line (user 11-19 21:3x, 11-18 question 2 — AI tester 두산 48: since 1.0.57 the FA 시장 goes straight
+		// to the negotiation and the offer window's 볼·팀컬러·1군 FA lines were gone; 두산 signed at 142/140): "화면 위에 한 줄로 영입 전 안내".
+		// The 1군 balls with whether he fits, the 1군 FA places, the team colour he joins — short enough for the header (FaNegotiation.SendTurn).
+		internal static string BriefLine(uint user, CardInfo fa)
+		{
+			Lineup l = RosterHandlers.Db.GetLineup(user);
+			int cap = RosterHandlers.MaxCostOf(user);
+			List<CardInfo> in1 = l == null ? new List<CardInfo>()
+				: l.Batters.Concat(l.Pitchers).Where(i => i != 0).Select(i => RosterHandlers.Catalog.Get(i)).Where(c => c != null).ToList();
+			int balls = in1.Sum(c => c.Ball);
+			bool room = l != null && l.Batters.Concat(l.Pitchers).Any(i => i == 0);
+			int need = fa.Ball - (cap - balls);
+			string fit = room && balls + fa.Ball <= cap ? "넣어도 상한 안"
+				: need <= 0 ? "바꿔도 상한 안"
+				: in1.Any(c => c.Ball >= need) ? $"{need}볼 이상과 교체"
+				// (tester_1119f screen, 11-19 22:0x: "상한 넘음" did not say what it means for the player)
+				: "지금 1군에 못 넣음";
+			int fas = in1.Count(c => c.IsFA);
+			int entry = TeamColors.Registered(user).FirstOrDefault(e => e != 0 && TeamColors.IsMemberOf(e, fa));
+			string colour = entry != 0 ? $"팀컬러 {TeamColors.ShortName(entry)}" : "팀컬러 해·연대만";
+			string ballPart = $"1군 볼 {balls}/{cap}({fit})";
+			// The header has about 430 of the 800 design's width at 13 between the title and the turns: about 460 in PopupText.Px.
+			foreach (string line in new[]
+			{
+				$"{ballPart} · 1군 FA {fas}/{CardInfo.MaxFaInFirstTeam} · {colour}",
+				$"{ballPart} · FA {fas}/{CardInfo.MaxFaInFirstTeam} · {colour}",
+				$"{ballPart} · 1군 FA {fas}/{CardInfo.MaxFaInFirstTeam}"
+			})
+			{
+				if (PopupText.Px(line) <= 460)
+				{
+					return line;
+				}
+			}
+			return ballPart;
+		}
+
 		// One FA in the 1군 and the same player once (RosterHandlers.FaProblem): who stands in the way now.
 		private static string FirstTeamLine(uint user, CardInfo fa)
 		{

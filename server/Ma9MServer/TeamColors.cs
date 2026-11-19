@@ -858,7 +858,8 @@ namespace Ma9MServer
 			}
 			int step = Math.Max(0, AchievementTop[(int)e.Value.kind - 1] - e.Value.grade - (e.Value.slot == 0 ? 0 : 1));
 			string label = Label(instance).name, grade = GradeNames[e.Value.grade];
-			return ($"{label} {grade}", $"팀컬러 '{label}'({Kinds[(int)e.Value.kind - 1].name}) {grade} 등급을 처음 적용하세요.",
+			// 2026-11-19 (AI tester NC 84: "팀컬러 ''20·'24 NC 투수진'"): no quotes round the name, which starts with the year's ' itself.
+			return ($"{label} {grade}", $"팀컬러 {label}({Kinds[(int)e.Value.kind - 1].name}) {grade} 등급을 처음 적용하세요.",
 				AchievementGrades[step], instance - e.Value.grade * 1_000_000);
 		}
 

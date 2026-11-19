@@ -17,6 +17,7 @@ using UnityEngine;
 //   zoom <x> <y> <w> <h> <png>      that part of the view at the game's own resolution
 //   click <x> <y> | dbl <x> <y> | hold <x> <y> <ms> | drag <x1> <y1> <x2> <y2> [ms] | wheel <x> <y> <notches>
 //   type <text> | key <esc|enter|backspace|tab> | wait <ms> | state
+//   ui [all] | text [filter] | tap <label|name>[#n] | shotwidth <w> | shot <png> <w>   (Ma9MRemoteUi, 2026-11-19)
 //   any action + " --shot <png> [--wait <ms>]" waits (1500 ms) and takes the picture.
 // The sound is off unless "-ma9mremotesound". Dev tool only: without the argument nothing here runs.
 [DefaultExecutionOrder(-32000)]
@@ -36,6 +37,9 @@ public class Ma9MRemote : MonoBehaviour
 	private static readonly ConcurrentQueue<Job> s_jobs = new ConcurrentQueue<Job>();
 
 	private static bool s_sound;
+
+	// Picture width for "shot" and "--shot" (shotwidth), and one shot's own width ("shot <png> <w>").
+	private static int s_shotWidth = 960, s_oneWidth;
 
 	private TcpListener m_listener;
 
@@ -189,8 +193,44 @@ public class Ma9MRemote : MonoBehaviour
 				action = WaitMs(N(a, 1, 1000));
 				break;
 			case "shot":
-				shot = Unquote(line.Length > 5 ? line.Substring(5).Trim() : "shot.png");
+			{
+				// "shot <png> [width]": a smaller picture (looking only; clicks stay in the 960-wide view).
+				string rest = line.Length > 5 ? line.Substring(5).Trim() : "shot.png";
+				int sp = rest.LastIndexOf(' ');
+				s_oneWidth = 0;
+				if (sp > 0 && int.TryParse(rest.Substring(sp + 1), out int sw) && sw >= 120 && sw <= 1920)
+				{
+					s_oneWidth = sw;
+					rest = rest.Substring(0, sp);
+				}
+				shot = Unquote(rest);
 				wait = 0;
+				break;
+			}
+			// Engine session, 2026-11-19 (testers' tokens): the screen as text, taps by label, smaller pictures by default.
+			case "ui":
+				reply = Ma9MRemoteUi.Ui(line.Contains(" all"));
+				break;
+			case "text":
+				reply = Ma9MRemoteUi.Text(line.Length > 5 ? line.Substring(5).Trim() : null);
+				break;
+			case "tap":
+			{
+				string q = line.Length > 4 ? line.Substring(4).Trim() : string.Empty;
+				if (Ma9MRemoteUi.Find(Unquote(q), out Vector2 at, out string what))
+				{
+					action = Click(at, false);
+					reply = "ok " + what;
+				}
+				else
+				{
+					reply = "error " + what;
+				}
+				break;
+			}
+			case "shotwidth":
+				s_shotWidth = Mathf.Clamp(N(a, 1, 960), 120, 1920);
+				reply = "ok shots " + s_shotWidth + " wide (clicks stay in the 960-wide view)";
 				break;
 			case "zoom":
 				break;
@@ -210,6 +250,11 @@ public class Ma9MRemote : MonoBehaviour
 			//   help                   this screen's (?) help
 			case "textcheck":
 				reply = Ma9MTextCheck.Run(line.Length > 10 ? Unquote(line.Substring(10).Trim()) : null);
+				break;
+			// Systems session, 2026-11-19: "seasonresult <file>" opens the season result screen (Ma9MSeasonResult) in the lobby with the
+			// file's JSON (the server's LeagueAwards.ResultJson form); nothing goes to the server.
+			case "seasonresult":
+				reply = Ma9MSeasonResult.Test(line.Length > 13 ? Unquote(line.Substring(13).Trim()) : string.Empty);
 				break;
 			case "textscroll":
 				foreach (Ma9MTextBox box in Ma9MTextBox.Live.ToArray())
@@ -459,7 +504,9 @@ public class Ma9MRemote : MonoBehaviour
 			}
 			else
 			{
-				picture = Scale(full, Mathf.RoundToInt(ViewWidth), Mathf.RoundToInt(full.height * ViewWidth / full.width));
+				float pw = s_oneWidth > 0 ? s_oneWidth : s_shotWidth;
+				s_oneWidth = 0;
+				picture = Scale(full, Mathf.RoundToInt(pw), Mathf.RoundToInt(full.height * pw / full.width));
 			}
 			string dir = Path.GetDirectoryName(Path.GetFullPath(path));
 			if (!string.IsNullOrEmpty(dir))

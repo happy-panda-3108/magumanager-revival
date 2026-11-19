@@ -576,7 +576,11 @@ namespace Ma9MServer
 				double speed = f == FieldPos.C ? 5 : 9;
 				Flight fl = Fly(speed, -20, h);
 				double d = Math.Min(fl.StopDist, f == FieldPos.C ? 2 : 9);
-				Add(PresetKind.Bunt, speed, -20, h, f, FieldPos.P, FieldPos.C, false, 0, Math.Min(fl.TimeTo(d), fl.TotalTime), Point(h, d), 0, BatterRecord.Bunt, bunt: true);
+				// No backups (2026-11-19): naming the pitcher and the catcher as backups while the broadcast's own AI also
+				// hands the pitcher whichever base is left open put him on two jobs; on the bunts to the catcher and to the
+				// pitcher he ended up covering home, picked the ball up there and never threw (user, 11-19). Bunts are scripted
+				// now (Choreo.Bunt); these are for games stored before that.
+				Add(PresetKind.Bunt, speed, -20, h, f, FieldPos.None, FieldPos.None, false, 0, Math.Min(fl.TimeTo(d), fl.TotalTime), Point(h, d), 0, BatterRecord.Bunt, bunt: true);
 			}
 		}
 

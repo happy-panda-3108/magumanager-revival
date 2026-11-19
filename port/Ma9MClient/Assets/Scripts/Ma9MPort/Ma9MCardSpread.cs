@@ -156,7 +156,41 @@ public class Ma9MCardSpread : MonoBehaviour
 	// page: a page all turned with more to come still holds them.
 	private static bool Holding()
 	{
-		return s_current != null && s_current.root != null && (!s_current.AllTurned() || s_current.pending.Count > 0);
+		return (s_current != null && s_current.root != null && (!s_current.AllTurned() || s_current.pending.Count > 0))
+			|| (s_expectUntil > 0f && Time.realtimeSinceStartup < s_expectUntil);
+	}
+
+	// (systems session, 2026-11-19, AI tester NC 버그 35: "카드팩 1000개" came 2.3 s after [확인], during the 홈런볼 gauge before the
+	// cards, was seen, then taken back by the spread and shown a second time once the cards were turned) From a pack purchase that
+	// will spread (Shop_Main, the gauge branch) until the spread begins, the 업적 wait too. EndExpect when the gauge is over: the
+	// spread holds from then on, or (one card, 한 장씩) what waited comes out; at the latest after 10 s (Ma9MTick).
+	private static float s_expectUntil;
+
+	public static void ExpectCards()
+	{
+		s_expectUntil = Time.realtimeSinceStartup + 10f;
+	}
+
+	public static void EndExpect()
+	{
+		if (s_expectUntil <= 0f)
+		{
+			return;
+		}
+		s_expectUntil = 0f;
+		if (!Holding())
+		{
+			ReleaseMissions();
+		}
+	}
+
+	// PopupManager.Update.
+	public static void Ma9MTick()
+	{
+		if (s_expectUntil > 0f && Time.realtimeSinceStartup >= s_expectUntil)
+		{
+			EndExpect();
+		}
 	}
 
 	public static bool HoldMission(int missionIndex, Action endCallBack)
@@ -249,6 +283,7 @@ public class Ma9MCardSpread : MonoBehaviour
 		seen = seenSoFar;
 		total = totalCount;
 		s_current = this;
+		s_expectUntil = 0f;
 		BuildUI();
 		NextPage();
 	}

@@ -45,6 +45,8 @@ namespace Ma9MServer
 			public string n { get; set; }     // 타율, …, 리그 MVP, 한국시리즈 MVP
 			public bool p { get; set; }       // a pitching title
 			public string v { get; set; } = string.Empty;
+			public string v2 { get; set; }    // the 2위·3위 records (from 2026-11-19, the 시상대; older apps skip them)
+			public string v3 { get; set; }
 			public int mp { get; set; }
 			public int mp2 { get; set; }
 			public int mp3 { get; set; }
@@ -64,6 +66,7 @@ namespace Ma9MServer
 			public int rank { get; set; }             // my place in clubs
 			public string verdict { get; set; }       // 우승, 승격, 잔류, 강등, 포스트시즌 진출
 			public string verdict2 { get; set; }      // the line under it
+			public string verdict3 { get; set; }      // a post-season club: what the post-season decides (from 2026-11-19; older apps skip it)
 			public List<ResultTitle> titles { get; set; } = new List<ResultTitle>();
 			public ResultTitle mvp { get; set; }
 			public int mine { get; set; }             // my club's titles
@@ -102,6 +105,7 @@ namespace Ma9MServer
 			return new ResultTitle
 			{
 				n = a.Category, p = a.Page == 1, v = a.Winners.Count > 0 ? a.Value : (a.Note ?? "-"), mp = a.Mp, mp2 = a.Mp2, mp3 = a.Mp3,
+				v2 = string.IsNullOrEmpty(a.Value2) ? null : a.Value2, v3 = string.IsNullOrEmpty(a.Value3) ? null : a.Value3,
 				a = Listed(a.Winners, ListedWinners), b = Listed(a.Second, ListedPlaced), c = Listed(a.Third, ListedPlaced),
 				xa = Math.Max(0, a.Winners.Count - ListedWinners)
 			};
@@ -131,6 +135,7 @@ namespace Ma9MServer
 				(string name, int slot) entry = mine == 1 ? ("한국시리즈 직행", 13) : mine == 2 ? ("플레이오프부터", 8) : mine == 3 ? ("준플레이오프부터", 3) : ("와일드카드 결정전부터", 1);
 				r.verdict = "포스트시즌 진출";
 				r.verdict2 = $"정규시즌 {mine}위 · {entry.name}";
+				r.verdict3 = PostStakes(s.Tier, mine);
 				r.next = $"포스트시즌: {entry.name} · {LeagueCalendar.PostSlotTime(s.Start, entry.slot):M월 d일 HH:mm}";
 			}
 			else
@@ -150,6 +155,32 @@ namespace Ma9MServer
 			r.mine = awards.Sum(a => a.Winners.Count(w => w.Club == s.MyIndex));
 			r.placed = awards.Sum(a => a.Second.Count(w => w.Club == s.MyIndex) + a.Third.Count(w => w.Club == s.MyIndex));
 			return Fit(r);
+		}
+
+		// 2026-11-19 23:0x (user: "결산 1쪽 오른쪽 판의 "포스트시즌 진출" 아래에 "포스트시즌 최종 4위 안이면 트리플A 승격" 한 줄을 넣습니다. <<
+		// 추천대로 합시다"; AI tester kt 12회차 불편 80: 정규 3위가 준PO에서 지면 올라가는지 몰랐음): what the post-season's final place
+		// decides, read off LeagueRules.NextTier — "최종 4위 안이면 트리플A 리그 승격", at the gate "최종 3위 안이면 챔피언스 리그 승격", at the
+		// top "최종 3위 안이면 챔피언스 리그 잔류".
+		private static string PostStakes(int tier, int rank)
+		{
+			int up = 0, kept = 0;
+			for (int place = 1; place <= LeagueRules.PostseasonClubs; place++)
+			{
+				int next = LeagueRules.NextTier(tier, rank, place);
+				if (next > tier && up == place - 1)
+				{
+					up = place;
+				}
+				if (next >= tier && kept == place - 1)
+				{
+					kept = place;
+				}
+			}
+			if (up > 0)
+			{
+				return $"포스트시즌 최종 {up}위 안이면 {TierName(LeagueRules.NextTier(tier, rank, 1))} 승격";
+			}
+			return kept > 0 && kept < LeagueRules.PostseasonClubs ? $"포스트시즌 최종 {kept}위 안이면 {TierName(tier)} 잔류" : null;
 		}
 
 		// The close: the final places (the post-season's five, then the regular-season ranks), the champion and the

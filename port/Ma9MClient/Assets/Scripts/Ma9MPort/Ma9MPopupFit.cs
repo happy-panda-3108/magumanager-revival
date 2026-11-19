@@ -8,8 +8,20 @@ using UnityEngine;
 // tallest popup (Ma9MTextBox.FitPopup).
 public static class Ma9MPopupFit
 {
+	// 2026-11-19 (user 21:3x, 11-18 question 8 — AI tester LG 108: the FA 시장 help's pages were boxes of different heights, so [다음]
+	// stood at y 288 on pages 1-4 and 306 on page 5 and a tap in the same place missed): "가장 긴 쪽의 높이를 맞춥시다. 항상 같은 칸에
+	// 버튼이 있게끔". A help (Ma9MHelp.ShowPage) names its pages before it opens a page; a popup showing one of them is sized for the
+	// tallest, so every page's box and buttons stand in the same place.
+	public static string[] Pages;
+
 	public static void Fit(UILabel content)
 	{
+		string[] pages = Pages;
+		if (pages != null && pages.Length > 1 && content != null && System.Array.IndexOf(pages, content.text) >= 0)
+		{
+			Ma9MTextBox.FitPopupTallest(content, pages, content.text);
+			return;
+		}
 		Ma9MTextBox.FitPopup(content);
 	}
 }

@@ -42,6 +42,8 @@ namespace Ma9MServer
 			// count (two co-winners leave no 2위, the next is 3위); not for the MVPs.
 			public List<PlayerSeason> Second = new List<PlayerSeason>(), Third = new List<PlayerSeason>();
 			public int Mp2, Mp3;
+			// Their records (2026-11-19 23:0x, the 시상대 of the result screen: "1~3등이 어떤 성적으로 1~3등인지").
+			public string Value2 = string.Empty, Value3 = string.Empty;
 
 			// The MP this award pays a club's players (titles, 2위, 3위).
 			public int MpFor(int club) => Mp * Winners.Count(w => w.Club == club) + Mp2 * Second.Count(w => w.Club == club) + Mp3 * Third.Count(w => w.Club == club);
@@ -179,6 +181,8 @@ namespace Ma9MServer
 					int RankOf(double v) => 1 + field.Count(x => cat.Lower ? x.v < v - 1e-9 : x.v > v + 1e-9);
 					a.Second = field.Where(x => RankOf(x.v) == 2).Select(x => x.p).ToList();
 					a.Third = field.Where(x => RankOf(x.v) == 3).Select(x => x.p).ToList();
+					a.Value2 = field.Where(x => RankOf(x.v) == 2).Select(x => cat.Format(x.v)).FirstOrDefault() ?? string.Empty;
+					a.Value3 = field.Where(x => RankOf(x.v) == 3).Select(x => cat.Format(x.v)).FirstOrDefault() ?? string.Empty;
 				}
 				else
 				{

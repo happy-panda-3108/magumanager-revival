@@ -251,7 +251,8 @@ public class Ma9MNewsTicker : MonoBehaviour
 			return;
 		}
 		Ma9MBookPopup p = Ma9MBookPopup.Create(0f);
-		p.Title.text = "리그 소식";
+		// 2026-11-19 (user 21:3x, 11-18 question 5 — AI tester 두산 53: only the notices and FA news, not the league's): "알아서 선정".
+		p.Title.text = "소식";
 		p.Content.text = "· " + string.Join("\n· ", s_lines.ToArray());
 		p.FitContent(true);
 		p.AddButton(Localization.instance.Get("OK"), 0f, p.BottomRow, 1f, p.Close);
