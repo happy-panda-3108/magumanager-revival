@@ -93,7 +93,8 @@ namespace Ma9MSim.Fielding
 		// the fielders, the outfielders look first, and a man stops looking once he cannot have the
 		// ball in hand before the best so far. The pick is the same as before to the last bit: the
 		// soonest in hand, a tie going to the lower position number.
-		private static readonly int[] s_order = { Geometry.LF, Geometry.CF, Geometry.RF, Geometry.B1, Geometry.B2, Geometry.B3, Geometry.SS };
+		// (2026-11-20) The pitcher and the catcher last: a loose ball dying near the plate is theirs (a missed dribbler).
+		private static readonly int[] s_order = { Geometry.LF, Geometry.CF, Geometry.RF, Geometry.B1, Geometry.B2, Geometry.B3, Geometry.SS, Geometry.Pit, Geometry.C };
 
 		[ThreadStatic] private static double[] t_gridT;
 		[ThreadStatic] private static P[] t_gridAt;
@@ -447,7 +448,32 @@ namespace Ma9MSim.Fielding
 						}
 					}
 				}
-				double margin = pickS >= 0 ? Math.Max(0.12, bestM) : bestM;
+				// (2026-11-20, user: "1루수 앞 빗맞은 땅볼이 나왔는데 이걸 왜 우익수가 달려나오면서 처리하려고 하는지 모르겠음 … 이게 3루타가 되던데 …
+				// 내야 빗맞은 땅볼 행운의 안타가 장타가 되는 일이 있어서는 안됨") A ball that dies within his reach is his whatever the clock:
+				// he walks up and picks it up at rest. Before, a man who could not meet the moving ball "missed" a dribbler that
+				// stopped in front of him, and the outfielders alone went for it (Through).
+				bool rest = false;
+				if (stop >= 1.5 && stop <= hi + 0.25)
+				{
+					double tStop = Flight.GroundTime(v, d0, t0, Math.Max(d0, stop - 0.25));
+					if (!double.IsInfinity(tStop) && !double.IsNaN(tStop))
+					{
+						P q = new P(stop * hc, stop * hs);
+						double tf = s.RunTime(Math.Max(0, pos.Dist(q) - s.Reach));
+						double tb = Math.Max(tStop, tf);
+						double toFirst = q.Dist(Geometry.Base[1]);
+						double arrive = tb + 0.12 + s.Release + toFirst / s.Arm;
+						if (f == Geometry.B1 && toFirst < 9)
+						{
+							arrive = tb + 0.1 + s.RunTime(toFirst) - s.React;
+						}
+						if (arrive < pickArrive)
+						{
+							pickArrive = arrive; pickS = stop; pickT = tb; rest = true;
+						}
+					}
+				}
+				double margin = pickS >= 0 ? Math.Max(rest ? 1.0 : 0.12, bestM) : bestM;
 				double sAt = pickS >= 0 ? pickS : bestMs;
 				double tAt = pickS >= 0 ? pickT : bestMt;
 				if (double.IsNegativeInfinity(margin)) continue;
@@ -468,7 +494,9 @@ namespace Ma9MSim.Fielding
 				}
 			}
 			Roll roll = Roll.Make(d0, t0, v, h, Geometry.FenceAt(h), Flight.GroundDecel);
-			Through = Retrieval.Find(d, roll, -1, -1, 0, true);
+			// (2026-11-20) Whoever has it in hand first, infielders, the pitcher and the catcher too: a ball the fielder missed
+			// that dies on the infield is not an outfielder's to run in for (the man who missed it starts after he got up).
+			Through = Retrieval.Find(d, roll, -1, Fielder, FieldTime + GetUp, false);
 		}
 
 		// The luck in a play, drawn once and reused for the league-average and the real fielders.

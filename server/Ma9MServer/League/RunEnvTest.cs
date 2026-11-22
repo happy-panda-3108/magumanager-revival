@@ -41,7 +41,11 @@ namespace Ma9MServer
 			}
 		}
 
-		private static readonly string[] RunEnvVariants = { "live", "neutral", "nodev", "notraits", "noref", "full", "nodef", "batref", "pitref" };
+		// (11-20, B20 예상 승률 vs 실제) daily = live with each round's own day (its 컨디션 and AI 면담, Teams(s, g) per round), and a
+		// per-club table (RUNENV_CLUBS=1): every real club's win share by variant, its season so far, and 자동 편성's 예상 승률
+		// (LineupSimCheck of its 1군, RUNENV_PREDICT games a club, 0 = left out). RUNENV_CHAINS = chains a league (seeds differ).
+		private static readonly string[] RunEnvVariants = { "live", "neutral", "nodev", "notraits", "noref", "full", "nodef", "batref", "pitref", "daily" };
+		private static readonly object s_runEnvTeamsGate = new object();
 
 		public static int RunEnvTest(int rounds)
 		{
@@ -97,7 +101,7 @@ namespace Ma9MServer
 					GameTeam[] teams;
 					Lineup[] lineups;
 					TraitEffects.Effect[] traits;
-					if (v == "live")
+					if (v == "live" || v == "daily")
 					{
 						(teams, lineups, traits) = Teams(s, game, _ => game);
 					}
@@ -134,23 +138,36 @@ namespace Ma9MServer
 
 			// Play: a chain of `rounds` league games for each league and variant.
 			var results = new Dictionary<(int tier, string variant), RunEnvLine>();
+			// Per club (league state, club index): wins (ties ½) and games, by variant.
+			var clubWins = new Dictionary<(LeagueState s, int club, string variant), (double w, long n)>();
+			int chainsEach = int.TryParse(Environment.GetEnvironmentVariable("RUNENV_CHAINS"), out int ch) ? Math.Max(1, ch) : 1;
 			object gate = new object();
 			GameEnv env = s_data.Env;
 			System.Threading.Tasks.Parallel.ForEach(jobs, new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = threads }, job =>
 			{
 				RunEnvLine line = new RunEnvLine();
 				int clubs = job.teams.Length;
+				double[] cw = new double[clubs];
+				long[] cn = new long[clubs];
 				double[][] units = new double[clubs][];
 				int[][] days = new int[clubs][], last1 = new int[clubs][], last2 = new int[clubs][];
-				for (int i = 0; i < clubs; i++) { units[i] = new double[11]; days[i] = new int[11]; last1[i] = new int[11]; last2[i] = new int[11]; }
 				int first = Math.Clamp(job.s.NextGame, 1, LeagueRules.Games);
+				for (int chain = 0; chain < chainsEach; chain++)
+				{
+				for (int i = 0; i < clubs; i++) { units[i] = new double[11]; days[i] = new int[11]; last1[i] = new int[11]; last2[i] = new int[11]; }
 				for (int r = 0; r < rounds; r++)
 				{
 					int g = 1 + (first - 1 + r) % LeagueRules.Games;
+					GameTeam[] dayTeams = job.teams;
+					if (job.variant == "daily")
+					{
+						// The round's own day: its 컨디션 and the AI decks' 면담 (Teams reads the database: one thread at a time).
+						lock (s_runEnvTeamsGate) dayTeams = Teams(job.s, g, _ => g).teams;
+					}
 					foreach ((int away, int home) in LeagueRules.Pairs(g, job.s.Start))
 					{
 						int[] club = { home, away };
-						GameTeam h = CopyTeam(job.teams[home]), a = CopyTeam(job.teams[away]);
+						GameTeam h = CopyTeam(dayTeams[home]), a = CopyTeam(dayTeams[away]);
 						h.StarterSlot = StarterSlot(job.lineups[home], g);
 						a.StarterSlot = StarterSlot(job.lineups[away], g);
 						SeasonModel m = CardGame.Build(h, a, env);
@@ -170,7 +187,7 @@ namespace Ma9MServer
 							}
 						}
 						// The same seed for every variant (paired); not HashCode, which is seeded per process.
-						ulong seed = job.s.UserCode * 1000003UL + (ulong)job.s.Season * 7919UL + (ulong)r * 104729UL + (ulong)home * 13UL + 1;
+						ulong seed = job.s.UserCode * 1000003UL + (ulong)job.s.Season * 7919UL + (ulong)r * 104729UL + (ulong)home * 13UL + 1 + (ulong)chain * 15485863UL;
 						SimStats st = new SeasonSimulator(m, new EngineParams { RunEnvironment = env.RunEnvironment, ReachOnError = env.ReachOnError }, seed).PlayOne(0, 1, null);
 						for (int t = 0; t < 2 && m.Tac != null; t++)
 						{
@@ -186,6 +203,11 @@ namespace Ma9MServer
 							}
 						}
 						if (r < warm) continue;
+						long hr = m.TeamBatters[0].Sum(i => st.Bat(i, BS.R)), ar = m.TeamBatters[1].Sum(i => st.Bat(i, BS.R));
+						cw[home] += hr > ar ? 1 : hr == ar ? 0.5 : 0;
+						cw[away] += ar > hr ? 1 : hr == ar ? 0.5 : 0;
+						cn[home]++;
+						cn[away]++;
 						for (int t = 0; t < 2; t++)
 						{
 							long B(int stat) => m.TeamBatters[t].Sum(i => st.Bat(i, stat));
@@ -203,10 +225,12 @@ namespace Ma9MServer
 						}
 					}
 				}
+				}
 				lock (gate)
 				{
 					if (!results.TryGetValue((job.s.Tier, job.variant), out RunEnvLine sum)) results[(job.s.Tier, job.variant)] = sum = new RunEnvLine();
 					sum.Add(line);
+					for (int i = 0; i < clubs; i++) clubWins[(job.s, i, job.variant)] = (cw[i], cn[i]);
 				}
 			});
 
@@ -234,7 +258,59 @@ namespace Ma9MServer
 					if (results.TryGetValue((tier, v), out RunEnvLine l)) Console.WriteLine(l.Row(v));
 				}
 			}
+			if (Environment.GetEnvironmentVariable("RUNENV_CLUBS") == "1") RunEnvClubTable(leagues, variants, clubWins, jobs.Where(j => j.variant == variants[0]).ToDictionary(j => j.s, j => j.lineups), threads);
 			return 0;
+		}
+
+		// (11-20, B20) Every club's win share by variant beside its season so far; real clubs also with 자동 편성's 예상 승률 of
+		// their 1군 (LineupSimCheck, RUNENV_PREDICT games a club). Means for real and AI clubs at the end.
+		private static void RunEnvClubTable(List<LeagueState> leagues, string[] variants, Dictionary<(LeagueState s, int club, string variant), (double w, long n)> clubWins, Dictionary<LeagueState, Lineup[]> lineups, int threads)
+		{
+			int predictGames = int.TryParse(Environment.GetEnvironmentVariable("RUNENV_PREDICT"), out int pg) ? pg : 60;
+			Console.WriteLine();
+			Console.WriteLine("## clubs (win share by variant; season = W/(W+L), ties ½)");
+			Console.WriteLine($"| tier | club | real | season | {string.Join(" | ", variants)} | 예상 |");
+			Console.WriteLine($"|---|---|---|---:|{string.Concat(variants.Select(_ => "---:|"))}---:|");
+			var sums = new Dictionary<(bool human, string col), (double sum, int n)>();
+			void Add(bool human, string col, double v)
+			{
+				if (double.IsNaN(v)) return;
+				(double s0, int n0) = sums.GetValueOrDefault((human, col));
+				sums[(human, col)] = (s0 + v, n0 + 1);
+			}
+			foreach (LeagueState s in leagues.OrderBy(s => s.Tier))
+			{
+				for (int i = 0; i < s.Clubs.Count; i++)
+				{
+					LeagueClub c = s.Clubs[i];
+					double played = c.W + c.L + c.D;
+					double season = played > 0 ? (c.W + 0.5 * c.D) / played : double.NaN;
+					List<string> cols = new List<string>();
+					foreach (string v in variants)
+					{
+						(double w, long n) = clubWins.GetValueOrDefault((s, i, v));
+						double share = n > 0 ? w / n : double.NaN;
+						cols.Add(n > 0 ? $"{share:F3}" : "-");
+						Add(c.IsHuman, v, share);
+					}
+					double pred = double.NaN;
+					if (c.IsHuman && predictGames > 0 && lineups.TryGetValue(s, out Lineup[] ls))
+					{
+						try { pred = LineupSimCheck(c.Owner, new List<Lineup> { ls[i] }, predictGames, threads)[0]; }
+						catch (Exception e) { Console.WriteLine($"predict {c.Name}: {e.Message}"); }
+					}
+					Add(c.IsHuman, "season", season);
+					Add(c.IsHuman, "예상", pred);
+					// AI clubs only for leagues with a real club other than a shared league's first member (keeps the table short).
+					if (!c.IsHuman && Environment.GetEnvironmentVariable("RUNENV_CLUBS_AI") != "1") continue;
+					Console.WriteLine($"| {LeagueRules.TierNames[s.Tier]} | {c.Name} | {(c.IsHuman ? "사람" : "AI")} | {(double.IsNaN(season) ? "-" : season.ToString("F3"))} ({c.W}-{c.L}-{c.D}) | {string.Join(" | ", cols)} | {(double.IsNaN(pred) ? "-" : pred.ToString("F3"))} |");
+				}
+			}
+			foreach (bool human in new[] { true, false })
+			{
+				string Mean(string col) => sums.TryGetValue((human, col), out var t) && t.n > 0 ? (t.sum / t.n).ToString("F3") : "-";
+				Console.WriteLine($"| mean | {(human ? "사람" : "AI")} ({sums.GetValueOrDefault((human, variants[0])).n}) | | {Mean("season")} | {string.Join(" | ", variants.Select(Mean))} | {Mean("예상")} |");
+			}
 		}
 
 		// The league's spread after the reference: SD of the 9 batters' 컨택 파워 선구, of the staff's 구속 컨트롤 테크닉 구위

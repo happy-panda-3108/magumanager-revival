@@ -82,8 +82,10 @@ namespace Ma9MServer
 			if (paid.Count == 1)
 			{
 				(int season, int tier, int rank, int mp) p = paid[0];
-				lines.Add($"{p.season}시즌 {Tier(p.tier)} {p.rank}위로 완주했습니다!");
-				lines.Add($"보너스 {p.mp:N0} MP를 받았습니다.");
+				// 2026-11-20 (AI testers 두산 55 · NC · kt: "3위로 완주" here and "4위 · 준우승" in the close right after read as two
+				// different places): the bonus goes by the regular season's place, and says so.
+				lines.Add($"{p.season}시즌 {Tier(p.tier)} 정규시즌 {p.rank}위로 완주했습니다!");
+				lines.Add($"보너스 {p.mp:N0} MP를 받았습니다(정규시즌 순위 기준).");
 				return lines;
 			}
 			int first = paid[0].season, last = paid[paid.Count - 1].season;
@@ -94,7 +96,7 @@ namespace Ma9MServer
 			{
 				int j = i;
 				while (j + 1 < paid.Count && paid[j + 1].season == paid[j].season + 1 && paid[j + 1].tier == paid[i].tier && paid[j + 1].rank == paid[i].rank) j++;
-				runs.Add($"{(i == j ? $"{paid[i].season}시즌" : $"{paid[i].season}~{paid[j].season}시즌")} {Tier(paid[i].tier)} {paid[i].rank}위");
+				runs.Add($"{(i == j ? $"{paid[i].season}시즌" : $"{paid[i].season}~{paid[j].season}시즌")} {Tier(paid[i].tier)} 정규 {paid[i].rank}위");
 				i = j + 1;
 			}
 			List<string> places = PopupText.Wrap(runs, " · ");

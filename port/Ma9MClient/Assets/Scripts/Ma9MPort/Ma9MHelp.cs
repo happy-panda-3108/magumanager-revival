@@ -71,13 +71,17 @@ public class Ma9MHelp : MonoBehaviour
 		},
 		["Scene_ContractManage"] = () => new[]
 		{
+			// 2026-11-20 00:5x (user: 계약관리·특별수강도 FA 시장처럼; ContractManage_CardList tap mode).
+			"카드를 한 번 누르면 오른쪽 칸에 올라가고,\n꾹 누르면 선수 정보를 봅니다.\n" +
 			// AI 테스터 두산 불편 (11-11): 카드 왼쪽 아래 숫자가 무엇인지, 7일이 실제 날인지.
 			"새 카드의 계약은 7일입니다(0시마다 하루씩 줄어듦).\n카드 왼쪽 아래 숫자가 남은 계약일입니다.\n연장하면 7일이 늘어납니다(최대 99일).\n" +
 			"계약금은 볼 × 4만 MP입니다.\n" +
 			"남은 계약이 " + TableReader.ContractCost.Ma9MSurchargeAfter + "일을 넘을 때 연장하면\n하루마다 계약금이 20%씩 더 붙습니다.",
 			"처음 6번 연장할 때마다 보너스 3점을\n원하는 능력치에 나눠 찍습니다(최대 +18).\n" +
 			"7번째부터는 능력치는 오르지 않고\n계약일만 늘어납니다.\n" +
-			"스탯재분배권으로 보너스 점수를 다시 나눌 수 있습니다.",
+			"스탯재분배권으로 보너스 점수를 다시 나눌 수 있습니다.\n" +
+			// 2026-11-20 (AI tester autotest7 3회차: [1군 연장]이 왜 안 되는지 버튼만 봐서는 모름; ContractManage_Main.Ma9MOnBtn_BulkExtend).
+			"[1군 연장]: 보너스 6번을 다 찍은 1군 선수를\n한 번에 연장합니다(남은 계약 " + TableReader.ContractCost.Ma9MSurchargeAfter + "일 이하, FA 제외).",
 			"계약이 끝난 선수는 1군에 있어도\n컨디션 매우 나쁨으로 뜁니다.\n연장하면 보통부터 다시 시작합니다.\n" +
 			"방출하면 볼 × 5천 MP를 돌려받습니다.\n(보관함에 25장은 남아야 합니다.)",
 			// 2026-11-15 FA (user 18:3x·18:46 via the engine session; server ContractHandlers.FaCost / FaBonusPerRenewal).
@@ -97,7 +101,9 @@ public class Ma9MHelp : MonoBehaviour
 			"다른 보직으로 실제로 뛴 적이 있는 투수만\n그 보직으로 바꿀 수 있습니다(목록에 나온 선수).\n" +
 			// 2026-11-19 (AI tester NC 83, user 21:0x "바로 수정"): one name for the 3-card result, the 완벽성공!! of the result art.
 			"한 번에 40만 MP, 결과는 완벽성공 40% 또는 성공\n(실패는 없습니다).\n" +
-			"바뀐 보직이 경기에서 그 투수의 보직이 됩니다.",
+			"바뀐 보직이 경기에서 그 투수의 보직이 됩니다.\n" +
+			// 2026-11-20 01:0x (user: 칸에 넣는 화면은 한 번 누르기; PositionChange_CardList tap mode).
+			"카드를 한 번 누르면 변경 대상 칸에 올라가고,\n꾹 누르면 선수 정보를 봅니다.",
 			"카드마다 한 번만 바꿀 수 있습니다.\n" +
 			"다시 하려면 포지션 변경 초기화권(상점 80만 MP)으로\n원래 보직·능력치로 되돌린 뒤 합니다.\n" +
 			"레전드도 목록에 나오면 바꿀 수 있습니다.\n" +
@@ -118,8 +124,12 @@ public class Ma9MHelp : MonoBehaviour
 			"코치 카드는 상점 > 트레이닝 탭의\n코칭스태프 카드팩(30만 MP)에서 나옵니다.\n" +
 			// 2026-11-13 (user): 자팀(1군에 가장 많은 계보) 코치 20% (CoachCatalog.OwnLinePercent).
 			"(노말 83% · 스페셜 14.5% · 레어 2% · 엘리트 0.5%,\n1군에 가장 많은 구단(계보)의 코치가 20%)\n" +
-			"칸: 수석 · 타격 · 투수 · 트레이닝코치 · 치어리더",
+			"칸: 수석 · 타격 · 투수 · 트레이닝코치 · 치어리더\n" +
+			// 2026-11-20 01:0x (user: 칸에 넣는 화면은 한 번 누르기; CoachingStaff_StaffChange_CardList tap mode).
+			"스태프교체: 코치를 한 번 누르면 교체 칸에,\n꾹 누르면 코치 정보를 봅니다.",
 			"코치는 자기 구단(계보) 선수에게만 일합니다.\n" +
+			// 2026-11-20 (AI testers NC, 두산 33: "계보" 풀이가 없음).
+			"계보: 이름이 바뀐 구단도 한 줄로 봅니다\n(예: OB·두산, 해태·KIA, 빙그레·한화).\n" +
 			"수석코치: 면담실에 선수를 보냅니다(뒤쪽).\n" +
 			// 2026-11-12 (user): not on the lowest square. 2026-11-13: a missed top square makes the next top square certain.
 			"타격·투수코치: 트레이닝에 나와(노말 30% ~ 엘리트 60%,\n가장 낮은 칸엔 안 나오고, 가장 높은 칸을 놓치면\n다음 가장 높은 칸엔 꼭) SP 50으로 결과 한 칸 위로.\n" +
@@ -170,7 +180,8 @@ public class Ma9MHelp : MonoBehaviour
 			// 2026-11-11 (AI 테스터 kt 4회차): "저절로 걸리지 않는다"는 틀림. 11-09부터 자동 등록(TeamColors.AutoRegister).
 			// Five short lines (2026-11-12, engine screen check: two long lines shrank the whole page's text).
 			"1군을 등록하면 칸마다 가장 강한 팀컬러가\n저절로 등록됩니다. 다른 것을 쓰려면\n" +
-			"목록의 칸을 두 번 눌러 고른 뒤 등록하세요\n(직접 고른 것은 조건을 채우는 동안 그대로).\n" +
+			// 2026-11-20 01:0x: one tap into the slot, a long press for the description (TeamColor_Main, Ma9MTapHold).
+			"목록의 칸을 눌러 오른쪽에 넣은 뒤 등록하세요\n(꾹 누르면 설명만. 직접 고른 것은 그대로 유지).\n" +
 			// 2026-11-13 (user 16:5x 결정 4): hints from a third of the members (server TeamColors.Hints).
 			"보라색 = 채움 · 회색 = 3분의 1 이상 모임",
 			// Five lines (2026-11-12, engine screen check: six made it the smallest page).
@@ -246,7 +257,9 @@ public class Ma9MHelp : MonoBehaviour
 		["Scene_SpecialLecture"] = () => new[]
 		{
 			"타격 코치 1명(첫 쪽)과 투수 코치 1명(옆으로 넘김)이\n매일 0시에 바뀝니다(KBO 감독 22명이 차례로).\n" +
-			"코치마다 나이 조건(25세 이하 · 26~32세 · 33세 이상,\n또는 용병만)에 맞는 그 쪽 선수만 받습니다.",
+			"코치마다 나이 조건(25세 이하 · 26~32세 · 33세 이상,\n또는 용병만)에 맞는 그 쪽 선수만 받습니다.\n" +
+			// 2026-11-20 00:5x (user: 계약관리·특별수강도 FA 시장처럼; SpecialLecture_CardList tap mode).
+			"선수 고르기: 카드를 한 번 누르면 신청 칸에 올라가고,\n꾹 누르면 선수 정보를 봅니다.",
 			// 2026-11-12 (user 10:4x): a 1군 card turns the 즉시 완료권 on; a coach's +5 takes the player off his list.
 			"한 번에 6명까지. 1군 선수는 즉시 완료권과 함께만\n(1군 카드를 고르면 즉시 완료권이 저절로 켜짐).\n" +
 			"수강료: 1~4볼 8만 · 5~7볼 20만 · 8~9볼 40만 · 10볼 80만\n" +

@@ -51,7 +51,48 @@ namespace Ma9MSim.Fielding
 			{
 				Plays(lib, opt, log);
 			}
+			if (what == "weakxb" || what == "all")
+			{
+				WeakExtraBase(lib, log);
+			}
 			return 0;
+		}
+
+		// (2026-11-20, user: "내야 빗맞은 땅볼 행운의 안타가 장타가 되는 일이 있어서는 안됨") Ground balls among the reference runner's
+		// singles, doubles and triples that die on the infield (stop within 40 m), and who got them.
+		private static void WeakExtraBase(BipLibrary lib, Action<string> log)
+		{
+			Defence d = Defence.Average();
+			foreach (int key in new[] { BipLibrary.Single, BipLibrary.Double, BipLibrary.Triple })
+			{
+				int ground = 0, weak = 0, shown = 0;
+				Dictionary<string, int> by = new Dictionary<string, int>();
+				for (int hand = 0; hand < 2; hand++)
+				{
+					long n = lib.Count[hand, key];
+					for (long i = 0; i < n; i++)
+					{
+						BipLibrary.Entry e = lib.Draw(hand, key, (i + 0.5) / n);
+						if (e.Ball.La >= 10) continue;
+						ground++;
+						double d0 = Math.Max(0.5, Flight.Carry(e.Ball.Ev, e.Ball.La));
+						double stop = Flight.GroundStop(Flight.LandSpeed(e.Ball.Ev, e.Ball.La) * Flight.HopKeep, d0);
+						if (stop >= 40) continue;
+						weak++;
+						BatterRun br = new BatterRun { R = RunnerSkill.For(Defence.RefRunX), Lefty = hand == 1 };
+						BallPlan plan = BallPlan.Make(e.Ball, d, br);
+						Rng nr = new Rng(e.Seed);
+						BallPlan.Result r = plan.Realize(BallPlan.Noise.Draw(ref nr));
+						string who = (r.Through ? "through " : "fielded ") + Geometry.PosName[Math.Max(0, r.Through ? plan.Through.F : r.Fielder)];
+						by[who] = by.TryGetValue(who, out int c) ? c + 1 : 1;
+						if (key >= BipLibrary.Double && shown++ < 5)
+						{
+							log($"   {BipLibrary.KeyName[key]} ev {e.Ball.Ev:F1} la {e.Ball.La:F1} h {e.Ball.H:F0} stop {stop:F1} m, fielder {plan.Fielder} margin {plan.FieldMargin:F2}, {who} T {plan.Through.T:F2}");
+						}
+					}
+				}
+				log($"{BipLibrary.KeyName[key]}: ground {ground}, dying on the infield (< 40 m) {weak} — " + string.Join(", ", by.OrderByDescending(x => x.Value).Select(x => $"{x.Key} {x.Value}")));
+			}
 		}
 
 		// Runner situations with league-average fielders and runners, against the old engine's rates:
@@ -79,7 +120,7 @@ namespace Ma9MSim.Fielding
 			Resolver.TagJump = Opt("tagjump", Resolver.TagJump);
 			log($"ofextra {Defence.OfExtra} ofdecay {Defence.OfDecay} tagsd {Resolver.TagSd} lineread {Resolver.LineRead} flylead {Resolver.FlyLead} tagjump {Resolver.TagJump} turn2 {Resolver.Turn2} pivot {FielderSkill.PivotBase}");
 			Defence d = Defence.Average();
-			Resolver res = new Resolver { D = d };
+			Resolver res = new Resolver { D = d, ErrScale = Opt("errscale", 1) };   // errscale: more errors to look at (11-20 dropped flies)
 			Dictionary<string, double> metric = new Dictionary<string, double>();
 			void Case(string name, int key, int outs, bool on1, bool on2, bool on3, string tag = null, int slot = 0, int[] good = null, int[] bad2 = null)
 			{
@@ -149,6 +190,8 @@ namespace Ma9MSim.Fielding
 			Case("FO, 3루, 1사 (구엔진 희비 60%)", BipLibrary.FlyOut, 1, false, false, true, "sf", 3, new[] { 4 }, new[] { 8 });
 			Case("FO, 2루, 0사 (구엔진 3루 25%)", BipLibrary.FlyOut, 0, false, true, false, "f23", 2, new[] { 3 }, new[] { 7 });
 			Case("LO, 1·2루, 0사", BipLibrary.LineOut, 0, true, true, false);
+			Case("FO, 1루, 0사 (놓친 뜬공: 타자 2루 없음)", BipLibrary.FlyOut, 0, true, false, false);
+			Case("FO, 1·2루, 1사", BipLibrary.FlyOut, 1, true, true, false);
 			long h1 = lib.Count[0, BipLibrary.Single] + lib.Count[1, BipLibrary.Single], h2 = lib.Count[0, BipLibrary.Double] + lib.Count[1, BipLibrary.Double], h3 = lib.Count[0, BipLibrary.Triple] + lib.Count[1, BipLibrary.Triple];
 			long all = 0;
 			for (int k = 0; k < BipLibrary.HomeRun; k++) all += lib.Count[0, k] + lib.Count[1, k];

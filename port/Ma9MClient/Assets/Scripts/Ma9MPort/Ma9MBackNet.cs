@@ -17,7 +17,17 @@ public class Ma9MBackNet : MonoBehaviour
 
 	private readonly List<Renderer> m_nets = new List<Renderer>();
 
+	// 11-20 (AI 테스터 NC, 남은일 0-3: 창원 홈 경기의 포수 뒤 카메라에서는 그물이 아직 화면을 덮음): the triangles are kept in the
+	// mesh's own space and moved to the world with the renderer's current matrix whenever it changes (the 11-18 version took the
+	// world positions once at Attach, before the park was placed), and every enabled camera that draws the net's layer is checked,
+	// not only Camera.main (the pitch view behind the catcher is drawn by another camera).
+	private readonly List<Vector3[]> m_local = new List<Vector3[]>();
+
 	private readonly List<Vector3[]> m_tris = new List<Vector3[]>();
+
+	private readonly List<Matrix4x4> m_at = new List<Matrix4x4>();
+
+	private Camera[] m_cams = new Camera[8];
 
 	public static void Attach(GameObject ground)
 	{
@@ -50,26 +60,31 @@ public class Ma9MBackNet : MonoBehaviour
 			}
 			Vector3[] v = mesh.vertices;
 			int[] idx = mesh.triangles;
-			Matrix4x4 m = r.transform.localToWorldMatrix;
-			Vector3[] world = new Vector3[idx.Length];
+			Vector3[] local = new Vector3[idx.Length];
 			for (int i = 0; i < idx.Length; i++)
 			{
-				world[i] = m.MultiplyPoint3x4(v[idx[i]]);
+				local[i] = v[idx[i]];
 			}
 			m_nets.Add(r);
-			m_tris.Add(world);
+			m_local.Add(local);
+			m_tris.Add(new Vector3[local.Length]);
+			m_at.Add(new Matrix4x4());
 		}
 		Debug.Log("[Ma9MBackNet] " + m_nets.Count + " net renderer(s) in " + name);
 	}
 
 	private void LateUpdate()
 	{
-		Camera cam = Camera.main;
-		if (cam == null)
+		int camCount = Camera.allCamerasCount;
+		if (camCount == 0)
 		{
 			return;
 		}
-		Vector3 c = cam.transform.position;
+		if (m_cams.Length < camCount)
+		{
+			m_cams = new Camera[camCount];
+		}
+		camCount = Camera.GetAllCameras(m_cams);
 		float near2 = NearMetres * NearMetres;
 		for (int k = 0; k < m_nets.Count; k++)
 		{
@@ -78,11 +93,31 @@ public class Ma9MBackNet : MonoBehaviour
 			{
 				continue;
 			}
-			bool close = false;
+			Matrix4x4 m = r.transform.localToWorldMatrix;
 			Vector3[] t = m_tris[k];
-			for (int i = 0; i + 2 < t.Length && !close; i += 3)
+			if (m != m_at[k])
 			{
-				close = (ClosestOnTriangle(c, t[i], t[i + 1], t[i + 2]) - c).sqrMagnitude < near2;
+				Vector3[] l = m_local[k];
+				for (int i = 0; i < l.Length; i++)
+				{
+					t[i] = m.MultiplyPoint3x4(l[i]);
+				}
+				m_at[k] = m;
+			}
+			int layer = 1 << r.gameObject.layer;
+			bool close = false;
+			for (int ci = 0; ci < camCount && !close; ci++)
+			{
+				Camera cam = m_cams[ci];
+				if (cam == null || !cam.isActiveAndEnabled || (cam.cullingMask & layer) == 0)
+				{
+					continue;
+				}
+				Vector3 c = cam.transform.position;
+				for (int i = 0; i + 2 < t.Length && !close; i += 3)
+				{
+					close = (ClosestOnTriangle(c, t[i], t[i + 1], t[i + 2]) - c).sqrMagnitude < near2;
+				}
 			}
 			if (r.enabled == close)
 			{

@@ -93,6 +93,10 @@ namespace Ma9MServer
 			reply.possess_player.array = page.Where(owned.Contains).Select(i => new PInteger { n = i }).ToArray();
 			session.Send(reply);
 			ServerLog.Info($"[{session.Id}] album {year} team {team}: {reply.index.array.Length} of {page.Count} seen, {reply.possess_player.array.Length} owned; {reply.total_count.n} seen in all");
+			if (market)
+			{
+				FaMarket.FullRosterNotice(session, user);
+			}
 		}
 
 		// The cards of a page (yy = the request's year byte, year = the season it means).

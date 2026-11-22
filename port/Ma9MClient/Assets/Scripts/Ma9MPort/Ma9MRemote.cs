@@ -214,6 +214,18 @@ public class Ma9MRemote : MonoBehaviour
 			case "text":
 				reply = Ma9MRemoteUi.Text(line.Length > 5 ? line.Substring(5).Trim() : null);
 				break;
+			case "sns":
+			{
+				string[] sa = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+				reply = Ma9MRemoteUi.Sns(sa.Length >= 2 && int.TryParse(sa[1], out int from) ? from : -1);
+				break;
+			}
+			case "pick":
+			{
+				string[] pa = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+				reply = pa.Length >= 3 && float.TryParse(pa[1], out float px) && float.TryParse(pa[2], out float py) ? Ma9MRemoteUi.Pick(px, py) : "error usage: pick <x> <y> (960-wide view)";
+				break;
+			}
 			case "tap":
 			{
 				string q = line.Length > 4 ? line.Substring(4).Trim() : string.Empty;

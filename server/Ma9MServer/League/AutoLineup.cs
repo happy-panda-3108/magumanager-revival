@@ -60,6 +60,10 @@ namespace Ma9MServer
 			// (Lineup is then the 1군 of now), and its games' win share; null / NaN when not turned down.
 			public Lineup TurnedDown;
 			public double TurnedDownSim = double.NaN;
+			// (engine 2026-11-20, AI 테스터 두산 39·쌍방울·LG·kt, 남은일 4번 "새 FA를 안 넣은 까닭 표시") FA 선수카드 the user holds
+			// that the 1군 of the advice leaves out, each with why (one line, without the card's own name; FaReason). A swap of
+			// one into the advice that keeps the rules and adds is taken into the advice instead (FaPass).
+			public List<(int idx, string why)> FaLeftOut = new List<(int, string)>();
 		}
 
 		// Full games a club for AutoLineupResult.Sim* (2026-11-12: 100 → about 1.5 s for three 1군s in a league of eight on 3 threads).
@@ -755,9 +759,140 @@ namespace Ma9MServer
 				r.StartersOut = new List<int>();
 				r.SimAdvice = r.SimNow;
 				r.SimSe = 0;
+				// The FA reasons were told against the advice; now the 1군 of now is the answer (no swap taken here).
+				LineupContext xc = Context(userCode);
+				if (xc != null) FaPass(xc, r.Lineup, r.CurrentParts, keepColour ? TeamColors.Registered(userCode) : null, out r.FaLeftOut, take: false);
 			}
 			return r;
 		}
+
+		// FA 선수카드 (2026-11-20): the held FA cards not in `l` (its 25). Each is tried in every batting-order slot (a batter) or
+		// pitcher slot (a pitcher) of `l`; when a swap keeps the rules and adds, the best such swap of all is taken and the pass
+		// runs again (`take`), so `l` may come back changed. The cards left out get FaReason's line.
+		private static (Lineup l, TeamValue.Parts v) FaPass(LineupContext x, Lineup l, TeamValue.Parts v, int[] keep, out List<(int idx, string why)> why, bool take = true)
+		{
+			why = new List<(int, string)>();
+			List<int> held = x.Owned.Keys.Where(i => s_data.Catalog.Get(i)?.IsFA == true).OrderBy(i => i).ToList();
+			if (held.Count == 0 || l == null || v == null) return (l, v);
+			for (int round = 0; round < 6; round++)
+			{
+				why.Clear();
+				(Lineup l, TeamValue.Parts v) best = (null, null);
+				HashSet<int> inL = l.Batters.Concat(l.Pitchers).Where(i => i != 0).ToHashSet();
+				foreach (int fa in held.Where(i => !inL.Contains(i)))
+				{
+					string reason = FaReason(x, l, v, fa, keep, out Lineup gain, out TeamValue.Parts gainV);
+					if (gain != null && take && round < 5)
+					{
+						if (best.l == null || gainV.Runs > best.v.Runs) best = (gain, gainV);
+					}
+					else if (gain != null)
+					{
+						// Not taken: the games turned the advice down (take false), or the rounds ran out.
+						why.Add((fa, take ? "넣으면 나아질 수 있습니다(자동 편성을 한 번 더 눌러 보세요)" : "계산으로는 나아 보이지만 경기로 재 보니 지금 1군이 낫습니다"));
+					}
+					else why.Add((fa, reason ?? "넣어 볼 자리가 없습니다"));
+				}
+				if (best.l == null) break;
+				(l, v) = best;
+			}
+			return (l, v);
+		}
+
+		// Why FA card `fa` is not in `l` (null with `gain` set when a swap keeps the rules and adds). The rules in Allowed's
+		// order, the ball cap last: a swap out of position is not called a cap problem. Among the slots the reason of the swap
+		// that got furthest wins (cap > team colour > FA count > same player > 선발 제한 > 선수 고정 > 레전드 > position).
+		private static string FaReason(LineupContext x, Lineup l, TeamValue.Parts v, int fa, int[] keep, out Lineup gain, out TeamValue.Parts gainV)
+		{
+			gain = null;
+			gainV = null;
+			if (x.Expired.Contains(fa)) return "계약이 끝났습니다(재계약하면 후보가 됩니다)";
+			if (!x.Info.TryGetValue(fa, out CardInfo c)) return "특별수강 중입니다";
+			string[] order = { "cap", "colour", "fa", "same", "spblock", "locked", "legend", "position" };
+			int worst = order.Length, minBalls = int.MaxValue, sameAs = 0;
+			(Lineup t, TeamValue.Parts tv, int outIdx) best = (null, null, 0);
+			int slots = c.IsBatter ? 9 : Lineup.PitcherSlots;
+			for (int k = 0; k < slots; k++)
+			{
+				Lineup t = Clone(l);
+				int[] row = c.IsBatter ? t.Batters : t.Pitchers;
+				int outIdx = row[k];
+				row[k] = fa;
+				string p = SwapProblem(x, t, keep, out int balls, out int same);
+				if (p == null)
+				{
+					TeamValue.Parts tv = Evaluate(x, t, out _);
+					if (best.t == null || tv.Runs > best.tv.Runs) best = (t, tv, outIdx);
+					continue;
+				}
+				int at = Array.IndexOf(order, p);
+				if (at < 0) continue;
+				if (p == "cap") minBalls = Math.Min(minBalls, balls);
+				if (p == "same" && sameAs == 0) sameAs = same;
+				worst = Math.Min(worst, at);
+			}
+			if (best.t != null)
+			{
+				if (best.tv.Runs > v.Runs + 1e-4)
+				{
+					gain = best.t;
+					gainV = best.tv;
+					return null;
+				}
+				return best.outIdx != 0
+					? $"넣어 봐도 지금보다 약해집니다(가장 나은 자리: {CardName(best.outIdx)} 대신)"
+					: "빈 자리에 넣어 봐도 지금보다 약해집니다";
+			}
+			if (worst >= order.Length) return null;
+			switch (order[worst])
+			{
+				case "cap": return $"넣으면 볼 {minBalls}/{Ro(x.Cap)} 상한을 넘습니다";
+				case "colour": return "넣으면 지금 등록한 팀컬러가 깨집니다";
+				case "fa":
+					string inFirst = string.Join("·", l.Batters.Concat(l.Pitchers).Where(i => i != 0 && x.Info.TryGetValue(i, out CardInfo f) && f.IsFA).Select(CardName));
+					return $"1군 FA는 {CardInfo.MaxFaInFirstTeam}명까지입니다({inFirst})";
+				case "same": return $"같은 선수의 다른 카드({CardName(sameAs)})가 1군에 있습니다";
+				case "spblock": return "선발 5경기 제한에 걸립니다";
+				case "locked": return "바꿀 수 있는 자리가 모두 선수 고정입니다";
+				case "legend": return "레전드 인원 제한에 걸립니다";
+				default: return c.IsBatter ? "맞는 수비 자리가 없습니다" : "보직(선발·중계·마무리)이 맞는 자리가 없습니다";
+			}
+		}
+
+		// The first rule (Allowed's, the ball cap last) a 1군 breaks, or null. same: a card of the same player already there.
+		private static string SwapProblem(LineupContext x, Lineup l, int[] keep, out int balls, out int same)
+		{
+			balls = RosterHandlers.LineupBalls(l);
+			same = 0;
+			List<int> all = l.Batters.Concat(l.Pitchers).Where(i => i != 0).ToList();
+			if (all.Count != all.Distinct().Count() || all.Any(i => !x.Info.ContainsKey(i))) return "invalid";
+			var people = all.GroupBy(i => PersonOf(x.Info[i])).FirstOrDefault(g => g.Count() > 1);
+			if (people != null)
+			{
+				same = people.FirstOrDefault(i => !x.Info[i].IsFA);
+				return "same";
+			}
+			if (all.Count(i => x.Info[i].IsLegend && x.Info[i].IsBatter) > RosterHandlers.MaxLegendBatters) return "legend";
+			if (all.Count(i => x.Info[i].IsLegend && !x.Info[i].IsBatter) > RosterHandlers.MaxLegendPitchers) return "legend";
+			if (all.Count(i => x.Info[i].IsFA) > CardInfo.MaxFaInFirstTeam) return "fa";
+			if (l.Batters.Take(9).Any(i => i == 0 || !x.Info[i].IsBatter) || l.Pitchers.Take(5).Any(i => i == 0) || l.Pitchers.Any(i => i != 0 && x.Info[i].IsBatter)) return "invalid";
+			if (l.Pitchers.Take(5).Any(i => x.Blocked.Contains(i))) return "spblock";
+			if (StrictPositions && Misplaced(x, l, first: true).Count > 0) return "position";
+			foreach ((int idx, bool pit, int slot, int pos) in x.Locked)
+			{
+				int at = pit ? -1 : Array.IndexOf(l.Batters, idx);
+				if (pit ? l.Pitchers[slot] != idx : at < 0 || (pos >= 0 ? PositionOf(l, at) != pos : at < 9)) return "locked";
+			}
+			if (keep != null && keep.Any(e => e != 0) && !Allowed(x, l, keep, positions: false) && RosterHandlers.LineupBalls(l) <= x.Cap) return "colour";
+			if (balls > x.Cap) return "cap";
+			return Allowed(x, l, keep) ? null : "invalid";
+		}
+
+		// "'22 이정후" (two cards of one player can meet in these lines).
+		private static string CardName(int idx) => s_data.Catalog.Get(idx) is CardInfo c ? $"'{c.Year % 100:00} {c.Name}" : idx.ToString();
+
+		// "120으로 · 145로" (systems session 11-20, tester_1120c: "볼 122/120로"): 십·백·천·만·영, 삼, 육 take 으로.
+		private static string Ro(int n) => (Math.Abs(n) % 10) is 0 or 3 or 6 ? $"{n}으로" : $"{n}로";
 
 		private static bool SameLineup(Lineup a, Lineup b) => a != null && b != null && a.Batters.SequenceEqual(b.Batters) && a.Pitchers.SequenceEqual(b.Pitchers) && a.Fielders.SequenceEqual(b.Fielders);
 
@@ -799,6 +934,13 @@ namespace Ma9MServer
 					r.NoFit = keep != null
 						? "계약이 끝난 선수를 빼면 지금 팀컬러를 지키는 1군을 짤 수 없습니다."
 						: "계약이 끝난 선수를 빼고는 볼 상한 안에서 1군을 짤 수 없습니다.";
+				}
+				// (11-20, AI 테스터 LG 110·kt, 남은일 0-3: a 1군 of 148/145 balls, not even registered, got "지금 1군이 가장 강합니다") Over
+				// the cap the 1군 of now is no start, so with no other start it came back as the answer without a reason.
+				else if (r.CurrentBalls > x.Cap)
+				{
+					r.NoFit = $"지금 1군은 볼 {r.CurrentBalls}/{Ro(x.Cap)} 상한을 넘어 등록되지 않습니다.\n"
+						+ (keep != null ? "지금 팀컬러를 지키며 상한 안에 드는 1군을 짤 수 없습니다." : "상한 안에서 짤 수 있는 1군을 찾지 못했습니다.");
 				}
 				return r;
 			}
@@ -848,6 +990,9 @@ namespace Ma9MServer
 				TeamValue.Parts ov = Evaluate(x, ordered, out _);
 				if (ov.Runs >= win.v.Runs - 1e-4) win = (ordered, ov, win.name);
 			}
+			// FA 선수카드 left out: a swap that adds is taken, the others get their reason (2026-11-20).
+			(Lineup fl, TeamValue.Parts fv) = FaPass(x, win.l, win.v, keep, out r.FaLeftOut);
+			if (!ReferenceEquals(fl, win.l)) win = (fl, fv, win.name + " + FA");
 			r.Lineup = win.l;
 			r.Parts = win.v;
 			r.Runs = win.v.Runs;
@@ -950,7 +1095,8 @@ namespace Ma9MServer
 				int twice = on.GroupBy(c => (c.IsBatter, c.Sidx)).Count(g => g.Count() > 1);
 				return $"FA {fa}장, 같은 선수 두 번 {twice}{(fa <= CardInfo.MaxFaInFirstTeam && twice == 0 ? "" : " ← 규칙 위반")}";
 			}
-			ServerLog.Info($"[autolineup]   now    {FaCheck(a.Current)} | advice {FaCheck(a.Lineup)}");
+			ServerLog.Info($"[autolineup]   now    {FaCheck(a.Current)} | advice {FaCheck(a.Lineup)} | start {a.Start}");
+			foreach ((int idx, string why) in a.FaLeftOut) ServerLog.Info($"[autolineup]   FA 빠짐: {s_data.Catalog.Get(idx)?.Year % 100:00}{s_data.Catalog.Get(idx)?.Name} — {why}");
 			// 포지션 엄수 (11-16): the advice has nobody out of position (선수 고정 cards apart).
 			LineupContext cx = Context(user);
 			string Mis(Lineup l)

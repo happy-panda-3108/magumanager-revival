@@ -193,7 +193,12 @@ namespace Ma9MSim.Fielding
 			{
 				o.Error = true; o.ErrorFielder = f; o.BatterOnError = true;
 				o.Kind = Ma9MSim.PlayKind.Error;
-				int bb = Geometry.IsOutfielder(f) && rng.Next() < 0.3 ? 2 : 1;
+				// (2026-11-20, user: "중견수 플라이를 중견수가 놓치는 장면인데 이 때 1루 주자가 아웃인줄 알고 루에 붙어있다가 2루에 들어가는 장면임, 근데
+				// 타자주자는 끝까지 달리고 있어서 1루 주자를 지나쳐서 2루까지 가고, 주자는 3루까지 감 … 1,2루가 되어야하는게 정상임, 그 마저도 1루 주자는
+				// 2루에서 죽을 수도 있음") With fewer than two out the man on first waits by the bag for the catch, so the batter takes
+				// second on a deep drop only when first base is open (he would pass that runner); the runner is forced to second,
+				// where the fielder, the ball at his feet, may still get him (DroppedForce).
+				int bb = Geometry.IsOutfielder(f) && (OutsBefore == 2 || !On[1]) && rng.Next() < 0.3 ? 2 : 1;
 				o.Dest[0] = bb;
 				o.ErrorExtends = OutsBefore == 2;
 				if (OutsBefore == 2)
@@ -202,6 +207,10 @@ namespace Ma9MSim.Fielding
 					return;
 				}
 				AdvanceAll(bb, 1, ref rng);
+				if (On[1])
+				{
+					DroppedForce(plan, r, f, ref rng);
+				}
 				FillTracks(r.T + 0.3);
 				return;
 			}
@@ -987,6 +996,33 @@ namespace Ma9MSim.Fielding
 				dest[b] = at >= 4 ? 4 : at == b ? 0 : at;
 				prev = Math.Min(at, 4);
 			}
+		}
+
+		// A dropped fly with fewer than two out and a man on first (2026-11-20): he waited off the bag for the catch, as on a
+		// fly that falls for a hit (Lead, plus Partway on a fly; a liner froze him at his lead), and leaves on the drop, forced
+		// to second; the fielder picks the ball up at his feet and throws there. Beaten, he is out at second (the batter stays
+		// on first); safe, he is on second.
+		private void DroppedForce(BallPlan plan, in BallPlan.Result r, int f, ref Rng rng)
+		{
+			double off = Lead[1] + (plan.Ball.La < 22 ? 0 : Partway[1]);
+			double pick = r.T + 0.45;
+			(double t2, int rl) = D.ThrowTime(f, r.At, 2);
+			double thrown = pick + t2 + 0.05;
+			double start = r.T + 0.3;
+			double there = start + Run[1].Run(L - off);
+			bool out2 = rl < 0 && thrown - there + ForceSd * N(ref rng) < 0;
+			Defence.ThrowLeg leg = D.ThrowPlan(f, r.At, 2);
+			o.Throws.Add(new Throw { From = f, Base = 2, Relay = rl, Runner = 1, Out = out2, Arrive = thrown, Release = pick + leg.Release, CutArrive = pick + leg.CutArrive, CutRelease = pick + leg.CutRelease, CutPoint = leg.CutPoint, FromPoint = r.At });
+			if (out2)
+			{
+				o.Dest[1] = 6;
+				o.Outs++;
+				o.Assist = f;
+				o.Fc = true;
+				Trk(1, 1, start, off, 0, 2, true, thrown);
+				return;
+			}
+			Trk(1, 1, start, off, 0, 2, false, there);
 		}
 
 		// Everybody one base, the batter to `batterTo`; runners not forced go `extra` more with

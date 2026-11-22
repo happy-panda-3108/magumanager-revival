@@ -305,7 +305,8 @@ namespace Ma9MServer
 				// Since 11-17 07:4x the reason can be contracts that ended (engine: "계약이 끝난 선수를 빼면 …", LeftOutExpired), so the head
 				// follows it; the cards out of position now come by name (AI testers NC 69, kt 75: "맞지 않는 선수 1명" said nobody).
 				// The type-1 window has room for five lines.
-				bool byContract = r.LeftOutExpired != null && r.LeftOutExpired.Count > 0 && r.CurrentMisplaced.Count == 0;
+				// (11-20) or the 1군 of now over the ball cap (engine, AutoLineup: "지금 1군은 볼 148/145로 …").
+				bool byContract = ((r.LeftOutExpired != null && r.LeftOutExpired.Count > 0) || r.CurrentBalls > r.Cap) && r.CurrentMisplaced.Count == 0;
 				List<string> fit = new List<string> { byContract ? "지금은 1군을 새로 짤 수 없습니다." : "맞는 포지션으로 1군을 짤 수 없습니다." };
 				fit.AddRange(r.NoFit.Split('\n'));
 				if (r.CurrentMisplaced.Count > 0)
@@ -329,7 +330,9 @@ namespace Ma9MServer
 				string turned = r.TurnedDown != null && !double.IsNaN(r.TurnedDownSim) && !double.IsNaN(r.SimNow)
 					? $"\n다른 1군을 경기로 재 보니 {100 * r.TurnedDownSim:F0}%로\n지금({100 * r.SimNow:F0}%)보다 낮아 그대로 두는 것이 좋습니다."
 					: "\n바꿀 선수가 없습니다.";
-				Say(session, 1, title, "지금 1군이 가장 강합니다." + turned + (r.Locked.Count > 0 ? $"\n(선수보호 {r.Locked.Count}명은 고정)" : string.Empty));
+				List<string> fa = FaLines(r);
+				Say(session, 1, title, "지금 1군이 가장 강합니다." + turned + (r.Locked.Count > 0 ? $"\n(선수보호 {r.Locked.Count}명은 고정)" : string.Empty)
+					+ (fa.Count > 0 ? "\n" + string.Join("\n", fa) : string.Empty));
 				return;
 			}
 			string List(List<int> ids) => ids.Count == 0 ? "없음" : Rows(ids.Take(8).Select(CardName), 4) + (ids.Count > 8 ? $" 외 {ids.Count - 8}명" : string.Empty);
@@ -351,7 +354,9 @@ namespace Ma9MServer
 				string problem = RosterHandlers.SaveWhole(user, chosen, out string colours);
 				return problem != null ? "!" + problem : "자동 편성을 적용했습니다." + (colours != null ? "\n" + colours : string.Empty);
 			}, v2);
-			Say(session, v2 ? AskType2 : AskType, title, text.TrimEnd('\n'), "적용", more);
+			// 2026-11-20 (AI tester kt 04:30: 50% → 51% with five players changing still put [적용] first): a gain inside the games'
+			// error (not SimClear) names the button "그래도 적용"; the app (1.0.60) then puts [그대로 두기] first and marks it.
+			Say(session, v2 ? AskType2 : AskType, title, text.TrimEnd('\n'), HasSim(r) && !r.SimClear ? "그래도 적용" : "적용", more);
 			ServerLog.Info($"[{session.Id}] auto lineup{(keepColour ? " keep" : string.Empty)}: {r.Balls}/{r.Cap}, TeamValue +{r.Gain * 100:0.0}%p, games {r.SimNow:P1} → {r.SimAdvice:P1} ±{r.SimSe:P1} (clear {r.SimClear}), kept {r.SimKept:P1}, in {comes.Count}, out {goes.Count}, {r.Evaluations} evals, start {r.Start}");
 		}
 
@@ -387,6 +392,11 @@ namespace Ma9MServer
 			lines.Add("(계약관리에서 연장하면 다시 쓸 수 있음)");
 			return lines;
 		}
+
+		// FA 선수카드 the advice leaves out, one line each with the engine's reason (engine 2026-11-20, AutoLineup FaLeftOut; AI testers
+		// 두산 39·쌍방울·LG·kt, 남은일 4 "새 FA를 안 넣은 까닭 표시"): "FA '22 고영표: 넣어 봐도 지금보다 약해집니다(…)".
+		private static List<string> FaLines(LeagueService.AutoLineupResult r) =>
+			r.FaLeftOut == null ? new List<string>() : r.FaLeftOut.Select(f => $"FA {CardName(f.idx)}: {f.why}").ToList();
 
 		// AutoLineup's paired games (engine session 11-12): SimGames 0 (the advice is the 1군 of now) leaves them NaN.
 		private static bool HasSim(LeagueService.AutoLineupResult r) => r.SimGames > 0 && !double.IsNaN(r.SimNow) && !double.IsNaN(r.SimAdvice);
@@ -429,6 +439,10 @@ namespace Ma9MServer
 			Lineup was = r.Current, now = r.Lineup;
 			HashSet<int> batters = was.Batters.Concat(now.Batters).Where(i => i != 0).ToHashSet();
 			List<string> s = Wrapped(string.Empty, new[] { $"볼 {r.Balls}/{r.Cap}" }.Concat(WinItems(r)));
+			if (HasSim(r) && !r.SimClear)
+			{
+				s.Add("차이가 경기 운 안이라 지금 1군 그대로 둬도 됩니다.");
+			}
 			s.Add(comes.Count == 0 ? "같은 선수로 자리·타순만 바뀝니다."
 				: $"바뀌는 선수 {comes.Count}명 (타자 {comes.Count(batters.Contains)} · 투수 {comes.Count(i => !batters.Contains(i))})");
 			s.AddRange(MisplacedLines(r));
@@ -483,6 +497,7 @@ namespace Ma9MServer
 				}
 			}
 			s.AddRange(devLines);
+			s.AddRange(FaLines(r));
 			if (r.StartersOut.Count > 0)
 			{
 				s.Add($"선발에서 빠지는 투수는 {SpBlock.Games}경기 동안 다시 선발 불가");
@@ -494,6 +509,12 @@ namespace Ma9MServer
 			}
 			// 2026-11-13 (user 16:5x 결정 10, engine: AutoLineup plays every condition as 보통): the line says so.
 			s.Add("팀컬러·계약·트레이닝·특강을 넣어 계산(컨디션은 보통으로)");
+			// 2026-11-20 (engine B20: league-style seasons .612 against the window's .607; one season's luck and condition ±4-5%p,
+			// 40 games ±8-9%p; 남은일목록 4 "예상 승률에 ±오차").
+			if (HasSim(r))
+			{
+				s.Add("실제 성적은 컨디션·경기 운으로 한 시즌 ±5%p쯤 달라집니다");
+			}
 
 			List<string> pages = new List<string>();
 			List<string> bat = Enumerable.Range(0, Ma9MServer.Lineup.FielderSlots).Where(p => AtField(was, p) != AtField(now, p)).Select(p => Slot(FieldNames[p], AtField(was, p), AtField(now, p))).ToList();

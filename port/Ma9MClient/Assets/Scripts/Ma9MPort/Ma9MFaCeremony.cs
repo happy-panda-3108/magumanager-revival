@@ -306,7 +306,7 @@ public class Ma9MFaCeremony : MonoBehaviour
 			"제1조  계약 기간: " + m_info.seasons + "시즌 (" + m_info.days + "일)",
 			// No list price on the paper (user 11-17: "계약서에 정가라는 단어는 붙이지 말아줘 실제 계약서에 저런 단어가 있으면 기분 상할 것 같아").
 			"제2조  계약금: " + m_info.priceMp.ToString("N0") + " MP",
-			"제3조  " + (m_info.isRenewal ? "선수는 구단에 계속 소속되어 경기에 나선다." : "선수는 " + (m_info.fromClub ?? "원래 구단") + (Batchim(m_info.fromClub ?? "원래 구단") ? "을" : "를") + " 떠나 구단의 1군 선수로 뛴다."),
+			"제3조  " + (m_info.isRenewal ? "선수는 구단에 계속 소속되어 경기에 나선다." : HomeComing() ? "선수는 친정 구단에 돌아와 1군 선수로 뛴다." : "선수는 " + (m_info.fromClub ?? "원래 구단") + (Batchim(m_info.fromClub ?? "원래 구단") ? "을" : "를") + " 떠나 구단의 1군 선수로 뛴다."),
 		};
 		if (m_info.conditionTop)
 		{
@@ -373,7 +373,7 @@ public class Ma9MFaCeremony : MonoBehaviour
 		// On only at a tap (user 11-17 14:2x: "계약서 사인하는 장면 자동으로 안 넘어가고 터치해야 넘어가게 해줘"); [건너뛰기] and
 		// the back key still end it.
 		yield return new WaitForSeconds(0.35f);
-		UILabel hint = Settle(Text(base.gameObject, "탭하여 계속", new Vector3(GameRight - 60f, m_min.y + 20f, ZTop), 14f, new Color(1f, 1f, 1f, 0.9f), UIWidget.Pivot.Center));
+		UILabel hint = Settle(Text(base.gameObject, "탭하여 계속", new Vector3(GameRight - 60f, m_min.y + 20f, ZTop), 15f, new Color(1f, 1f, 1f, 0.9f), UIWidget.Pivot.Center));
 		StartCoroutine(Blink(hint));
 		m_tapped = false;
 		while (!m_tapped && !m_finished)
@@ -428,6 +428,7 @@ public class Ma9MFaCeremony : MonoBehaviour
 		Vector3 whoAt = new Vector3(-150f, 4f, ZPicture);
 		who.transform.localPosition = whoAt + new Vector3(0f, -90f, 0f);
 		Detail(who, m_info.cardIdx, 1.75f);
+		StartCoroutine(FramePicture(who));
 		StartCoroutine(Move(who.transform, whoAt, Quaternion.identity, 0.5f));
 		yield return Wait(0.6f);
 		// The jersey, presented: it rises and turns to show the back with his name.
@@ -471,7 +472,7 @@ public class Ma9MFaCeremony : MonoBehaviour
 			yield return new WaitForSeconds(0.2f);
 		}
 		// On the terms ribbon's right end (11-17: above it the hint sat on the answer).
-		UILabel hint = Settle(Text(m_scene, "탭하여 계속", new Vector3(GameRight - 56f, m_min.y + 40f, ZText - 1f), 13f, new Color(1f, 1f, 1f, 0.85f), UIWidget.Pivot.Center));
+		UILabel hint = Settle(Text(m_scene, "탭하여 계속", new Vector3(GameRight - 60f, m_min.y + 40f, ZText - 1f), 15f, new Color(1f, 1f, 1f, 0.85f), UIWidget.Pivot.Center));
 		StartCoroutine(Blink(hint));
 		// On only at a tap, like the contract (11-18, tester 두산 불편 50: "탭하여 계속" closed by itself after 12 s).
 		m_tapped = false;
@@ -750,6 +751,43 @@ public class Ma9MFaCeremony : MonoBehaviour
 		}
 	}
 
+	// 11-20 (AI 테스터 kt 18·두산 56, 남은일 0-2: kt 출신 FA를 kt가 영입하면 계약서가 "kt를 떠나"): the FA card's source club
+	// (Ma9MSortMemory.FaSourceTeam) and ours (the club whose uniform signed FAs wear, Ma9MFaArt.Club, else our emblem's club) in
+	// the same franchise (OB → 두산 counts as one, Ma9MEmblemYears.Franchise) make him come home instead.
+	private bool HomeComing()
+	{
+		int from = Ma9MSortMemory.FaSourceTeam(m_info.cardIdx);
+		int ours = Ma9MFaArt.Club >= 0 ? Ma9MFaArt.Club : Ma9MEmblemYears.BaseOf(m_info.toEmblem);
+		int f = Ma9MEmblemYears.Franchise(from);
+		return f >= 0 && f == Ma9MEmblemYears.Franchise(ours);
+	}
+
+	// 11-20 (AI 테스터 두산 50, 14회차 "FA 카드 그림은 여전히 오른쪽 · 아래가 곧게 잘려 방망이 끝과 몸 아래가 네모로 끊긴다"): the
+	// card's detail art is itself cut square at the right and the bottom (it is made for the player screen's picture box), so it
+	// gets a portrait frame on exactly its own rectangle: a gold edge and the club colour inside, and the cuts become the frame's
+	// edges. The art may arrive a moment later (lazy card textures), so the bounds are polled for up to 2 s.
+	private IEnumerator FramePicture(GameObject who)
+	{
+		Bounds b = new Bounds();
+		for (float t = 0f; t < 2f && !m_finished && who != null; t += Time.deltaTime)
+		{
+			b = NGUIMath.CalculateRelativeWidgetBounds(who.transform, who.transform);
+			if (b.size.x > 20f && b.size.y > 20f)
+			{
+				break;
+			}
+			yield return null;
+		}
+		if (who == null || m_finished || b.size.x <= 20f || b.size.y <= 20f)
+		{
+			yield break;
+		}
+		Vector3 c = new Vector3(b.center.x, b.center.y, 2f);
+		Box(who, c + new Vector3(6f, -8f, 0.6f), b.size.x + 16f, b.size.y + 16f, new Color(0f, 0f, 0f, 0.45f));
+		Box(who, c + new Vector3(0f, 0f, 0.4f), b.size.x + 12f, b.size.y + 12f, Gold);
+		Tex(who, Gradient(m_club * 0.75f, m_club * 0.3f), c, b.size.x, b.size.y, Color.white);
+	}
+
 	private void Button(Vector3 pos, string text, Action onTap)
 	{
 		UITexture b = Box(base.gameObject, pos, 110f, 34f, new Color(0f, 0f, 0f, 0.55f), true);
@@ -821,11 +859,19 @@ public class Ma9MFaCeremony : MonoBehaviour
 		}
 	}
 
+	// 11-20 (AI 테스터 NC 76·두산 50, 남은일 0-2: "탭하여 계속" 글씨가 어두워 거의 안 보임): the old blink went 0.05-0.85, dark on the
+	// red ribbon half the time. Now it breathes 0.7-1.0 with a dark outline, so it reads on the ribbon and on the paper alike.
 	private IEnumerator Blink(UILabel label)
 	{
+		if (label != null)
+		{
+			label.color = Color.white;
+			label.effectStyle = UILabel.Effect.Outline;
+			label.effectColor = new Color(0f, 0f, 0f, 0.85f);
+		}
 		while (label != null && !m_finished)
 		{
-			label.alpha = 0.45f + 0.4f * Mathf.Sin(Time.time * 4f);
+			label.alpha = 0.85f + 0.15f * Mathf.Sin(Time.time * 4f);
 			yield return null;
 		}
 	}

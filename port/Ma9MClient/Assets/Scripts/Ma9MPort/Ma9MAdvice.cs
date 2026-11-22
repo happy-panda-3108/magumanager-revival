@@ -137,7 +137,11 @@ public static class Ma9MAdvice
 			}
 		};
 		bool paged = pages.Length > 1;
-		p.AddButton(ok, paged ? -135f : -80f, p.BottomRow, paged ? 0.85f : 1f, delegate
+		// 2026-11-20 (AI tester kt 04:30; server AdviceHandlers): a gain inside the games' error comes as "그래도 적용" — then
+		// [그대로 두기] takes the first place, its label marked, and the apply button goes last.
+		bool small = ok.StartsWith("그래도", StringComparison.Ordinal);
+		float applyX = (small ? 1f : -1f) * (paged ? 135f : 80f);
+		p.AddButton(ok, applyX, p.BottomRow, paged ? 0.85f : 1f, delegate
 		{
 			answered = true;
 			p.Close();
@@ -160,7 +164,11 @@ public static class Ma9MAdvice
 				}
 			});
 		}
-		p.AddButton(Localization.instance.Get("Cancel"), paged ? 135f : 80f, p.BottomRow, paged ? 0.85f : 1f, p.Close);
+		UILabel stay = p.AddButton(small ? "그대로 두기" : Localization.instance.Get("Cancel"), -applyX, p.BottomRow, paged ? 0.85f : 1f, p.Close);
+		if (small && stay != null)
+		{
+			stay.color = new Color(1f, 0.86f, 0.3f);
+		}
 	}
 
 	// 로스터 "자동 편성": keep the team colours registered now, or any.

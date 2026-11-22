@@ -409,6 +409,31 @@ namespace Ma9MServer
 			return null;
 		}
 
+		// 2026-11-20 (AI tester 두산 16회차, 남은일 0-5: "보관함이 꽉 차 있으면 선수를 고르고 FA 영입을 눌러야 비로소 '가득 찼습니다'가 나옴 …
+		// FA 시장 입장이나 카드 고르기 때 미리 안내"): on entering the market (AlbumHandlers.Enter, the market page) with a full roster, one
+		// window says so and where room is made — not again for 30 minutes (the page is asked again after each signing and visit), and
+		// not when the team may sign no more FAs anyway (MaxHeld; [FA 영입] says that one).
+		private static readonly Dictionary<uint, DateTime> s_fullTold = new Dictionary<uint, DateTime>();
+
+		internal static void FullRosterNotice(GameSession session, uint user)
+		{
+			List<TeamCard> cards = RosterHandlers.Db.GetCards(user);
+			int cap = RosterHandlers.MaxPossessOf(user);
+			if (cards.Count < cap || cards.Count(c => RosterHandlers.Catalog.Get(c.Idx)?.IsFA == true) >= MaxHeld)
+			{
+				return;
+			}
+			lock (s_fullTold)
+			{
+				if (s_fullTold.TryGetValue(user, out DateTime at) && DateTime.UtcNow - at < TimeSpan.FromMinutes(30))
+				{
+					return;
+				}
+				s_fullTold[user] = DateTime.UtcNow;
+			}
+			AdviceHandlers.Tell(session, "FA 시장", $"선수 보관함이 가득 찼습니다({cards.Count}/{cap}명).\nFA를 영입하려면 먼저 자리를 1칸 만들어 주세요.\n(계약관리 > 선수방출, 또는 상점 > 로스터 확장)");
+		}
+
 		// 영입 (checked again: the MP or the roster may have changed since the question).
 		internal static string Sign(uint user, int idx) => SignWith(user, idx, -1, ContractHandlers.FaStartDays);
 

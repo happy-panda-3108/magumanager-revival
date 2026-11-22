@@ -36,6 +36,26 @@ public static class Ma9MEmblemYears
 		return emblem >= First && emblem < First + Bases * PerBase;
 	}
 
+	// The franchise (a row of Lines: OB and 두산 are one) club `team` (an eTeamName) belongs to; -1 for none (FA, 국가대표 stays its own).
+	public static int Franchise(int team)
+	{
+		if (team < 0)
+		{
+			return -1;
+		}
+		for (int i = 0; i < Lines.Length; i++)
+		{
+			foreach (int[] e in Lines[i])
+			{
+				if (e[1] == team)
+				{
+					return i;
+				}
+			}
+		}
+		return -1;
+	}
+
 	// The club (eTeamName) an emblem stands for.
 	public static int BaseOf(int emblem)
 	{
