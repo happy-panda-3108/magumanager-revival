@@ -1,0 +1,8 @@
+# 편집기·빌드가 만드는 부산물
+bin/
+obj/
+.vs/
+.vscode/
+*.user
+__pycache__/
+*.pyc
